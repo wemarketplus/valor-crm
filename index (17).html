@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valor Workforce Funding</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--nv:#0B1E3C;--nv2:#152d54;--gd:#C9A84C;--white:#fff;--gray:#f5f5f4;--border:#e5e7eb;--text:#111;--muted:#6b7280;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--blue:#3b82f6;--purple:#8b5cf6}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f4;color:var(--text);height:100vh;overflow:hidden}
+.app{display:flex;height:100vh}
+/* SIDEBAR */
+.sidebar{width:200px;background:var(--nv);display:flex;flex-direction:column;flex-shrink:0}
+.logo{padding:14px 12px 10px;border-bottom:1px solid rgba(255,255,255,.08)}
+.logo-name{font-size:12px;font-weight:600;color:#e8d9a8;line-height:1.3}
+.logo-sub{font-size:9px;color:rgba(255,255,255,.3);margin-top:2px;letter-spacing:.8px;text-transform:uppercase}
+.nav{padding:6px 0;flex:1;overflow-y:auto}
+.nav-section{padding:6px 12px 2px;font-size:9px;color:rgba(255,255,255,.25);letter-spacing:1.2px;text-transform:uppercase;font-weight:600}
+.nav-item{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:11.5px;color:rgba(255,255,255,.52);cursor:pointer;border-left:2px solid transparent;transition:all .12s}
+.nav-item:hover{background:rgba(255,255,255,.06);color:rgba(255,255,255,.85)}
+.nav-item.active{background:rgba(201,168,76,.13);color:#e8c96a;border-left-color:#C9A84C}
+.nav-item .icon{font-size:14px;width:16px;text-align:center}
+.badge{background:rgba(220,60,60,.85);color:#fff;font-size:8px;padding:1px 4px;border-radius:7px;margin-left:auto}
+.badge-green{background:#22c55e}
+.user-bar{padding:10px 12px;border-top:1px solid rgba(255,255,255,.08)}
+.user-info{display:flex;align-items:center;gap:8px}
+.user-avatar{width:26px;height:26px;border-radius:50%;background:rgba(201,168,76,.2);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#C9A84C}
+.user-name{font-size:10px;color:rgba(255,255,255,.7);font-weight:500}
+.user-role{font-size:9px;color:rgba(255,255,255,.3);text-transform:capitalize}
+.logout-btn{margin-left:auto;background:none;border:none;color:rgba(255,255,255,.3);cursor:pointer;font-size:13px;padding:2px}
+.logout-btn:hover{color:rgba(255,255,255,.7)}
+/* MAIN */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.topbar{background:#fff;border-bottom:.5px solid var(--border);padding:9px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.page-title{font-size:13px;font-weight:600;color:var(--text)}
+.topbar-right{display:flex;align-items:center;gap:8px}
+.btn{padding:5px 12px;border-radius:7px;font-size:11px;cursor:pointer;border:.5px solid var(--border);background:#fff;color:var(--text);font-family:inherit;transition:all .12s;display:inline-flex;align-items:center;gap:5px}
+.btn:hover{background:var(--gray)}
+.btn-primary{background:var(--nv);color:#e8d9a8;border-color:var(--nv);font-weight:600}
+.btn-primary:hover{background:var(--nv2)}
+.btn-danger{background:#fef2f2;color:var(--red);border-color:#fecaca}
+.btn-success{background:#f0fdf4;color:var(--green);border-color:#bbf7d0}
+.content{flex:1;overflow-y:auto;padding:14px 16px}
+/* CARDS */
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.kpi-card{background:#fff;border:.5px solid var(--border);border-radius:10px;padding:12px}
+.kpi-label{font-size:10px;color:var(--muted);margin-bottom:4px}
+.kpi-value{font-size:22px;font-weight:600;color:var(--text)}
+.kpi-sub{font-size:10px;color:#9ca3af;margin-top:3px}
+.revenue-bar{background:var(--nv);border-radius:12px;padding:12px 16px;margin-bottom:14px;display:flex;gap:0;flex-wrap:wrap}
+.rb-item{flex:1;min-width:100px;padding:0 12px;border-right:.5px solid rgba(255,255,255,.1)}
+.rb-item:first-child{padding-left:0}
+.rb-item:last-child{border-right:none}
+.rb-n{font-size:18px;font-weight:600;color:#e8d9a8}
+.rb-l{font-size:9px;color:rgba(255,255,255,.4);margin-top:2px}
+/* TABLE */
+.table-card{background:#fff;border:.5px solid var(--border);border-radius:12px;overflow:hidden}
+.table-header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:.5px solid var(--border)}
+.table-title{font-size:12px;font-weight:600;color:var(--text)}
+.search-box{display:flex;align-items:center;gap:6px;background:var(--gray);border:.5px solid var(--border);border-radius:6px;padding:5px 10px;font-size:11px;color:var(--muted)}
+.search-box input{background:none;border:none;outline:none;font-size:11px;color:var(--text);width:160px;font-family:inherit}
+table{width:100%;border-collapse:collapse;font-size:11px}
+th{text-align:left;padding:7px 12px;color:var(--muted);font-weight:500;border-bottom:.5px solid var(--border);font-size:10px;white-space:nowrap;background:#fafafa}
+td{padding:8px 12px;border-bottom:.5px solid #f9fafb;color:var(--text);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#f9fafb;cursor:pointer}
+.pill{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:20px;font-size:9px;font-weight:600;white-space:nowrap}
+.pill-green{background:#dcfce7;color:#166534}
+.pill-amber{background:#fef3c7;color:#92400e}
+.pill-red{background:#fee2e2;color:#991b1b}
+.pill-blue{background:#dbeafe;color:#1e40af}
+.pill-purple{background:#ede9fe;color:#5b21b6}
+.pill-gray{background:#f3f4f6;color:#374151}
+.pill-orange{background:#fff7ed;color:#9a3412}
+.dot{width:5px;height:5px;border-radius:50%}
+.dot-green{background:#22c55e}
+.dot-amber{background:#f59e0b}
+.dot-red{background:#ef4444}
+.dot-blue{background:#3b82f6}
+.dot-gray{background:#9ca3af}
+.dot-purple{background:#8b5cf6}
+.table-footer{padding:7px 14px;font-size:10px;color:#9ca3af;border-top:.5px solid var(--border);background:#fafafa}
+/* MODAL */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:100;padding:20px}
+.modal{background:#fff;border-radius:16px;width:100%;max-width:520px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2)}
+.modal-header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:.5px solid var(--border);position:sticky;top:0;background:#fff}
+.modal-title{font-size:13px;font-weight:600;color:var(--text)}
+.modal-close{background:none;border:none;cursor:pointer;color:var(--muted);font-size:18px;line-height:1}
+.modal-body{padding:18px 20px}
+.modal-footer{padding:14px 20px;border-top:.5px solid var(--border);display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:0;background:#fff}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.form-row.full{grid-template-columns:1fr;margin-bottom:12px}
+.form-group{display:flex;flex-direction:column;gap:4px}
+label{font-size:11px;font-weight:500;color:var(--muted)}
+input,select,textarea{border:.5px solid var(--border);border-radius:7px;padding:7px 10px;font-size:11px;color:var(--text);font-family:inherit;outline:none;transition:border .12s;background:#fff}
+input:focus,select:focus,textarea:focus{border-color:var(--nv)}
+textarea{resize:vertical;min-height:60px}
+.checkbox-row{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text)}
+.checkbox-row input{width:auto}
+.alert{padding:9px 12px;border-radius:7px;font-size:11px;margin-bottom:12px}
+.alert-error{background:#fef2f2;color:var(--red);border:.5px solid #fecaca}
+.alert-success{background:#f0fdf4;color:var(--green);border:.5px solid #bbf7d0}
+/* LOGIN */
+.login-page{min-height:100vh;background:var(--nv);display:flex;align-items:center;justify-content:center;padding:20px}
+.login-card{background:rgba(255,255,255,.06);border:.5px solid rgba(255,255,255,.1);border-radius:18px;padding:32px;width:100%;max-width:360px}
+.login-logo{text-align:center;margin-bottom:24px}
+.login-icon{width:48px;height:48px;border-radius:14px;background:rgba(201,168,76,.2);border:.5px solid rgba(201,168,76,.3);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:22px}
+.login-title{font-size:16px;font-weight:600;color:#e8d9a8}
+.login-sub{font-size:11px;color:rgba(255,255,255,.35);margin-top:4px}
+.login-form .form-group{margin-bottom:14px}
+.login-form label{color:rgba(255,255,255,.5);font-size:11px;display:block;margin-bottom:5px}
+.login-form input{background:rgba(255,255,255,.06);border:.5px solid rgba(255,255,255,.12);color:#fff;width:100%;border-radius:8px;padding:9px 12px}
+.login-form input::placeholder{color:rgba(255,255,255,.2)}
+.login-form input:focus{border-color:rgba(201,168,76,.5)}
+.login-btn{width:100%;background:var(--gd);color:var(--nv);border:none;border-radius:8px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;transition:all .12s;margin-top:4px}
+.login-btn:hover{background:#e8c96a}
+.login-btn:disabled{opacity:.6;cursor:not-allowed}
+.login-footer{text-align:center;margin-top:16px;font-size:10px;color:rgba(255,255,255,.2)}
+/* LOADING */
+.loading{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--muted);font-size:12px}
+.empty{text-align:center;padding:40px;color:#9ca3af;font-size:12px}
+/* SCORE BAR */
+.score-bar{height:4px;border-radius:2px;background:#e5e7eb;overflow:hidden;width:60px;display:inline-block;vertical-align:middle}
+.score-fill{height:100%;border-radius:2px;background:var(--nv)}
+/* 2-col layout */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px}
+.action-btns{display:flex;gap:4px}
+.action-btn{padding:3px 7px;border-radius:5px;font-size:10px;cursor:pointer;border:.5px solid var(--border);background:#fff;color:var(--muted);font-family:inherit}
+.action-btn:hover{background:var(--gray)}
+.action-btn.delete:hover{background:#fef2f2;color:var(--red);border-color:#fecaca}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const API = ''
+let token = localStorage.getItem('valor_token')
+let currentUser = null
+let currentPage = 'dashboard'
+
+// ── RENDER ─────────────────────────────────────────────
+async function render() {
+  if (!token) { renderLogin(); return }
+  try {
+    const me = await api('/api/me')
+    currentUser = me
+    renderApp()
+  } catch { token = null; localStorage.removeItem('valor_token'); renderLogin() }
+}
+
+function renderLogin() {
+  document.getElementById('app').innerHTML = `
+    <div class="login-page">
+      <div class="login-card">
+        <div class="login-logo">
+          <div class="login-icon">🛡️</div>
+          <div class="login-title">Valor Workforce Funding</div>
+          <div class="login-sub">Grant Monetization Platform</div>
+        </div>
+        <div class="login-form">
+          <div id="login-error"></div>
+          <div class="form-group">
+            <label>Email address</label>
+            <input type="email" id="login-email" placeholder="you@valorworkforcefunding.com" value="northericka@gmail.com">
+          </div>
+          <div class="form-group">
+            <label>Password</label>
+            <input type="password" id="login-password" placeholder="••••••••">
+          </div>
+          <button class="login-btn" onclick="doLogin()" id="login-btn">Sign in</button>
+        </div>
+        <div class="login-footer">Valor Workforce Funding LLC · EIN 42-2547694</div>
+      </div>
+    </div>`
+  document.getElementById('login-password').addEventListener('keydown', e => { if(e.key==='Enter') doLogin() })
+}
+
+async function doLogin() {
+  const email = document.getElementById('login-email').value
+  const password = document.getElementById('login-password').value
+  const btn = document.getElementById('login-btn')
+  btn.disabled = true; btn.textContent = 'Signing in...'
+  document.getElementById('login-error').innerHTML = ''
+  try {
+    const res = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email,password}) })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error)
+    token = data.token
+    localStorage.setItem('valor_token', token)
+    render()
+  } catch(e) {
+    document.getElementById('login-error').innerHTML = `<div class="alert alert-error">${e.message}</div>`
+    btn.disabled = false; btn.textContent = 'Sign in'
+  }
+}
+
+function renderApp() {
+  const isAdmin = ['super_admin','admin'].includes(currentUser?.role)
+  const initials = (currentUser?.full_name||currentUser?.email||'?').slice(0,2).toUpperCase()
+  document.getElementById('app').innerHTML = `
+    <div class="app">
+      <div class="sidebar">
+        <div class="logo">
+          <div class="logo-name">Valor Workforce<br>Funding</div>
+          <div class="logo-sub">Platform</div>
+        </div>
+        <div class="nav">
+          <div class="nav-section">Quick Actions</div>
+          ${navItem('dashboard','🏠','Home',true)}
+          ${navItem('calls','📞','Calls')}
+          ${navItem('reports','📊','Reports')}
+          <div class="nav-section">Records</div>
+          ${navItem('companies','💼','Companies')}
+          ${navItem('locations','📍','Locations')}
+          ${navItem('wibs','🏛️','Workforce Boards')}
+          ${navItem('funding','💰','Funding Opps')}
+          ${navItem('applications','📋','Applications')}
+          <div class="nav-section">Engine</div>
+          ${navItem('revenue','💵','Revenue Tracker')}
+          ${navItem('compliance','🛡️','Compliance')}
+          ${isAdmin ? `<div class="nav-section">Admin</div>${navItem('users','👥','User Management')}` : ''}
+        </div>
+        <div class="user-bar">
+          <div class="user-info">
+            <div class="user-avatar">${initials}</div>
+            <div>
+              <div class="user-name">${currentUser?.full_name||currentUser?.email}</div>
+              <div class="user-role">${(currentUser?.role||'').replace('_',' ')}</div>
+            </div>
+            <button class="logout-btn" onclick="logout()" title="Sign out">⇥</button>
+          </div>
+        </div>
+      </div>
+      <div class="main" id="main-content">
+        <div class="content" id="page-content"><div class="loading">Loading...</div></div>
+      </div>
+    </div>`
+  loadPage('dashboard')
+}
+
+function navItem(page, icon, label, active) {
+  return `<div class="nav-item${active?' active':''}" onclick="loadPage('${page}')" id="nav-${page}">
+    <span class="icon">${icon}</span>${label}</div>`
+}
+
+function setActiveNav(page) {
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'))
+  const el = document.getElementById('nav-'+page)
+  if(el) el.classList.add('active')
+}
+
+function logout() { token=null; currentUser=null; localStorage.removeItem('valor_token'); render() }
+
+// ── API ─────────────────────────────────────────────────
+async function api(url, method='GET', body=null) {
+  const opts = { method, headers:{ 'Content-Type':'application/json', 'Authorization':`Bearer ${token}` } }
+  if(body) opts.body = JSON.stringify(body)
+  const res = await fetch(url, opts)
+  const data = await res.json()
+  if(!res.ok) throw new Error(data.error||'Request failed')
+  return data
+}
+
+// ── PAGES ───────────────────────────────────────────────
+async function loadPage(page) {
+  currentPage = page
+  setActiveNav(page)
+  const content = document.getElementById('page-content')
+  if(!content) return
+  content.innerHTML = '<div class="loading">Loading...</div>'
+  try {
+    if(page==='dashboard') await pageDashboard()
+    else if(page==='wibs') await pageWibs()
+    else if(page==='companies') await pageCompanies()
+    else if(page==='locations') await pageLocations()
+    else if(page==='funding') await pageFunding()
+    else if(page==='applications') await pageApplications()
+    else if(page==='revenue') await pageRevenue()
+    else if(page==='compliance') await pageCompliance()
+    else if(page==='users') await pageUsers()
+    else content.innerHTML = `<div class="empty">Coming soon</div>`
+  } catch(e) { content.innerHTML = `<div class="alert alert-error">${e.message}</div>` }
+}
+
+// ── DASHBOARD ───────────────────────────────────────────
+async function pageDashboard() {
+  const [rev, apps, wibs, funding] = await Promise.all([
+    api('/api/revenue/dashboard').catch(()=>({total_revenue_ytd:0,pipeline_value:0,total_awards:0,active_applications:0,overdue_invoices:0})),
+    api('/api/applications?limit=5'),
+    api('/api/wibs?limit=5'),
+    api('/api/funding?limit=5')
+  ])
+  const fmt = n => '$'+(Number(n)||0).toLocaleString()
+  document.getElementById('page-content').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <div><div style="font-size:14px;font-weight:600">Good morning, ${currentUser?.full_name?.split(' ')[0]||'there'} 👋</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">Valor Workforce Funding · Grant Monetization Platform</div></div>
+      <button class="btn btn-primary" onclick="loadPage('applications')">+ New Application</button>
+    </div>
+    <div class="revenue-bar">
+      <div class="rb-item"><div class="rb-n">${fmt(rev.total_revenue_ytd)}</div><div class="rb-l">Revenue YTD · target $172K</div></div>
+      <div class="rb-item"><div class="rb-n">${fmt(rev.pipeline_value)}</div><div class="rb-l">Pipeline value</div></div>
+      <div class="rb-item"><div class="rb-n">${rev.total_awards||0}</div><div class="rb-l">Grants awarded</div></div>
+      <div class="rb-item"><div class="rb-n">${rev.active_applications||0}</div><div class="rb-l">Active applications</div></div>
+      <div class="rb-item"><div class="rb-n">${rev.overdue_invoices||0}</div><div class="rb-l">Overdue invoices</div></div>
+    </div>
+    <div class="two-col">
+      <div class="table-card">
+        <div class="table-header"><div class="table-title">Recent Applications</div>
+        <a href="#" onclick="loadPage('applications')" style="font-size:10px;color:var(--blue)">View all →</a></div>
+        ${(apps.data||[]).length===0?'<div class="empty">No applications yet.<br>Create your first →</div>':
+        `<table><thead><tr><th>Company</th><th>Status</th><th>Award</th></tr></thead><tbody>
+        ${(apps.data||[]).map(a=>`<tr onclick="loadPage('applications')">
+          <td><div style="font-weight:500">${a.company?.company_name||'—'}</div><div style="font-size:9px;color:var(--muted)">${a.application_number}</div></td>
+          <td>${statusPill(a.status)}</td>
+          <td style="color:#16a34a;font-weight:500">${a.award_amount_approved?'$'+Number(a.award_amount_approved).toLocaleString():'—'}</td>
+        </tr>`).join('')}</tbody></table>
+        <div class="table-footer">${apps.count||0} total applications</div>`}
+      </div>
+      <div class="table-card">
+        <div class="table-header"><div class="table-title">🏛️ Priority WIBs</div>
+        <a href="#" onclick="loadPage('wibs')" style="font-size:10px;color:var(--blue)">View all →</a></div>
+        ${(wibs.data||[]).length===0?'<div class="empty">No WIBs yet. Start building your database →</div>':
+        `<table><thead><tr><th>Board</th><th>State</th><th>Status</th><th>Score</th></tr></thead><tbody>
+        ${(wibs.data||[]).map(w=>`<tr onclick="loadPage('wibs')">
+          <td style="font-weight:500">${w.short_name||w.wib_name}</td>
+          <td><b>${w.state}</b></td>
+          <td>${wibStatusPill(w.status)}</td>
+          <td><div style="display:flex;align-items:center;gap:5px"><div class="score-bar"><div class="score-fill" style="width:${w.call_priority_score}%"></div></div>${w.call_priority_score}</div></td>
+        </tr>`).join('')}</tbody></table>
+        <div class="table-footer">${wibs.count||0} total WIBs built</div>`}
+      </div>
+    </div>`
+}
+
+// ── WIBS PAGE ────────────────────────────────────────────
+async function pageWibs() {
+  const wibs = await api('/api/wibs?limit=200')
+  setTopbar('Workforce Boards', `<span style="font-size:11px;background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:20px;font-weight:500">${wibs.count||0} records</span>`,
+    `<button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button>`)
+  document.getElementById('page-content').innerHTML = `
+    <div class="table-card">
+      <div class="table-header">
+        <div class="table-title">Workforce Boards</div>
+        <div class="search-box">🔍 <input type="text" placeholder="Search WIBs..." oninput="filterWibs(this.value,'${(wibs.data||[]).map(w=>JSON.stringify(w).replace(/'/g,"")).join('|||').replace(/"/g,"'")}')"></div>
+      </div>
+      <div id="wibs-table-body">
+      <table><thead><tr><th>Workforce Board</th><th>State</th><th>Status</th><th>IWT</th><th>Score</th><th>Max Award</th><th>Next Steps</th><th></th></tr></thead>
+      <tbody id="wibs-rows">
+      ${renderWibRows(wibs.data||[])}
+      </tbody></table>
+      </div>
+      <div class="table-footer">${wibs.count||0} records · All data from public government sources</div>
+    </div>`
+  window._wibs = wibs.data||[]
+}
+
+function renderWibRows(data) {
+  if(!data.length) return '<tr><td colspan="8"><div class="empty">No WIB records yet. Add your first from public sources.</div></td></tr>'
+  return data.map(w=>`<tr>
+    <td><div style="font-weight:500">${w.wib_name}</div>${w.short_name?`<div style="font-size:9px;color:var(--muted)">${w.short_name}</div>`:''}</td>
+    <td><b>${w.state}</b></td>
+    <td>${wibStatusPill(w.status)}</td>
+    <td>${w.iwt_program_active?'<span style="color:#16a34a;font-weight:600">Active</span>':'<span style="color:#d1d5db">—</span>'}</td>
+    <td><div style="display:flex;align-items:center;gap:5px"><div class="score-bar"><div class="score-fill" style="width:${w.call_priority_score}%"></div></div><span style="font-size:10px">${w.call_priority_score}</span></div></td>
+    <td>${w.max_award_per_ein?'<span style="color:#16a34a;font-weight:500">$'+Number(w.max_award_per_ein).toLocaleString()+'</span>':'—'}</td>
+    <td style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)">${w.next_steps||'—'}</td>
+    <td><div class="action-btns">
+      <button class="action-btn" onclick="openWibModal(${JSON.stringify(w).replace(/"/g,"'")})">Edit</button>
+      <button class="action-btn delete" onclick="deleteWib('${w.id}')">Del</button>
+    </div></td>
+  </tr>`).join('')
+}
+
+function filterWibs(q) {
+  const rows = (window._wibs||[]).filter(w=>w.wib_name.toLowerCase().includes(q.toLowerCase())||(w.short_name||'').toLowerCase().includes(q.toLowerCase()))
+  document.getElementById('wibs-rows').innerHTML = renderWibRows(rows)
+}
+
+async function deleteWib(id) {
+  if(!confirm('Delete this WIB record?')) return
+  try { await api('/api/wibs/'+id,'DELETE'); loadPage('wibs') } catch(e) { alert(e.message) }
+}
+
+function openWibModal(wib=null) {
+  const states = 'AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
+  const stateOpts = states.map(s=>`<option value="${s}"${wib&&wib.state===s?' selected':''}>${s}</option>`).join('')
+  const statusOpts = [['no_reachout_complete','No Reachout Complete'],['follow_up_needed','Follow Up Needed'],['pending_employer','Pending Employer'],['funding_available','Funding Available'],['funding_not_available','Funding Not Available'],['stop_applications','Stop Applications']]
+    .map(([v,l])=>`<option value="${v}"${wib&&wib.status===v?' selected':''}>${l}</option>`).join('')
+  showModal(wib?`Edit: ${wib.wib_name}`:'Add Workforce Board', `
+    <div id="wib-modal-error"></div>
+    <div class="form-row"><div class="form-group"><label>WIB Name *</label><input id="wf-name" value="${wib?.wib_name||''}" placeholder="TX — Texas Workforce Investment Council"></div>
+    <div class="form-group"><label>Short Name</label><input id="wf-short" value="${wib?.short_name||''}" placeholder="Texas"></div></div>
+    <div class="form-row"><div class="form-group"><label>State *</label><select id="wf-state">${stateOpts}</select></div>
+    <div class="form-group"><label>Status *</label><select id="wf-status">${statusOpts}</select></div></div>
+    <div class="form-row"><div class="form-group"><label>WIB Phone</label><input id="wf-phone" value="${wib?.wib_phone||''}"></div>
+    <div class="form-group"><label>WIB Email</label><input id="wf-email" type="email" value="${wib?.wib_email||''}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Website</label><input id="wf-website" value="${wib?.website||''}"></div>
+    <div class="form-group"><label>Max Award / EIN ($)</label><input id="wf-max" type="number" value="${wib?.max_award_per_ein||''}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Match Required (%)</label><input id="wf-match" type="number" value="${wib?.match_requirement_pct||''}"></div>
+    <div class="form-group"><label>Type</label><select id="wf-type"><option value="local"${!wib||wib.wib_type==='local'?' selected':''}>Local</option><option value="state"${wib?.wib_type==='state'?' selected':''}>State</option><option value="regional"${wib?.wib_type==='regional'?' selected':''}>Regional</option><option value="tribal"${wib?.wib_type==='tribal'?' selected':''}>Tribal</option></select></div></div>
+    <div class="form-row full"><div class="form-group"><label>Source URL * (public government page)</label><input id="wf-source" value="${wib?.source_url||''}" placeholder="https://twc.texas.gov/..."></div></div>
+    <div class="form-row full"><div class="form-group"><label>Next Steps</label><textarea id="wf-steps">${wib?.next_steps||''}</textarea></div></div>
+    <div class="form-row full"><div class="form-group"><label>Notes</label><textarea id="wf-notes">${wib?.notes||''}</textarea></div></div>
+    <div class="checkbox-row"><input type="checkbox" id="wf-iwt"${wib?.iwt_program_active?' checked':''}><label for="wf-iwt">IWT Program Active</label></div>
+    <div style="margin-top:10px;padding:8px;background:#f0fdf4;border-radius:6px;font-size:10px;color:#166534">✓ Independent creation logged — built from public government sources after May 1, 2026</div>
+  `, async () => {
+    const payload = {
+      wib_name:document.getElementById('wf-name').value,
+      short_name:document.getElementById('wf-short').value||null,
+      state:document.getElementById('wf-state').value,
+      status:document.getElementById('wf-status').value,
+      wib_phone:document.getElementById('wf-phone').value||null,
+      wib_email:document.getElementById('wf-email').value||null,
+      website:document.getElementById('wf-website').value||null,
+      max_award_per_ein:document.getElementById('wf-max').value||null,
+      match_requirement_pct:document.getElementById('wf-match').value||null,
+      wib_type:document.getElementById('wf-type').value,
+      source_url:document.getElementById('wf-source').value,
+      next_steps:document.getElementById('wf-steps').value||null,
+      notes:document.getElementById('wf-notes').value||null,
+      iwt_program_active:document.getElementById('wf-iwt').checked,
+      independent_creation_logged:true,
+      last_verified_date:new Date().toISOString().split('T')[0]
+    }
+    if(!payload.wib_name||!payload.source_url) { document.getElementById('wib-modal-error').innerHTML='<div class="alert alert-error">WIB name and source URL are required</div>'; return false }
+    try {
+      if(wib) await api('/api/wibs/'+wib.id,'PUT',payload)
+      else await api('/api/wibs','POST',payload)
+      loadPage('wibs')
+    } catch(e) { document.getElementById('wib-modal-error').innerHTML=`<div class="alert alert-error">${e.message}</div>`; return false }
+  })
+}
+
+// ── COMPANIES ────────────────────────────────────────────
+async function pageCompanies() {
+  const data = await api('/api/companies?limit=200')
+  setTopbar('Companies',`<span style="font-size:11px;background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:20px;font-weight:500">${data.count||0} records</span>`,
+    `<button class="btn btn-primary" onclick="openCompanyModal()">+ New Company</button>`)
+  document.getElementById('page-content').innerHTML = `
+    <div class="table-card">
+      <div class="table-header"><div class="table-title">Companies — Senior Living Operators</div></div>
+      <table><thead><tr><th>Company</th><th>Status</th><th>Rating</th><th>Employees</th><th>Domain</th><th>Revenue</th><th></th></tr></thead>
+      <tbody>${(data.data||[]).length===0?'<tr><td colspan="7"><div class="empty">No companies yet.</div></td></tr>':
+      (data.data||[]).map(c=>`<tr>
+        <td><div style="font-weight:500">${c.company_name}</div><div style="font-size:9px;color:var(--muted)">${c.company_type}</div></td>
+        <td>${companyStatusPill(c.status)}</td>
+        <td>${c.rating?'⭐'.repeat(c.rating):'—'}</td>
+        <td>${c.employee_count_total||'—'}</td>
+        <td style="color:var(--blue);font-size:10px">${c.domain||'—'}</td>
+        <td style="color:#16a34a;font-weight:500">${c.lifetime_revenue?'$'+Number(c.lifetime_revenue).toLocaleString():'$0'}</td>
+        <td><div class="action-btns"><button class="action-btn" onclick="openCompanyModal(${JSON.stringify(c).replace(/"/g,"'")})">Edit</button></div></td>
+      </tr>`).join('')}</tbody></table>
+      <div class="table-footer">${data.count||0} operators</div>
+    </div>`
+}
+
+function openCompanyModal(co=null) {
+  const statusOpts = ['prospect','contacted','qualified','active_client','churned','dnc'].map(s=>`<option value="${s}"${co?.status===s?' selected':''}>${s.replace('_',' ')}</option>`).join('')
+  showModal(co?`Edit: ${co.company_name}`:'Add Company',`
+    <div class="form-row"><div class="form-group"><label>Company Name *</label><input id="co-name" value="${co?.company_name||''}"></div>
+    <div class="form-group"><label>Status</label><select id="co-status">${statusOpts}</select></div></div>
+    <div class="form-row"><div class="form-group"><label>FEIN</label><input id="co-fein" value="${co?.fein||''}"></div>
+    <div class="form-group"><label>Domain</label><input id="co-domain" value="${co?.domain||''}" placeholder="example.com"></div></div>
+    <div class="form-row"><div class="form-group"><label>Employee Count</label><input id="co-emp" type="number" value="${co?.employee_count_total||''}"></div>
+    <div class="form-group"><label>Avg Hourly Wage ($)</label><input id="co-wage" type="number" value="${co?.avg_hourly_wage||''}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Primary Contact Name</label><input id="co-contact" value="${co?.primary_contact_name||''}"></div>
+    <div class="form-group"><label>Contact Email</label><input id="co-email" type="email" value="${co?.primary_contact_email||''}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Contact Phone</label><input id="co-phone" value="${co?.primary_contact_phone||''}"></div>
+    <div class="form-group"><label>Rating (1-5)</label><input id="co-rating" type="number" min="1" max="5" value="${co?.rating||''}"></div></div>
+    <div class="form-row full"><div class="form-group"><label>Training Needs</label><textarea id="co-training">${co?.training_needs||''}</textarea></div></div>
+    <div class="form-row full"><div class="form-group"><label>Notes</label><textarea id="co-notes">${co?.notes||''}</textarea></div></div>
+    <div class="checkbox-row"><input type="checkbox" id="co-25"${co?.is_25_plus?' checked':''}><label for="co-25">25+ employees</label></div>
+  `, async ()=>{
+    const payload={company_name:document.getElementById('co-name').value,status:document.getElementById('co-status').value,fein:document.getElementById('co-fein').value||null,domain:document.getElementById('co-domain').value||null,employee_count_total:document.getElementById('co-emp').value||null,avg_hourly_wage:document.getElementById('co-wage').value||null,primary_contact_name:document.getElementById('co-contact').value||null,primary_contact_email:document.getElementById('co-email').value||null,primary_contact_phone:document.getElementById('co-phone').value||null,rating:document.getElementById('co-rating').value||null,training_needs:document.getElementById('co-training').value||null,notes:document.getElementById('co-notes').value||null,is_25_plus:document.getElementById('co-25').checked}
+    if(!payload.company_name){alert('Company name required');return false}
+    try{if(co)await api('/api/companies/'+co.id,'PUT',payload);else await api('/api/companies','POST',payload);loadPage('companies')}catch(e){alert(e.message);return false}
+  })
+}
+
+// ── LOCATIONS ────────────────────────────────────────────
+async function pageLocations() {
+  const data = await api('/api/locations?limit=200')
+  setTopbar('Locations',`<span style="font-size:11px;background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:20px;font-weight:500">${data.count||0} records</span>`,
+    `<button class="btn btn-primary" onclick="openLocationModal()">+ New Location</button>`)
+  document.getElementById('page-content').innerHTML = `
+    <div class="table-card">
+      <div class="table-header"><div class="table-title">Locations — Individual Facilities</div></div>
+      <table><thead><tr><th>Location</th><th>Parent Operator</th><th>State</th><th>WIB</th><th>Status</th><th></th></tr></thead>
+      <tbody>${(data.data||[]).length===0?'<tr><td colspan="6"><div class="empty">No locations yet. Import from CMS data.</div></td></tr>':
+      (data.data||[]).map(l=>`<tr>
+        <td><div style="font-weight:500">${l.location_name}</div><div style="font-size:9px;color:var(--muted)">${l.county||''}${l.city?', '+l.city:''}</div></td>
+        <td style="color:var(--muted)">${l.parent_company?.company_name||'—'}</td>
+        <td><b>${l.state}</b></td>
+        <td style="font-size:10px;color:var(--muted)">${l.wib?.wib_name||'—'}</td>
+        <td>${locationStatusPill(l.status)}</td>
+        <td><button class="action-btn" onclick="openLocationModal(${JSON.stringify(l).replace(/"/g,"'")})">Edit</button></td>
+      </tr>`).join('')}</tbody></table>
+      <div class="table-footer">${data.count||0} facilities</div>
+    </div>`
+}
+
+function openLocationModal(loc=null) {
+  const states='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
+  const stateOpts=states.map(s=>`<option value="${s}"${loc?.state===s?' selected':''}>${s}</option>`).join('')
+  const statusOpts=['not_contacted','contacted','application_in_progress','client','network_member','dnc'].map(s=>`<option value="${s}"${loc?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
+  showModal(loc?`Edit: ${loc.location_name}`:'Add Location',`
+    <div class="form-row"><div class="form-group"><label>Location Name *</label><input id="loc-name" value="${loc?.location_name||''}"></div>
+    <div class="form-group"><label>State *</label><select id="loc-state">${stateOpts}</select></div></div>
+    <div class="form-row"><div class="form-group"><label>County</label><input id="loc-county" value="${loc?.county||''}"></div>
+    <div class="form-group"><label>City</label><input id="loc-city" value="${loc?.city||''}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Status</label><select id="loc-status">${statusOpts}</select></div>
+    <div class="form-group"><label>Facility Type</label><input id="loc-type" value="${loc?.facility_type||''}" placeholder="Assisted Living, SNF, Memory Care..."></div></div>
+    <div class="form-row"><div class="form-group"><label>Employee Count</label><input id="loc-emp" type="number" value="${loc?.employee_count||''}"></div>
+    <div class="form-group"><label>CMS Certification #</label><input id="loc-cms" value="${loc?.cms_certification_number||''}"></div></div>
+    <div class="form-row full"><div class="form-group"><label>Notes</label><textarea id="loc-notes">${loc?.notes||''}</textarea></div></div>
+  `,async()=>{
+    const payload={location_name:document.getElementById('loc-name').value,state:document.getElementById('loc-state').value,county:document.getElementById('loc-county').value||null,city:document.getElementById('loc-city').value||null,status:document.getElementById('loc-status').value,facility_type:document.getElementById('loc-type').value||null,employee_count:document.getElementById('loc-emp').value||null,cms_certification_number:document.getElementById('loc-cms').value||null,notes:document.getElementById('loc-notes').value||null}
+    if(!payload.location_name){alert('Location name required');return false}
+    try{if(loc)await api('/api/locations/'+loc.id,'PUT',payload);else await api('/api/locations','POST',payload);loadPage('locations')}catch(e){alert(e.message);return false}
+  })
+}
+
+// ── FUNDING ──────────────────────────────────────────────
+async function pageFunding() {
+  const data = await api('/api/funding?limit=200')
+  setTopbar('Funding Opportunities',`<span style="font-size:11px;background:#dcfce7;color:#166534;padding:2px 8px;border-radius:20px;font-weight:500">${data.count||0} tracked</span>`,
+    `<button class="btn btn-primary" onclick="openFundingModal()">+ New Funding Opportunity</button>`)
+  document.getElementById('page-content').innerHTML = `
+    <div class="table-card">
+      <div class="table-header"><div class="table-title">Funding Opportunities — IWT Cycles</div></div>
+      <table><thead><tr><th>Opportunity</th><th>WIB</th><th>Status</th><th>Max Award</th><th>Deadline</th><th>Drive Link</th><th></th></tr></thead>
+      <tbody>${(data.data||[]).length===0?'<tr><td colspan="7"><div class="empty">No funding opportunities yet. Build from public WIB websites.</div></td></tr>':
+      (data.data||[]).map(f=>`<tr>
+        <td><div style="font-weight:500">${f.opportunity_name}</div><div style="font-size:9px;color:var(--muted)">${f.program_type?.toUpperCase()}</div></td>
+        <td style="font-size:10px;color:var(--muted)">${f.wib?.wib_name||'—'}</td>
+        <td>${fundingStatusPill(f.status)}</td>
+        <td>${f.max_award_per_ein?'<span style="color:#16a34a;font-weight:500">$'+Number(f.max_award_per_ein).toLocaleString()+'</span>':'—'}</td>
+        <td style="font-size:10px">${f.application_deadline||'—'}</td>
+        <td>${f.application_link?`<a href="${f.application_link}" target="_blank" style="color:var(--blue);font-size:10px">Drive →</a>`:'—'}</td>
+        <td><div class="action-btns">
+          <button class="action-btn" onclick="openFundingModal(${JSON.stringify(f).replace(/"/g,"'")})">Edit</button>
+          <button class="action-btn delete" onclick="deleteFunding('${f.id}')">Del</button>
+        </div></td>
+      </tr>`).join('')}</tbody></table>
+      <div class="table-footer">${data.count||0} opportunities tracked</div>
+    </div>`
+}
+
+async function deleteFunding(id){if(!confirm('Delete?'))return;try{await api('/api/funding/'+id,'DELETE');loadPage('funding')}catch(e){alert(e.message)}}
+
+function openFundingModal(f=null){
+  const statusOpts=[['open','Open'],['pending','Pending'],['blocked','Blocked'],['pending_employer','Pending Employer'],['stop_applications','Stop Applications'],['closed_deadline','Closed — Deadline'],['closed_out_of_funds','Closed — Out of Funds']]
+    .map(([v,l])=>`<option value="${v}"${f?.status===v?' selected':''}>${l}</option>`).join('')
+  showModal(f?`Edit: ${f.opportunity_name}`:'New Funding Opportunity',`
+    <div class="form-row full"><div class="form-group"><label>Opportunity Name * (format: Region - IWT - YYYY-MM)</label><input id="fo-name" value="${f?.opportunity_name||''}" placeholder="TX - Permian Basin - IWT - 2026-03"></div></div>
+    <div class="form-row"><div class="form-group"><label>Status *</label><select id="fo-status">${statusOpts}</select></div>
+    <div class="form-group"><label>Program Type</label><select id="fo-type"><option value="iwt"${!f||f.program_type==='iwt'?' selected':''}>IWT</option><option value="ojt"${f?.program_type==='ojt'?' selected':''}>OJT</option><option value="training_grant"${f?.program_type==='training_grant'?' selected':''}>Training Grant</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label>Max Award / EIN ($)</label><input id="fo-max" type="number" value="${f?.max_award_per_ein||''}"></div>
+    <div class="form-group"><label>Max Award / Employee ($)</label><input id="fo-maxemp" type="number" value="${f?.max_award_per_employee||''}"></div></div>
+    <div class="form-row"><div class="form-group"><label>Match Required (%)</label><input id="fo-match" type="number" value="${f?.match_requirement_pct||''}"></div>
+    <div class="form-group"><label>Application Deadline</label><input id="fo-deadline" type="date" value="${f?.application_deadline||''}"></div></div>
+    <div class="form-row full"><div class="form-group"><label>Application Link (Google Drive or WIB portal)</label><input id="fo-link" value="${f?.application_link||''}"></div></div>
+    <div class="form-row full"><div class="form-group"><label>Source URL * (public WIB website)</label><input id="fo-source" value="${f?.source_url||''}"></div></div>
+    <div class="form-row full"><div class="form-group"><label>Notes</label><textarea id="fo-notes">${f?.notes||''}</textarea></div></div>
+  `,async()=>{
+    const wibId = f?.wib_id
+    const payload={opportunity_name:document.getElementById('fo-name').value,status:document.getElementById('fo-status').value,program_type:document.getElementById('fo-type').value,max_award_per_ein:document.getElementById('fo-max').value||null,max_award_per_employee:document.getElementById('fo-maxemp').value||null,match_requirement_pct:document.getElementById('fo-match').value||null,application_deadline:document.getElementById('fo-deadline').value||null,application_link:document.getElementById('fo-link').value||null,source_url:document.getElementById('fo-source').value,notes:document.getElementById('fo-notes').value||null,independent_creation_logged:true,last_verified_date:new Date().toISOString().split('T')[0]}
+    if(!payload.opportunity_name||!payload.source_url){alert('Name and source URL required');return false}
+    if(!wibId&&!f){alert('Note: You must link a WIB record. Please add WIBs first, then create funding opportunities.');return false}
+    if(wibId)payload.wib_id=wibId
+    try{if(f)await api('/api/funding/'+f.id,'PUT',payload);else await api('/api/funding','POST',payload);loadPage('funding')}catch(e){alert(e.message);return false}
+  })
+}
+
+// ── APPLICATIONS ─────────────────────────────────────────
+async function pageApplications() {
+  const data = await api('/api/applications?limit=200')
+  setTopbar('Applications',`<span style="font-size:11px;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:20px;font-weight:500">${data.count||0} applications</span>`,
+    `<button class="btn btn-primary" onclick="alert('To create an application, you need a Company + WIB + Funding Opportunity already added.')">+ New Application</button>`)
+  document.getElementById('page-content').innerHTML = `
+    <div class="table-card">
+      <div class="table-header"><div class="table-title">Grant Application Pipeline</div></div>
+      <table><thead><tr><th>App #</th><th>Company</th><th>WIB</th><th>Status</th><th>Award</th><th>Fee Earned</th><th>Invoice</th><th>Days in Stage</th></tr></thead>
+      <tbody>${(data.data||[]).length===0?'<tr><td colspan="8"><div class="empty">No applications yet.</div></td></tr>':
+      (data.data||[]).map(a=>`<tr>
+        <td style="font-family:monospace;font-size:10px;color:var(--muted)">${a.application_number}</td>
+        <td><div style="font-weight:500">${a.company?.company_name||'—'}</div></td>
+        <td style="font-size:10px;color:var(--muted)">${a.wib?.wib_name||'—'}</td>
+        <td>${statusPill(a.status)}</td>
+        <td style="color:#16a34a;font-weight:500">${a.award_amount_approved?'$'+Number(a.award_amount_approved).toLocaleString():'—'}</td>
+        <td style="color:#16a34a;font-weight:500">${a.revenue?.[0]?.calculated_success_fee?'$'+Number(a.revenue[0].calculated_success_fee).toLocaleString():'—'}</td>
+        <td>${a.revenue?.[0]?.invoice_status?invoicePill(a.revenue[0].invoice_status):'—'}</td>
+        <td style="text-align:center;color:var(--muted)">${a.time_in_stage_days||0}d</td>
+      </tr>`).join('')}</tbody></table>
+      <div class="table-footer">${data.count||0} total applications</div>
+    </div>`
+}
+
+// ── REVENUE ──────────────────────────────────────────────
+async function pageRevenue() {
+  const [rev, records] = await Promise.all([api('/api/revenue/dashboard').catch(()=>({})), api('/api/revenue')])
+  const fmt=n=>'$'+(Number(n)||0).toLocaleString()
+  setTopbar('Revenue Tracker','','')
+  document.getElementById('page-content').innerHTML = `
+    <div class="revenue-bar" style="margin-bottom:14px">
+      <div class="rb-item"><div class="rb-n">${fmt(rev.total_revenue_ytd)}</div><div class="rb-l">Revenue YTD</div></div>
+      <div class="rb-item"><div class="rb-n">${fmt(rev.pipeline_value)}</div><div class="rb-l">Pipeline value</div></div>
+      <div class="rb-item"><div class="rb-n">${rev.total_awards||0}</div><div class="rb-l">Grants awarded</div></div>
+      <div class="rb-item"><div class="rb-n">${fmt(rev.total_grant_dollars_secured)}</div><div class="rb-l">Total grant $ secured</div></div>
+      <div class="rb-item"><div class="rb-n">${rev.overdue_invoices||0}</div><div class="rb-l">Overdue invoices</div></div>
+    </div>
+    <div class="table-card">
+      <div class="table-header"><div class="table-title">Revenue Records</div></div>
+      <table><thead><tr><th>Company</th><th>WIB</th><th>Fee Model</th><th>Grant Award</th><th>Valor Fee</th><th>Invoice Status</th><th></th></tr></thead>
+      <tbody>${(records.data||[]).length===0?'<tr><td colspan="7"><div class="empty">Revenue records are auto-created when a grant is awarded.</div></td></tr>':
+      (records.data||[]).map(r=>`<tr>
+        <td style="font-weight:500">${r.company?.company_name||'—'}</td>
+        <td style="font-size:10px;color:var(--muted)">${r.wib?.wib_name||'—'}</td>
+        <td><span class="pill pill-blue">${r.fee_model?.replace(/_/g,' ')}</span></td>
+        <td style="font-weight:500;color:#16a34a">${r.grant_award_amount?'$'+Number(r.grant_award_amount).toLocaleString():'—'}</td>
+        <td style="font-weight:600;color:#16a34a">${r.calculated_success_fee?'$'+Number(r.calculated_success_fee).toLocaleString():'—'}</td>
+        <td>${invoicePill(r.invoice_status)}</td>
+        <td><button class="action-btn" onclick="markPaid('${r.id}','${r.invoice_status}')">Mark Paid</button></td>
+      </tr>`).join('')}</tbody></table>
+    </div>`
+}
+
+async function markPaid(id,current){
+  if(current==='paid'){alert('Already marked paid');return}
+  if(!confirm('Mark this invoice as paid?'))return
+  try{await api('/api/revenue/'+id,'PUT',{invoice_status:'paid',payment_received_date:new Date().toISOString().split('T')[0]});loadPage('revenue')}catch(e){alert(e.message)}
+}
+
+// ── COMPLIANCE ───────────────────────────────────────────
+async function pageCompliance() {
+  const data = await api('/api/compliance')
+  setTopbar('Compliance Tracker','','')
+  document.getElementById('page-content').innerHTML = `
+    <div class="table-card">
+      <div class="table-header"><div class="table-title">🛡️ Active Compliance Alerts — Government money requires strict tracking</div></div>
+      <table><thead><tr><th>Company</th><th>App #</th><th>Final Report Due</th><th>Days Until Due</th><th>Risk</th><th>Final Submitted</th></tr></thead>
+      <tbody>${(data.data||[]).length===0?'<tr><td colspan="6"><div class="empty" style="color:#16a34a">✓ All clear — no compliance alerts</div></td></tr>':
+      (data.data||[]).map(c=>`<tr>
+        <td style="font-weight:500">${c.company_name}</td>
+        <td style="font-family:monospace;font-size:10px;color:var(--muted)">${c.application_number}</td>
+        <td>${c.final_report_due||'—'}</td>
+        <td><span style="font-weight:600;color:${c.days_until_final_due<7?'var(--red)':c.days_until_final_due<14?'var(--amber)':'var(--muted)'}">${c.days_until_final_due!==null?(c.days_until_final_due>0?c.days_until_final_due+'d':'OVERDUE'):'—'}</span></td>
+        <td><span class="pill ${c.compliance_risk_level==='critical'?'pill-red':c.compliance_risk_level==='high'?'pill-orange':c.compliance_risk_level==='medium'?'pill-amber':'pill-green'}">${c.compliance_risk_level}</span></td>
+        <td>${c.final_report_submitted?'✅ Yes':'❌ No'}</td>
+      </tr>`).join('')}</tbody></table>
+    </div>`
+}
+
+// ── USERS ────────────────────────────────────────────────
+async function pageUsers() {
+  const data = await api('/api/users')
+  setTopbar('User Management',`<span style="font-size:11px;background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:20px;font-weight:500">${(data.data||[]).length} users</span>`,
+    `<button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>`)
+  document.getElementById('page-content').innerHTML = `
+    <div class="table-card">
+      <div class="table-header"><div class="table-title">User Management — Admin Only</div></div>
+      <table><thead><tr><th>User</th><th>Role</th><th>Title</th><th>Status</th><th>Last Login</th><th></th></tr></thead>
+      <tbody>${(data.data||[]).map(u=>`<tr>
+        <td><div style="display:flex;align-items:center;gap:8px">
+          <div style="width:28px;height:28px;border-radius:50%;background:#e0e7ff;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:#4338ca">${(u.full_name||u.email).slice(0,2).toUpperCase()}</div>
+          <div><div style="font-weight:500">${u.full_name||'—'}</div><div style="font-size:9px;color:var(--muted)">${u.email}</div></div></div></td>
+        <td>${rolePill(u.role)}</td>
+        <td style="color:var(--muted);font-size:10px">${u.title||'—'}</td>
+        <td><span class="pill ${u.is_active?'pill-green':'pill-gray'}">${u.is_active?'Active':'Inactive'}</span></td>
+        <td style="font-size:10px;color:var(--muted)">${u.last_login_at?new Date(u.last_login_at).toLocaleDateString():'Never'}</td>
+        <td><div class="action-btns">
+          <button class="action-btn" onclick="openEditUserModal(${JSON.stringify(u).replace(/"/g,"'")})">Edit</button>
+          ${currentUser?.role==='super_admin'&&u.id!==currentUser?.id?`<button class="action-btn delete" onclick="deleteUser('${u.id}')">Del</button>`:''}
+        </div></td>
+      </tr>`).join('')}</tbody></table>
+      <div style="padding:10px 14px;background:#f0fdf4;border-top:.5px solid var(--border);font-size:10px;color:#166534">
+        ✓ Super Admin · Admin · Team Member · External Partner — roles enforced at database level via Row Level Security
+      </div>
+    </div>`
+}
+
+function openUserModal(){
+  showModal('Add New User',`
+    <div id="user-modal-error"></div>
+    <div class="form-row"><div class="form-group"><label>Full Name</label><input id="u-name" placeholder="Jane Smith"></div>
+    <div class="form-group"><label>Email *</label><input id="u-email" type="email" placeholder="jane@valorworkforce.com"></div></div>
+    <div class="form-row"><div class="form-group"><label>Password * (min 8 chars)</label><input id="u-password" type="password" placeholder="••••••••"></div>
+    <div class="form-group"><label>Role *</label><select id="u-role"><option value="team_member">Team Member</option><option value="admin">Admin</option><option value="external_partner">External Partner</option><option value="super_admin">Super Admin</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label>Title</label><input id="u-title" placeholder="Sales Specialist"></div>
+    <div class="form-group"><label>Phone</label><input id="u-phone" placeholder="+1 (555) 000-0000"></div></div>
+    <div style="background:#f0fdf4;border-radius:7px;padding:9px;font-size:10px;color:#166534;margin-top:8px">User will be created and can log in immediately. No confirmation email required.</div>
+  `,async()=>{
+    const err=document.getElementById('user-modal-error')
+    const payload={email:document.getElementById('u-email').value,password:document.getElementById('u-password').value,full_name:document.getElementById('u-name').value,role:document.getElementById('u-role').value,title:document.getElementById('u-title').value||null,phone:document.getElementById('u-phone').value||null}
+    if(!payload.email||!payload.password){err.innerHTML='<div class="alert alert-error">Email and password required</div>';return false}
+    if(payload.password.length<8){err.innerHTML='<div class="alert alert-error">Password must be at least 8 characters</div>';return false}
+    try{await api('/api/users','POST',payload);loadPage('users')}catch(e){err.innerHTML=`<div class="alert alert-error">${e.message}</div>`;return false}
+  })
+}
+
+function openEditUserModal(u){
+  showModal(`Edit: ${u.full_name||u.email}`,`
+    <div class="form-row"><div class="form-group"><label>Full Name</label><input id="eu-name" value="${u.full_name||''}"></div>
+    <div class="form-group"><label>Role</label><select id="eu-role"><option value="team_member"${u.role==='team_member'?' selected':''}>Team Member</option><option value="admin"${u.role==='admin'?' selected':''}>Admin</option><option value="external_partner"${u.role==='external_partner'?' selected':''}>External Partner</option><option value="super_admin"${u.role==='super_admin'?' selected':''}>Super Admin</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label>Title</label><input id="eu-title" value="${u.title||''}"></div>
+    <div class="form-group"><label>Phone</label><input id="eu-phone" value="${u.phone||''}"></div></div>
+    <div class="checkbox-row"><input type="checkbox" id="eu-active"${u.is_active?' checked':''}><label for="eu-active">Active</label></div>
+  `,async()=>{
+    try{await api('/api/users/'+u.id,'PUT',{full_name:document.getElementById('eu-name').value,role:document.getElementById('eu-role').value,title:document.getElementById('eu-title').value||null,phone:document.getElementById('eu-phone').value||null,is_active:document.getElementById('eu-active').checked});loadPage('users')}catch(e){alert(e.message);return false}
+  })
+}
+
+async function deleteUser(id){if(!confirm('Permanently delete this user?'))return;try{await api('/api/users/'+id,'DELETE');loadPage('users')}catch(e){alert(e.message)}}
+
+// ── HELPERS ──────────────────────────────────────────────
+function setTopbar(title, badge, actions) {
+  const m=document.getElementById('main-content')
+  let tb=m.querySelector('.topbar')
+  if(!tb){tb=document.createElement('div');tb.className='topbar';m.insertBefore(tb,m.firstChild)}
+  tb.innerHTML=`<div style="display:flex;align-items:center;gap:8px"><div class="page-title">${title}</div>${badge}</div><div class="topbar-right">${actions}</div>`
+}
+
+function showModal(title, body, onConfirm) {
+  const existing=document.getElementById('app-modal')
+  if(existing)existing.remove()
+  const overlay=document.createElement('div')
+  overlay.className='modal-overlay';overlay.id='app-modal'
+  overlay.innerHTML=`<div class="modal">
+    <div class="modal-header"><div class="modal-title">${title}</div><button class="modal-close" onclick="document.getElementById('app-modal').remove()">×</button></div>
+    <div class="modal-body">${body}</div>
+    <div class="modal-footer">
+      <button class="btn" onclick="document.getElementById('app-modal').remove()">Cancel</button>
+      <button class="btn btn-primary" id="modal-confirm-btn">Save</button>
+    </div></div>`
+  document.body.appendChild(overlay)
+  overlay.addEventListener('click',e=>{if(e.target===overlay)overlay.remove()})
+  document.getElementById('modal-confirm-btn').addEventListener('click',async()=>{
+    const btn=document.getElementById('modal-confirm-btn')
+    btn.disabled=true;btn.textContent='Saving...'
+    const result=await onConfirm()
+    if(result!==false){overlay.remove()}else{btn.disabled=false;btn.textContent='Save'}
+  })
+}
+
+function statusPill(s){const m={intake:'pill-blue',doc_collection:'pill-purple',drafting:'pill-purple',employer_review:'pill-amber',submitted:'pill-blue',approved:'pill-green',awarded:'pill-green',denied:'pill-red'};return`<span class="pill ${m[s]||'pill-gray'}">${(s||'').replace(/_/g,' ')}</span>`}
+function wibStatusPill(s){const m={funding_available:'pill-green',follow_up_needed:'pill-purple',pending_employer:'pill-amber',no_reachout_complete:'pill-gray',funding_not_available:'pill-red',stop_applications:'pill-orange'};return`<span class="pill ${m[s]||'pill-gray'}">${(s||'').replace(/_/g,' ')}</span>`}
+function fundingStatusPill(s){const m={open:'pill-green',pending:'pill-amber',blocked:'pill-red',pending_employer:'pill-purple',stop_applications:'pill-orange',closed_deadline:'pill-gray',closed_out_of_funds:'pill-red'};return`<span class="pill ${m[s]||'pill-gray'}">${(s||'').replace(/_/g,' ')}</span>`}
+function locationStatusPill(s){const m={not_contacted:'pill-amber',contacted:'pill-blue',application_in_progress:'pill-purple',client:'pill-green',network_member:'pill-gray',dnc:'pill-red'};return`<span class="pill ${m[s]||'pill-gray'}">${(s||'').replace(/_/g,' ')}</span>`}
+function companyStatusPill(s){const m={prospect:'pill-amber',contacted:'pill-blue',qualified:'pill-purple',active_client:'pill-green',churned:'pill-gray',dnc:'pill-red'};return`<span class="pill ${m[s]||'pill-gray'}">${(s||'').replace(/_/g,' ')}</span>`}
+function invoicePill(s){const m={not_invoiced:'pill-gray',sent:'pill-blue',paid:'pill-green',overdue:'pill-red',disputed:'pill-orange'};return`<span class="pill ${m[s]||'pill-gray'}">${(s||'').replace(/_/g,' ')}</span>`}
+function rolePill(r){const m={super_admin:'pill-purple',admin:'pill-blue',team_member:'pill-green',external_partner:'pill-gray'};return`<span class="pill ${m[r]||'pill-gray'}">${(r||'').replace(/_/g,' ')}</span>`}
+
+render()
+</script>
+</body>
+</html>
