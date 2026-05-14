@@ -1,0 +1,2469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valor Workforce Funding</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --nv:#0B1E3C;--nv2:#152d54;--nv3:#1e3d6e;
+  --gd:#C9A84C;--gd2:#E8C96A;--cream:#E8D9A8;
+  --white:#fff;--gray:#f8f7f6;--gray2:#f3f2f1;
+  --border:#e5e7eb;--border2:#d1d5db;
+  --text:#111827;--text2:#6b7280;--text3:#9ca3af;
+  --green:#16a34a;--green-bg:#dcfce7;--green-t:#166534;
+  --amber:#d97706;--amber-bg:#fef3c7;--amber-t:#92400e;
+  --red:#dc2626;--red-bg:#fee2e2;--red-t:#991b1b;
+  --blue:#2563eb;--blue-bg:#dbeafe;--blue-t:#1e40af;
+  --purple:#7c3aed;--purple-bg:#ede9fe;--purple-t:#5b21b6;
+  --teal:#0d9488;--teal-bg:#ccfbf1;--teal-t:#134e4a;
+  --orange:#ea580c;--orange-bg:#fff7ed;--orange-t:#9a3412;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Inter','Segoe UI',sans-serif;background:var(--gray);color:var(--text);height:100vh;overflow:hidden;font-size:13px}
+.app{display:flex;height:100vh}
+
+/* ── SIDEBAR ── */
+.sidebar{width:208px;background:var(--nv);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+.logo-area{padding:13px 14px 10px;border-bottom:1px solid rgba(255,255,255,.07);flex-shrink:0}
+.logo-top{display:flex;align-items:center;gap:8px}
+.logo-icon{width:28px;height:28px;border-radius:7px;background:rgba(201,168,76,.25);border:.5px solid rgba(201,168,76,.4);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.logo-name{font-size:11.5px;font-weight:600;color:var(--cream);line-height:1.25}
+.logo-sub{font-size:8.5px;color:rgba(255,255,255,.28);margin-top:1px;letter-spacing:.6px;text-transform:uppercase}
+.nav-scroll{flex:1;overflow-y:auto;padding:5px 0 0}
+.nav-scroll::-webkit-scrollbar{width:3px}
+.nav-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px}
+.nav-sec{padding:8px 12px 3px;font-size:9px;color:rgba(255,255,255,.22);letter-spacing:1.1px;text-transform:uppercase;font-weight:600}
+.nav-item{display:flex;align-items:center;gap:7px;padding:6px 12px;font-size:11.5px;color:rgba(255,255,255,.5);cursor:pointer;border-left:2px solid transparent;transition:all .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nav-item:hover{background:rgba(255,255,255,.06);color:rgba(255,255,255,.85)}
+.nav-item.active{background:rgba(201,168,76,.14);color:var(--gd2);border-left-color:var(--gd)}
+.nav-item .ni{font-size:13px;width:15px;text-align:center;flex-shrink:0}
+.nav-badge{margin-left:auto;background:rgba(220,60,60,.9);color:#fff;font-size:8px;font-weight:600;padding:1px 5px;border-radius:8px;flex-shrink:0}
+.nav-badge.green{background:#16a34a}
+.nav-badge.amber{background:#d97706}
+.nav-divider{height:.5px;background:rgba(255,255,255,.06);margin:5px 0}
+.nav-group-toggle{display:flex;align-items:center;gap:5px;padding:5px 12px 2px;font-size:9px;color:rgba(255,255,255,.22);cursor:pointer;letter-spacing:.5px;text-transform:uppercase}
+.nav-sub{padding-left:8px}
+.user-foot{padding:9px 12px;border-top:1px solid rgba(255,255,255,.07);flex-shrink:0}
+.user-row{display:flex;align-items:center;gap:8px}
+.user-av{width:26px;height:26px;border-radius:50%;background:rgba(201,168,76,.22);display:flex;align-items:center;justify-content:center;font-size:9.5px;font-weight:600;color:var(--gd);flex-shrink:0}
+.user-nm{font-size:10.5px;font-weight:500;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.user-rl{font-size:8.5px;color:rgba(255,255,255,.3);text-transform:capitalize}
+.user-actions{margin-left:auto;display:flex;gap:3px}
+.user-act-btn{background:none;border:none;color:rgba(255,255,255,.25);cursor:pointer;font-size:13px;padding:2px;transition:color .1s}
+.user-act-btn:hover{color:rgba(255,255,255,.6)}
+
+/* ── MAIN ── */
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.topbar{background:var(--white);border-bottom:.5px solid var(--border);padding:8px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;gap:10px}
+.topbar-left{display:flex;align-items:center;gap:8px;min-width:0}
+.page-title{font-size:13px;font-weight:600;color:var(--text);white-space:nowrap}
+.topbar-badge{font-size:10px;padding:2px 8px;border-radius:20px;font-weight:500;white-space:nowrap}
+.topbar-right{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.btn{padding:5px 11px;border-radius:7px;font-size:11.5px;cursor:pointer;border:.5px solid var(--border);background:var(--white);color:var(--text);font-family:inherit;transition:all .1s;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.btn:hover{background:var(--gray2)}
+.btn-primary{background:var(--nv);color:var(--cream);border-color:var(--nv);font-weight:600}
+.btn-primary:hover{background:var(--nv2)}
+.btn-success{background:var(--green-bg);color:var(--green-t);border-color:transparent;font-weight:500}
+.btn-danger{background:var(--red-bg);color:var(--red-t);border-color:transparent}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--text2)}
+.btn-ghost:hover{background:var(--gray2);color:var(--text)}
+.btn-sm{padding:4px 9px;font-size:11px}
+.btn-xs{padding:2px 7px;font-size:10px;border-radius:5px}
+.content{flex:1;overflow-y:auto;padding:14px 16px}
+.content::-webkit-scrollbar{width:5px}
+.content::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* ── TABS ── */
+.record-tabs{display:flex;align-items:center;gap:0;border-bottom:.5px solid var(--border);background:var(--white);padding:0 16px;flex-shrink:0;overflow-x:auto}
+.record-tab{padding:9px 14px;font-size:12px;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:all .1s;display:flex;align-items:center;gap:5px}
+.record-tab:hover{color:var(--text)}
+.record-tab.active{color:var(--nv);border-bottom-color:var(--nv);font-weight:500}
+.record-tab .tab-count{font-size:10px;background:var(--gray2);color:var(--text2);padding:1px 5px;border-radius:10px}
+.record-tab.active .tab-count{background:var(--blue-bg);color:var(--blue-t)}
+
+/* ── CARDS ── */
+.card{background:var(--white);border:.5px solid var(--border);border-radius:10px;overflow:hidden}
+.card-header{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:.5px solid var(--border)}
+.card-title{font-size:12px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px}
+.card-body{padding:12px 14px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+
+/* ── METRIC CARDS ── */
+.metric{background:var(--white);border:.5px solid var(--border);border-radius:10px;padding:12px 14px}
+.metric-label{font-size:10px;color:var(--text2);margin-bottom:4px;font-weight:500}
+.metric-value{font-size:22px;font-weight:600;color:var(--text);line-height:1}
+.metric-sub{font-size:10px;color:var(--text3);margin-top:3px}
+.metric-bar{height:3px;border-radius:2px;background:var(--gray2);margin-top:6px;overflow:hidden}
+.metric-fill{height:100%;border-radius:2px;background:var(--nv)}
+
+/* ── REVENUE BAND ── */
+.rev-band{background:var(--nv);border-radius:10px;padding:12px 16px;display:flex;gap:0;flex-wrap:wrap;margin-bottom:12px}
+.rev-item{flex:1;min-width:110px;padding:0 12px;border-right:.5px solid rgba(255,255,255,.1)}
+.rev-item:first-child{padding-left:0}
+.rev-item:last-child{border-right:none}
+.rev-n{font-size:18px;font-weight:600;color:var(--cream)}
+.rev-l{font-size:9px;color:rgba(255,255,255,.4);margin-top:2px}
+
+/* ── TABLE ── */
+.tbl-wrap{background:var(--white);border:.5px solid var(--border);border-radius:10px;overflow:hidden}
+.tbl-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:.5px solid var(--border);gap:8px;flex-wrap:wrap}
+.tbl-head-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tbl-title{font-size:12px;font-weight:600;color:var(--text)}
+.search-inp{display:flex;align-items:center;gap:5px;background:var(--gray2);border:.5px solid var(--border);border-radius:6px;padding:5px 9px}
+.search-inp input{background:none;border:none;outline:none;font-size:11px;color:var(--text);width:150px;font-family:inherit}
+.search-inp input::placeholder{color:var(--text3)}
+.filter-btn{display:flex;align-items:center;gap:4px;padding:5px 9px;border-radius:6px;border:.5px solid var(--border);background:var(--white);font-size:11px;color:var(--text2);cursor:pointer}
+.filter-btn:hover{background:var(--gray2)}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;padding:7px 12px;color:var(--text2);font-weight:500;border-bottom:.5px solid var(--border);font-size:10px;white-space:nowrap;background:var(--gray);user-select:none;cursor:pointer}
+th:hover{background:var(--gray2)}
+td{padding:8px 12px;border-bottom:.5px solid #f9fafb;color:var(--text);font-size:11.5px;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafafa;cursor:pointer}
+.tbl-footer{padding:7px 14px;font-size:10px;color:var(--text3);border-top:.5px solid var(--border);background:var(--gray);display:flex;align-items:center;justify-content:space-between}
+
+/* ── PILLS ── */
+.pill{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:20px;font-size:9.5px;font-weight:600;white-space:nowrap}
+.dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
+.p-green{background:var(--green-bg);color:var(--green-t)}
+.p-amber{background:var(--amber-bg);color:var(--amber-t)}
+.p-red{background:var(--red-bg);color:var(--red-t)}
+.p-blue{background:var(--blue-bg);color:var(--blue-t)}
+.p-purple{background:var(--purple-bg);color:var(--purple-t)}
+.p-teal{background:var(--teal-bg);color:var(--teal-t)}
+.p-orange{background:var(--orange-bg);color:var(--orange-t)}
+.p-gray{background:var(--gray2);color:var(--text2)}
+.d-green{background:#22c55e}.d-amber{background:#f59e0b}.d-red{background:#ef4444}.d-blue{background:#3b82f6}.d-purple{background:#8b5cf6}.d-teal{background:#14b8a6}.d-gray{background:#9ca3af}
+
+/* ── MODALS ── */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:200;padding:20px}
+.modal{background:var(--white);border-radius:14px;width:100%;max-width:540px;max-height:88vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.18)}
+.modal-lg{max-width:720px}
+.modal-xl{max-width:900px}
+.modal-hd{display:flex;align-items:center;justify-content:space-between;padding:15px 20px;border-bottom:.5px solid var(--border);position:sticky;top:0;background:var(--white);z-index:1}
+.modal-title{font-size:13px;font-weight:600;color:var(--text)}
+.modal-close{background:none;border:none;cursor:pointer;color:var(--text2);font-size:18px;padding:2px;line-height:1;border-radius:4px}
+.modal-close:hover{background:var(--gray2);color:var(--text)}
+.modal-body{padding:18px 20px}
+.modal-foot{padding:13px 20px;border-top:.5px solid var(--border);display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:0;background:var(--white)}
+
+/* ── FORMS ── */
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.form-full{grid-template-columns:1fr}
+.form-group{display:flex;flex-direction:column;gap:4px}
+.form-label{font-size:11px;font-weight:500;color:var(--text2)}
+.form-req{color:var(--red)}
+input,select,textarea{border:.5px solid var(--border2);border-radius:7px;padding:7px 10px;font-size:11.5px;color:var(--text);font-family:inherit;outline:none;transition:border .1s;width:100%;background:var(--white)}
+input:focus,select:focus,textarea:focus{border-color:var(--nv)}
+textarea{resize:vertical;min-height:70px}
+.checkbox-row{display:flex;align-items:center;gap:8px;font-size:11.5px;cursor:pointer}
+.checkbox-row input[type=checkbox]{width:auto;width:14px;height:14px}
+.alert{padding:9px 12px;border-radius:7px;font-size:11px;margin-bottom:10px;display:flex;align-items:flex-start;gap:7px}
+.alert-error{background:var(--red-bg);color:var(--red-t);border:.5px solid #fca5a5}
+.alert-success{background:var(--green-bg);color:var(--green-t);border:.5px solid #86efac}
+.alert-info{background:var(--blue-bg);color:var(--blue-t);border:.5px solid #93c5fd}
+.alert-warn{background:var(--amber-bg);color:var(--amber-t);border:.5px solid #fcd34d}
+
+/* ── WIB PROFILE ── */
+.profile-layout{display:flex;gap:12px;height:100%}
+.profile-left{width:280px;flex-shrink:0;display:flex;flex-direction:column;gap:10px}
+.profile-right{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px}
+.profile-header{background:var(--white);border:.5px solid var(--border);border-radius:10px;padding:14px}
+.profile-avatar{width:44px;height:44px;border-radius:10px;background:var(--nv);display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600;color:var(--cream);margin-bottom:10px}
+.profile-name{font-size:14px;font-weight:600;color:var(--text);margin-bottom:3px}
+.profile-meta{font-size:11px;color:var(--text2);margin-bottom:10px}
+.field-row{display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:.5px solid var(--gray2);font-size:11.5px}
+.field-row:last-child{border-bottom:none}
+.field-key{color:var(--text2);width:110px;flex-shrink:0;font-size:11px;padding-top:1px}
+.field-val{color:var(--text);flex:1;word-break:break-word}
+.field-link{color:var(--blue);cursor:pointer;text-decoration:none}
+.field-link:hover{text-decoration:underline}
+
+/* ── NOTES ── */
+.note-compose{background:var(--white);border:.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.note-compose textarea{border:.5px solid var(--border2);border-radius:7px;width:100%;padding:9px 11px;font-size:12px;font-family:inherit;resize:none;min-height:80px;outline:none;transition:border .1s}
+.note-compose textarea:focus{border-color:var(--nv)}
+.note-compose-foot{display:flex;align-items:center;justify-content:space-between;margin-top:8px;flex-wrap:wrap;gap:6px}
+.note-actions{display:flex;gap:5px;flex-wrap:wrap}
+.note-card{background:var(--white);border:.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.note-meta{display:flex;align-items:center;gap:7px;margin-bottom:8px}
+.note-av{width:24px;height:24px;border-radius:50%;background:var(--blue-bg);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:var(--blue-t);flex-shrink:0}
+.note-author{font-size:11px;font-weight:500;color:var(--text)}
+.note-time{font-size:10px;color:var(--text3)}
+.note-type{font-size:9px;font-weight:600;padding:1px 6px;border-radius:4px}
+.note-content{font-size:12px;color:var(--text);line-height:1.6;white-space:pre-wrap}
+.aircall-note{background:#f0fdf4;border:.5px solid #86efac;border-radius:10px;padding:12px 14px;margin-bottom:8px}
+.aircall-header{font-size:10px;font-weight:700;color:var(--green-t);letter-spacing:.3px;margin-bottom:8px;padding-bottom:7px;border-bottom:.5px solid #86efac}
+.aircall-body{font-size:11.5px;color:var(--text);line-height:1.65}
+.aircall-section{margin-top:8px}
+.aircall-section-title{font-size:10px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+
+/* ── TASKS ── */
+.task-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:.5px solid var(--gray2)}
+.task-row:last-child{border-bottom:none}
+.task-check{width:16px;height:16px;border-radius:4px;border:.5px solid var(--border2);background:var(--white);cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px}
+.task-check.done{background:var(--green);border-color:var(--green);color:#fff}
+.task-title{flex:1;font-size:12px;color:var(--text)}
+.task-title.done{text-decoration:line-through;color:var(--text3)}
+.task-due{font-size:10px;color:var(--text3);white-space:nowrap}
+.task-due.overdue{color:var(--red);font-weight:500}
+.task-assignee{width:22px;height:22px;border-radius:50%;background:var(--blue-bg);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:var(--blue-t);flex-shrink:0}
+
+/* ── SCORE BAR ── */
+.score-wrap{display:flex;align-items:center;gap:6px}
+.score-bar{height:4px;border-radius:2px;background:var(--gray2);overflow:hidden;width:48px}
+.score-fill{height:100%;border-radius:2px;background:var(--nv)}
+.score-n{font-size:10px;color:var(--text2);width:20px}
+
+/* ── AI PANEL ── */
+.ai-panel{background:var(--white);border:.5px solid var(--border);border-radius:10px;overflow:hidden}
+.ai-header{background:var(--nv);padding:10px 14px;display:flex;align-items:center;gap:7px}
+.ai-title{font-size:12px;font-weight:600;color:var(--cream)}
+.ai-badge{font-size:9px;background:rgba(201,168,76,.3);color:var(--gd);padding:1px 6px;border-radius:10px;font-weight:600}
+.ai-body{padding:10px}
+.ai-msg{padding:8px 10px;border-radius:7px;font-size:11.5px;line-height:1.6;margin-bottom:7px}
+.ai-msg-user{background:var(--blue-bg);color:var(--blue-t);margin-left:20px}
+.ai-msg-ai{background:var(--gray2);color:var(--text);margin-right:20px}
+.ai-input-row{display:flex;gap:6px;margin-top:8px}
+.ai-input{flex:1;border:.5px solid var(--border2);border-radius:7px;padding:7px 10px;font-size:11px;font-family:inherit;outline:none}
+.ai-input:focus{border-color:var(--nv)}
+.ai-quick-btns{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px}
+.ai-quick-btn{padding:4px 9px;border-radius:6px;border:.5px solid var(--border);background:var(--white);font-size:10px;color:var(--text2);cursor:pointer;transition:all .1s}
+.ai-quick-btn:hover{background:var(--blue-bg);color:var(--blue-t);border-color:var(--blue)}
+
+/* ── ACTIVITY ── */
+.activity-row{display:flex;gap:9px;padding:8px 0;border-bottom:.5px solid var(--gray2)}
+.activity-row:last-child{border-bottom:none}
+.activity-icon{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;margin-top:1px}
+.activity-body{flex:1}
+.activity-text{font-size:11.5px;color:var(--text);line-height:1.4}
+.activity-time{font-size:10px;color:var(--text3);margin-top:2px}
+
+/* ── CHAT ── */
+.chat-layout{display:flex;height:calc(100vh - 120px);gap:0}
+.chat-sidebar{width:240px;border-right:.5px solid var(--border);background:var(--white);display:flex;flex-direction:column;flex-shrink:0}
+.chat-sidebar-hd{padding:12px 14px;border-bottom:.5px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.chat-sidebar-title{font-size:12px;font-weight:600}
+.chat-list{flex:1;overflow-y:auto}
+.chat-item{display:flex;align-items:center;gap:9px;padding:9px 14px;cursor:pointer;transition:background .1s;border-bottom:.5px solid var(--gray)}
+.chat-item:hover{background:var(--gray2)}
+.chat-item.active{background:var(--blue-bg)}
+.chat-av{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0}
+.chat-name{font-size:12px;font-weight:500;color:var(--text)}
+.chat-preview{font-size:10.5px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px}
+.chat-time{font-size:9.5px;color:var(--text3);margin-left:auto;flex-shrink:0}
+.chat-unread{width:16px;height:16px;background:var(--blue);color:#fff;border-radius:50%;font-size:8px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.chat-main{flex:1;display:flex;flex-direction:column;background:var(--white)}
+.chat-topbar{padding:11px 16px;border-bottom:.5px solid var(--border);display:flex;align-items:center;gap:10px}
+.chat-messages{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.msg{display:flex;gap:9px;align-items:flex-start}
+.msg.mine{flex-direction:row-reverse}
+.msg-av{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;flex-shrink:0}
+.msg-bubble{max-width:65%;padding:8px 12px;border-radius:10px;font-size:12px;line-height:1.5}
+.msg-bubble.other{background:var(--gray2);color:var(--text);border-bottom-left-radius:3px}
+.msg-bubble.mine-b{background:var(--nv);color:#fff;border-bottom-right-radius:3px}
+.msg-meta{font-size:9.5px;color:var(--text3);margin-top:3px;text-align:right}
+.chat-input-row{padding:12px 16px;border-top:.5px solid var(--border);display:flex;gap:8px;align-items:flex-end}
+.chat-input{flex:1;border:.5px solid var(--border2);border-radius:8px;padding:9px 12px;font-size:12px;font-family:inherit;outline:none;resize:none;min-height:40px;max-height:120px}
+.chat-input:focus{border-color:var(--nv)}
+
+/* ── IMPORT/EXPORT DROPDOWN ── */
+.ie-dropdown{position:relative;display:inline-block}
+.ie-menu{position:absolute;right:0;top:calc(100% + 4px);background:var(--white);border:.5px solid var(--border);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.1);min-width:170px;z-index:50;overflow:hidden}
+.ie-item{display:flex;align-items:center;gap:8px;padding:9px 13px;font-size:12px;color:var(--text);cursor:pointer;transition:background .1s}
+.ie-item:hover{background:var(--gray2)}
+.ie-item .ie-icon{font-size:13px;width:15px;text-align:center;color:var(--text2)}
+.ie-sep{height:.5px;background:var(--border);margin:3px 0}
+
+/* ── NOTIFICATIONS ── */
+.notif-panel{position:fixed;right:16px;top:56px;width:360px;background:var(--white);border:.5px solid var(--border);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.12);z-index:100;max-height:500px;overflow:hidden;display:flex;flex-direction:column}
+.notif-header{padding:12px 16px;border-bottom:.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.notif-title{font-size:13px;font-weight:600}
+.notif-body{overflow-y:auto;flex:1}
+.notif-item{display:flex;gap:10px;padding:11px 16px;border-bottom:.5px solid var(--gray);cursor:pointer;transition:background .1s}
+.notif-item:hover{background:var(--gray2)}
+.notif-item.unread{background:#fefce8}
+.notif-av{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0}
+.notif-text{font-size:11.5px;color:var(--text);line-height:1.4;flex:1}
+.notif-time{font-size:10px;color:var(--text3);margin-top:3px}
+
+/* ── AUDIT LOGS ── */
+.audit-row{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:.5px solid var(--gray2);font-size:11.5px}
+.audit-row:last-child{border-bottom:none}
+.audit-icon{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+.audit-body{flex:1}
+.audit-action{font-weight:500;color:var(--text)}
+.audit-detail{color:var(--text2);margin-top:1px;font-size:11px}
+.audit-time{font-size:10px;color:var(--text3);white-space:nowrap;flex-shrink:0}
+
+/* ── MISC ── */
+.empty-state{text-align:center;padding:40px 20px;color:var(--text3)}
+.empty-icon{font-size:28px;margin-bottom:8px}
+.empty-text{font-size:13px;color:var(--text2);margin-bottom:4px}
+.empty-sub{font-size:11px}
+.loading{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--text2);gap:8px;font-size:12px}
+.tag{display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;border:.5px solid var(--border);color:var(--text2);background:var(--gray2);margin:1px}
+.divider{height:.5px;background:var(--border);margin:12px 0}
+.link{color:var(--blue);cursor:pointer;font-size:11.5px}
+.link:hover{text-decoration:underline}
+.action-btns{display:flex;gap:4px}
+.action-btn{padding:3px 8px;border-radius:5px;font-size:10.5px;cursor:pointer;border:.5px solid var(--border);background:var(--white);color:var(--text2);font-family:inherit;transition:all .1s;white-space:nowrap}
+.action-btn:hover{background:var(--gray2);color:var(--text)}
+.action-btn.del:hover{background:var(--red-bg);color:var(--red-t);border-color:#fca5a5}
+.tooltip{position:relative}
+.tooltip::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 5px);left:50%;transform:translateX(-50%);background:#1f2937;color:#fff;font-size:10px;padding:3px 8px;border-radius:5px;white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .15s;z-index:300}
+.tooltip:hover::after{opacity:1}
+.inline-edit{background:none;border:none;border-bottom:.5px dashed var(--border2);outline:none;font-size:inherit;color:inherit;font-family:inherit;cursor:text;width:100%}
+.inline-edit:focus{border-bottom-color:var(--nv)}
+.progress-bar{height:6px;border-radius:3px;background:var(--gray2);overflow:hidden;margin-top:4px}
+.progress-fill{height:100%;border-radius:3px;background:var(--nv)}
+.stat-row{display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:.5px solid var(--gray2);font-size:11.5px}
+.stat-row:last-child{border-bottom:none}
+.stat-label{color:var(--text2)}
+.stat-value{font-weight:500;color:var(--text)}
+.highlight-card{background:var(--white);border:.5px solid var(--border);border-radius:9px;padding:11px 13px}
+.highlight-label{font-size:9.5px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;font-weight:500}
+.highlight-content{font-size:12px;color:var(--text);line-height:1.4}
+.file-row{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:.5px solid var(--gray2);font-size:11.5px}
+.file-row:last-child{border-bottom:none}
+.file-icon{font-size:18px;flex-shrink:0}
+.file-name{flex:1;font-weight:500;color:var(--text)}
+.file-meta{font-size:10px;color:var(--text3)}
+.file-actions{display:flex;gap:4px}
+.contact-card{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:.5px solid var(--gray2)}
+.contact-card:last-child{border-bottom:none}
+.contact-av{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;flex-shrink:0}
+.contact-info{flex:1}
+.contact-name{font-size:12px;font-weight:500;color:var(--text)}
+.contact-title-t{font-size:10.5px;color:var(--text2)}
+.contact-actions{display:flex;gap:4px}
+.timeline-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:4px}
+.timeline-line{width:1px;background:var(--border);flex-shrink:0;margin:2px 0 2px 3.5px;min-height:20px}
+.invoice-row{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 80px;gap:8px;align-items:center;padding:9px 0;border-bottom:.5px solid var(--gray2);font-size:11.5px}
+.invoice-row:last-child{border-bottom:none}
+.invoice-hdr{font-weight:500;font-size:10px;color:var(--text2)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════
+let token = localStorage.getItem('valor_token')
+let currentUser = null
+let currentPage = 'dashboard'
+let currentWib = null
+let wibTab = 'overview'
+let notifOpen = false
+let chatChannel = 'general'
+let ieMenuOpen = null
+
+const COLORS = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#6366f1','#14b8a6','#f97316']
+function colorFor(s){return COLORS[(s||'').charCodeAt(0)%COLORS.length]}
+
+// ═══════════════════════════════════════════════════════
+// API
+// ═══════════════════════════════════════════════════════
+async function api(url,method='GET',body=null){
+  const opts={method,headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`}}
+  if(body)opts.body=JSON.stringify(body)
+  const r=await fetch(url,opts)
+  const d=await r.json()
+  if(!r.ok)throw new Error(d.error||'Request failed')
+  return d
+}
+
+async function apiAI(prompt,context=''){
+  const r=await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      model:'claude-sonnet-4-20250514',
+      max_tokens:1000,
+      messages:[{role:'user',content:`You are an expert workforce grant consultant AI assistant for Valor Workforce Funding LLC. Context: ${context}\n\nTask: ${prompt}\n\nBe concise and actionable. Format for CRM display.`}]
+    })
+  })
+  const d=await r.json()
+  return d.content?.[0]?.text||'Unable to generate response.'
+}
+
+// ═══════════════════════════════════════════════════════
+// RENDER ENGINE
+// ═══════════════════════════════════════════════════════
+async function render(){
+  if(!token){renderLogin();return}
+  try{
+    const me=await api('/api/me')
+    currentUser=me
+    renderApp()
+  }catch{token=null;localStorage.removeItem('valor_token');renderLogin()}
+}
+
+function renderLogin(){
+  document.getElementById('app').innerHTML=`
+  <div style="min-height:100vh;background:var(--nv);display:flex;align-items:center;justify-content:center;padding:20px">
+    <div style="width:100%;max-width:380px">
+      <div style="text-align:center;margin-bottom:28px">
+        <div style="width:52px;height:52px;border-radius:14px;background:rgba(201,168,76,.2);border:.5px solid rgba(201,168,76,.3);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:24px">🛡️</div>
+        <div style="font-size:20px;font-weight:700;color:var(--cream)">Valor Workforce Funding</div>
+        <div style="font-size:11px;color:rgba(255,255,255,.35);margin-top:4px">Grant Monetization Platform</div>
+      </div>
+      <div style="background:rgba(255,255,255,.06);border:.5px solid rgba(255,255,255,.1);border-radius:14px;padding:24px">
+        <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:16px">Sign in to your account</div>
+        <div id="login-err"></div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:11px;color:rgba(255,255,255,.45);margin-bottom:5px">Email address</div>
+          <input type="email" id="le" placeholder="you@valorworkforce.com" value="northericka@gmail.com" style="background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:9px 12px;width:100%;font-family:inherit;outline:none;font-size:12px">
+        </div>
+        <div style="margin-bottom:18px">
+          <div style="font-size:11px;color:rgba(255,255,255,.45);margin-bottom:5px">Password</div>
+          <input type="password" id="lp" placeholder="••••••••" style="background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:9px 12px;width:100%;font-family:inherit;outline:none;font-size:12px">
+        </div>
+        <button onclick="doLogin()" id="lbtn" style="width:100%;background:var(--gd);color:var(--nv);border:none;border-radius:8px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">Sign in</button>
+      </div>
+      <div style="text-align:center;margin-top:14px;font-size:10px;color:rgba(255,255,255,.18)">Valor Workforce Funding LLC · EIN 42-2547694 · Secure Portal</div>
+    </div>
+  </div>`
+  document.getElementById('lp').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin()})
+}
+
+async function doLogin(){
+  const email=document.getElementById('le').value
+  const password=document.getElementById('lp').value
+  const btn=document.getElementById('lbtn')
+  btn.disabled=true;btn.textContent='Signing in...'
+  document.getElementById('login-err').innerHTML=''
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})})
+    const d=await r.json()
+    if(!r.ok)throw new Error(d.error)
+    token=d.token
+    localStorage.setItem('valor_token',token)
+    render()
+  }catch(e){
+    document.getElementById('login-err').innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`
+    btn.disabled=false;btn.textContent='Sign in'
+  }
+}
+
+function logout(){token=null;currentUser=null;localStorage.removeItem('valor_token');render()}
+
+function renderApp(){
+  const isAdmin=['super_admin','admin'].includes(currentUser?.role)
+  const initials=(currentUser?.full_name||currentUser?.email||'?').slice(0,2).toUpperCase()
+  const roleLabel=(currentUser?.role||'').replace(/_/g,' ')
+  document.getElementById('app').innerHTML=`
+  <div class="app">
+    <div class="sidebar" id="sidebar">
+      <div class="logo-area">
+        <div class="logo-top">
+          <div class="logo-icon">🛡️</div>
+          <div>
+            <div class="logo-name">Valor Workforce<br>Funding</div>
+            <div class="logo-sub">CRM Platform</div>
+          </div>
+        </div>
+      </div>
+      <div class="nav-scroll">
+        <div class="nav-sec">Quick Actions</div>
+        ${ni('dashboard','🏠','Home')}
+        ${ni('notifications','🔔','Notifications','3')}
+        ${ni('tasks','✅','Tasks','7','green')}
+        ${ni('notes','📝','Notes')}
+        ${ni('emails','📧','Emails')}
+        ${ni('calls','📞','Calls')}
+        ${ni('reports','📊','Reports')}
+        ${ni('chat','💬','Internal Chat','2')}
+        ${ni('ai','🤖','AI Assistant')}
+        <div class="nav-divider"></div>
+        <div class="nav-sec">Automations</div>
+        ${ni('automations','⚡','Sequences')}
+        ${ni('workflows','🔀','Workflows')}
+        <div class="nav-divider"></div>
+        <div class="nav-sec">Records</div>
+        ${ni('companies','🏢','Companies')}
+        ${ni('locations','📍','Locations')}
+        ${ni('wibs','🏛️','Workforce Boards')}
+        ${ni('funding','💰','Funding Opps')}
+        ${ni('applications','📋','Applications')}
+        ${ni('contracts','📄','Contracts')}
+        ${ni('invoices','🧾','Invoices')}
+        ${ni('training','🎓','Training Providers')}
+        ${ni('grants','🏆','Grant Awards')}
+        ${ni('payments','💳','Payment Tracking')}
+        ${isAdmin?`
+        <div class="nav-divider"></div>
+        <div class="nav-sec">Admin</div>
+        ${ni('users','👥','User Management')}
+        ${ni('auditlogs','🔍','Audit Logs')}
+        ${ni('settings','⚙️','Settings')}
+        `:''}
+        <div class="nav-divider"></div>
+        <div class="nav-sec">Engine</div>
+        ${ni('revenue','💵','Revenue Tracker')}
+        ${ni('compliance','🛡️','Compliance')}
+        ${ni('aircall','📱','Aircall Logs')}
+      </div>
+      <div class="user-foot">
+        <div class="user-row">
+          <div class="user-av">${initials}</div>
+          <div style="flex:1;min-width:0">
+            <div class="user-nm">${currentUser?.full_name||currentUser?.email}</div>
+            <div class="user-rl">${roleLabel}</div>
+          </div>
+          <div class="user-actions">
+            <button class="user-act-btn tooltip" data-tip="Notifications" onclick="toggleNotif()">🔔</button>
+            <button class="user-act-btn tooltip" data-tip="Sign out" onclick="logout()">⇥</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="main" id="main-area">
+      <div id="topbar-area"></div>
+      <div id="tab-area"></div>
+      <div id="page-area" style="flex:1;overflow-y:auto;padding:14px 16px"></div>
+    </div>
+  </div>
+  <div id="modal-container"></div>
+  <div id="notif-container"></div>
+  <div id="ie-overlay" onclick="closeIEMenu()" style="display:none;position:fixed;inset:0;z-index:40"></div>`
+  loadPage('dashboard')
+}
+
+function ni(page,icon,label,badge='',badgeColor=''){
+  return `<div class="nav-item" id="nav-${page}" onclick="loadPage('${page}')">
+    <span class="ni">${icon}</span>${label}
+    ${badge?`<span class="nav-badge ${badgeColor}">${badge}</span>`:''}
+  </div>`
+}
+
+function setActiveNav(page){
+  document.querySelectorAll('.nav-item').forEach(el=>el.classList.remove('active'))
+  const el=document.getElementById('nav-'+page)
+  if(el)el.classList.add('active')
+}
+
+function setTopbar(title,badge='',actions='',badgeClass='p-blue'){
+  document.getElementById('topbar-area').innerHTML=`
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="page-title">${title}</div>
+      ${badge?`<span class="topbar-badge ${badgeClass}">${badge}</span>`:''}
+    </div>
+    <div class="topbar-right">${actions}</div>
+  </div>`
+}
+
+function setTabs(tabs,active,onSwitch){
+  document.getElementById('tab-area').innerHTML=`
+  <div class="record-tabs" id="record-tabs-bar">
+    ${tabs.map(t=>`<div class="record-tab${t.id===active?' active':''}" onclick="${onSwitch}('${t.id}')">
+      ${t.icon||''}${t.label}${t.count!==undefined?`<span class="tab-count">${t.count}</span>`:''}
+    </div>`).join('')}
+  </div>`
+}
+
+async function loadPage(page){
+  currentPage=page
+  setActiveNav(page)
+  document.getElementById('tab-area').innerHTML=''
+  document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading...</div>'
+  notifOpen=false;document.getElementById('notif-container').innerHTML=''
+  try{
+    if(page==='dashboard')await pageDashboard()
+    else if(page==='wibs')await pageWibs()
+    else if(page==='companies')await pageCompanies()
+    else if(page==='locations')await pageLocations()
+    else if(page==='funding')await pageFunding()
+    else if(page==='applications')await pageApplications()
+    else if(page==='revenue')await pageRevenue()
+    else if(page==='compliance')await pageCompliance()
+    else if(page==='users')await pageUsers()
+    else if(page==='tasks')await pageTasks()
+    else if(page==='notes')await pageNotes()
+    else if(page==='aircall')await pageAircall()
+    else if(page==='chat')pageChat()
+    else if(page==='ai')pageAIAssistant()
+    else if(page==='auditlogs')await pageAuditLogs()
+    else if(page==='invoices')await pageInvoices()
+    else if(page==='contracts')await pageContracts()
+    else if(page==='grants')await pageGrants()
+    else if(page==='payments')await pagePayments()
+    else if(page==='training')await pageTraining()
+    else if(page==='reports')await pageReports()
+    else if(page==='notifications')pageNotifications()
+    else document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🚧</div><div class="empty-text">Coming soon</div></div>`
+  }catch(e){
+    document.getElementById('page-area').innerHTML=`<div class="alert alert-error" style="margin:20px">⚠️ ${e.message}</div>`
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════
+async function pageDashboard(){
+  const [rev,apps,wibs]=await Promise.all([
+    api('/api/revenue/dashboard').catch(()=>({})),
+    api('/api/applications?limit=6'),
+    api('/api/wibs?limit=6')
+  ])
+  const fmt=n=>'$'+(Number(n)||0).toLocaleString()
+  setTopbar('Good morning, '+((currentUser?.full_name||'').split(' ')[0]||'there')+' 👋',
+    'Grant Monetization Platform',
+    `<button class="btn btn-primary" onclick="loadPage('applications')">+ New Application</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="rev-band">
+    <div class="rev-item"><div class="rev-n">${fmt(rev.total_revenue_ytd)}</div><div class="rev-l">Revenue YTD · target $172K</div></div>
+    <div class="rev-item"><div class="rev-n">${fmt(rev.pipeline_value)}</div><div class="rev-l">Pipeline value</div></div>
+    <div class="rev-item"><div class="rev-n">${rev.total_awards||0}</div><div class="rev-l">Grants awarded</div></div>
+    <div class="rev-item"><div class="rev-n">${rev.active_applications||0}</div><div class="rev-l">Active applications</div></div>
+    <div class="rev-item"><div class="rev-n">${rev.overdue_invoices||0}</div><div class="rev-l">Overdue invoices</div></div>
+  </div>
+  <div class="g4" style="margin-bottom:12px">
+    ${[
+      {l:'WIBs Building',v:wibs.count||0,sub:'Priority TX·FL·OH',icon:'🏛️',c:'p-blue',action:"loadPage('wibs')"},
+      {l:'Open Funding Opps',v:0,sub:'IWT cycles available',icon:'💰',c:'p-green',action:"loadPage('funding')"},
+      {l:'Team Tasks Today',v:7,sub:'3 overdue',icon:'✅',c:'p-amber',action:"loadPage('tasks')"},
+      {l:'AI Actions Used',v:24,sub:'This week',icon:'🤖',c:'p-purple',action:"loadPage('ai')"}
+    ].map(k=>`<div class="metric" onclick="${k.action}" style="cursor:pointer">
+      <div style="font-size:20px;margin-bottom:6px">${k.icon}</div>
+      <div class="metric-value">${k.v}</div>
+      <div class="metric-label">${k.l}</div>
+      <div class="metric-sub">${k.sub}</div>
+    </div>`).join('')}
+  </div>
+  <div class="g2">
+    <div>
+      <div class="tbl-wrap">
+        <div class="tbl-head"><div class="tbl-title">📋 Recent Applications</div>
+          <span class="link" onclick="loadPage('applications')">View all →</span></div>
+        ${(apps.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div></div>`:
+        `<table><thead><tr><th>Company</th><th>Status</th><th>Award</th></tr></thead><tbody>
+        ${(apps.data||[]).map(a=>`<tr onclick="loadPage('applications')">
+          <td><div style="font-weight:500">${a.company?.company_name||'—'}</div><div style="font-size:10px;color:var(--text3)">${a.application_number}</div></td>
+          <td>${statusPill(a.status)}</td>
+          <td style="color:var(--green);font-weight:500">${a.award_amount_approved?'$'+Number(a.award_amount_approved).toLocaleString():'—'}</td>
+        </tr>`).join('')}
+        </tbody></table><div class="tbl-footer">${apps.count||0} total</div>`}
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="tbl-wrap">
+        <div class="tbl-head"><div class="tbl-title">🏛️ Priority WIBs</div>
+          <span class="link" onclick="loadPage('wibs')">View all →</span></div>
+        ${(wibs.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">Start building your WIB database</div></div>`:
+        `<table><thead><tr><th>Board</th><th>State</th><th>Status</th><th>Score</th></tr></thead><tbody>
+        ${(wibs.data||[]).map(w=>`<tr onclick="openWibProfile('${w.id}')">
+          <td style="font-weight:500">${w.short_name||w.wib_name.split(' ').slice(0,3).join(' ')}</td>
+          <td><b>${w.state}</b></td>
+          <td>${wibStatusPill(w.status)}</td>
+          <td><div class="score-wrap"><div class="score-bar"><div class="score-fill" style="width:${w.call_priority_score}%"></div></div><span class="score-n">${w.call_priority_score}</span></div></td>
+        </tr>`).join('')}
+        </tbody></table><div class="tbl-footer">${wibs.count||0} boards</div>`}
+      </div>
+      <div class="tbl-wrap">
+        <div class="tbl-head"><div class="tbl-title">✅ Today's Tasks</div><button class="btn btn-sm" onclick="openTaskModal()">+ Task</button></div>
+        <div style="padding:0 14px">
+          ${getDemoTasks().map(t=>renderTaskRow(t)).join('')}
+        </div>
+      </div>
+    </div>
+  </div>`
+}
+
+// ═══════════════════════════════════════════════════════
+// WIB PROFILE PAGE
+// ═══════════════════════════════════════════════════════
+async function openWibProfile(id){
+  currentWib=null
+  document.getElementById('tab-area').innerHTML=''
+  document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading WIB profile...</div>'
+  const wibs=await api('/api/wibs')
+  currentWib=(wibs.data||[]).find(w=>w.id===id)
+  if(!currentWib){document.getElementById('page-area').innerHTML='<div class="alert alert-error">WIB not found</div>';return}
+  setTopbar(`<span onclick="loadPage('wibs')" style="cursor:pointer;color:var(--text2);font-weight:400">Workforce Boards</span> <span style="color:var(--text3)"> / </span> ${currentWib.wib_name}`,'','')
+  setTabs([
+    {id:'overview',icon:'📊 ',label:'Overview'},
+    {id:'notes',icon:'📝 ',label:'Notes',count:3},
+    {id:'tasks',icon:'✅ ',label:'Tasks',count:0},
+    {id:'calls',icon:'📞 ',label:'Calls',count:0},
+    {id:'funding',icon:'💰 ',label:'Funding'},
+    {id:'contacts',icon:'👤 ',label:'Contacts'},
+    {id:'files',icon:'📁 ',label:'Files'},
+    {id:'activity',icon:'⚡ ',label:'Activity'},
+  ],wibTab,'switchWibTab')
+  renderWibTab()
+}
+
+function switchWibTab(tab){
+  wibTab=tab
+  document.querySelectorAll('.record-tab').forEach(el=>el.classList.remove('active'))
+  document.querySelectorAll('.record-tab').forEach(el=>{if(el.textContent.trim().startsWith(tab.charAt(0).toUpperCase()||tab)){}})
+  const tabs=document.querySelectorAll('.record-tab')
+  tabs.forEach(t=>{if(t.getAttribute('onclick')?.includes(`'${tab}'`))t.classList.add('active')})
+  renderWibTab()
+}
+
+function renderWibTab(){
+  const w=currentWib
+  if(!w)return
+  const pa=document.getElementById('page-area')
+  if(wibTab==='overview'){
+    pa.innerHTML=`
+    <div class="profile-layout">
+      <div class="profile-left">
+        <div class="card">
+          <div class="card-body">
+            <div class="profile-avatar">${(w.state||'WI')}</div>
+            <div class="profile-name">${w.wib_name}</div>
+            <div class="profile-meta">${w.wib_type||'Local'} · ${w.state}</div>
+            <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:12px">
+              ${wibStatusPill(w.status)}
+              ${w.iwt_program_active?'<span class="pill p-green">✓ IWT Active</span>':''}
+            </div>
+            <button class="btn btn-primary" style="width:100%;margin-bottom:6px" onclick="openWibModal(${JSON.stringify(w).replace(/"/g,"'")})">✏️ Edit Record</button>
+            <button class="btn" style="width:100%;margin-bottom:6px" onclick="openAIPanel('wib','${w.id}')">🤖 Ask AI About This WIB</button>
+            ${w.google_drive_folder_url?`<a href="${w.google_drive_folder_url}" target="_blank" class="btn" style="width:100%;margin-bottom:6px;display:flex;justify-content:center">📁 Google Drive Folder</a>`:'<button class="btn" style="width:100%;margin-bottom:6px" onclick="alert(\'Connect Google Drive to auto-create folders\')">📁 Create Drive Folder</button>'}
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div class="card-title">📋 Record Details</div><button class="btn btn-xs" onclick="openWibModal(${JSON.stringify(w).replace(/"/g,"'")})">Edit</button></div>
+          <div class="card-body" style="padding:8px 14px">
+            ${fieldRow('Short Name',w.short_name||'—')}
+            ${fieldRow('State',`<b>${w.state}</b>`)}
+            ${fieldRow('Type',w.wib_type||'local')}
+            ${fieldRow('Status',wibStatusPill(w.status))}
+            ${fieldRow('Phone',w.wib_phone?`<a href="tel:${w.wib_phone}" class="field-link">${w.wib_phone}</a>`:'—')}
+            ${fieldRow('Email',w.wib_email?`<a href="mailto:${w.wib_email}" class="field-link">${w.wib_email}</a>`:'—')}
+            ${fieldRow('Website',w.website?`<a href="${w.website}" target="_blank" class="field-link">Visit →</a>`:'—')}
+            ${fieldRow('Max Award/EIN',w.max_award_per_ein?'$'+Number(w.max_award_per_ein).toLocaleString():'—')}
+            ${fieldRow('Match Required',w.match_requirement_pct?w.match_requirement_pct+'%':'—')}
+            ${fieldRow('Source URL',w.source_url?`<a href="${w.source_url}" target="_blank" class="field-link">Public Source →</a>`:'—')}
+            ${fieldRow('Priority Score',`<div class="score-wrap"><div class="score-bar" style="width:80px"><div class="score-fill" style="width:${w.call_priority_score}%"></div></div><span class="score-n">${w.call_priority_score}/100</span></div>`)}
+            ${fieldRow('Last Verified',w.last_verified_date||'—')}
+            ${fieldRow('ICL',w.independent_creation_logged?'<span class="pill p-green">✓ Logged</span>':'<span class="pill p-red">Not logged</span>')}
+          </div>
+        </div>
+      </div>
+      <div class="profile-right">
+        <div class="g3">
+          <div class="highlight-card">
+            <div class="highlight-label">Next Due Task</div>
+            <div class="highlight-content" style="color:var(--text3)">No upcoming tasks</div>
+          </div>
+          <div class="highlight-card">
+            <div class="highlight-label">Funding Opportunities</div>
+            <div class="highlight-content"><span class="link" onclick="switchWibTab('funding')">View opportunities →</span></div>
+          </div>
+          <div class="highlight-card">
+            <div class="highlight-label">Blockers</div>
+            <div class="highlight-content">${w.blockers||'<span style="color:var(--text3)">None set</span>'}</div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:10px">
+          <div class="card-header">
+            <div class="card-title">📝 Notes <span style="font-size:10px;font-weight:400;color:var(--text3)">(3)</span></div>
+            <div style="display:flex;gap:5px">
+              <button class="btn btn-sm" onclick="switchWibTab('notes')">View all</button>
+              <button class="btn btn-sm btn-primary" onclick="switchWibTab('notes')">+ Add Note</button>
+            </div>
+          </div>
+          <div class="card-body" style="padding:10px 14px">
+            ${getDemoNotes(w.wib_name).slice(0,2).map(n=>renderNoteCard(n)).join('')}
+          </div>
+        </div>
+        <div class="card" style="margin-top:10px">
+          <div class="card-header">
+            <div class="card-title">⚡ Activity</div>
+          </div>
+          <div class="card-body" style="padding:8px 14px">
+            ${getDemoActivity().map(a=>renderActivityRow(a)).join('')}
+          </div>
+        </div>
+      </div>
+    </div>`
+  } else if(wibTab==='notes'){
+    pa.innerHTML=`
+    <div class="note-compose">
+      <textarea id="new-note-text" placeholder="Add a note about ${w.wib_name}... Use @mentions to tag teammates" rows="3"></textarea>
+      <div class="note-compose-foot">
+        <div class="note-actions">
+          <button class="btn btn-sm" onclick="addNote()">💾 Save Note</button>
+          <button class="btn btn-sm" onclick="addAircallNote()">📱 Log Aircall Note</button>
+          <button class="btn btn-sm" onclick="addAINote()">🤖 Generate AI Summary</button>
+          <button class="btn btn-sm" onclick="document.getElementById('note-file').click()">📎 Attach</button>
+          <input type="file" id="note-file" style="display:none" onchange="handleNoteFile(this)">
+        </div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">
+          <span class="tag" onclick="insertTag('Outreach Activity')" style="cursor:pointer">Outreach Activity</span>
+          <span class="tag" onclick="insertTag('IWT Update')" style="cursor:pointer">IWT Update</span>
+          <span class="tag" onclick="insertTag('Blocker')" style="cursor:pointer">Blocker</span>
+          <span class="tag" onclick="insertTag('Follow Up')" style="cursor:pointer">Follow Up</span>
+        </div>
+      </div>
+    </div>
+    <div id="notes-list">
+      ${getDemoAircallNote(w.wib_name)}
+      ${getDemoNotes(w.wib_name).map(n=>renderNoteCard(n)).join('')}
+    </div>`
+  } else if(wibTab==='tasks'){
+    pa.innerHTML=`
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">✅ Tasks — ${w.wib_name}</div>
+        <button class="btn btn-primary btn-sm" onclick="openTaskModal()">+ New Task</button>
+      </div>
+      <div class="card-body" style="padding:8px 14px">
+        ${getDemoTasks().map(t=>renderTaskRow(t)).join('')}
+      </div>
+    </div>`
+  } else if(wibTab==='calls'){
+    pa.innerHTML=`
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">📞 Call History — ${w.wib_name}</div>
+        <button class="btn btn-sm btn-primary" onclick="addAircallNote()">+ Log Call</button>
+      </div>
+      <div class="card-body" style="padding:8px 14px">
+        ${getDemoAircallNote(w.wib_name)}
+        <div class="empty-state"><div class="empty-text">No additional calls logged</div><div class="empty-sub">Calls logged via Aircall sync automatically</div></div>
+      </div>
+    </div>`
+  } else if(wibTab==='contacts'){
+    pa.innerHTML=`
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">👤 Contacts — ${w.wib_name}</div>
+        <button class="btn btn-primary btn-sm" onclick="openContactModal()">+ Add Contact</button>
+      </div>
+      <div class="card-body" style="padding:8px 14px">
+        ${getDemoContacts().map(c=>renderContactCard(c)).join('')}
+      </div>
+    </div>`
+  } else if(wibTab==='files'){
+    pa.innerHTML=`
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">📁 Files — ${w.wib_name}</div>
+        <div style="display:flex;gap:5px">
+          <button class="btn btn-sm" onclick="alert('Connect Google Drive to auto-sync files')">📁 Drive</button>
+          <button class="btn btn-primary btn-sm" onclick="document.getElementById('file-upload').click()">+ Upload</button>
+          <input type="file" id="file-upload" style="display:none">
+        </div>
+      </div>
+      <div class="card-body" style="padding:8px 14px">
+        ${getDemoFiles().map(f=>renderFileRow(f)).join('')}
+      </div>
+    </div>`
+  } else if(wibTab==='activity'){
+    pa.innerHTML=`
+    <div class="card">
+      <div class="card-header"><div class="card-title">⚡ Activity Log — ${w.wib_name}</div></div>
+      <div class="card-body" style="padding:8px 14px">
+        ${getDemoActivity().map(a=>renderActivityRow(a)).join('')}
+      </div>
+    </div>`
+  } else if(wibTab==='funding'){
+    pa.innerHTML=`
+    <div class="card">
+      <div class="card-header"><div class="card-title">💰 Funding Opportunities — ${w.wib_name}</div>
+        <button class="btn btn-primary btn-sm" onclick="loadPage('funding')">+ New Opportunity</button></div>
+      <div class="empty-state"><div class="empty-icon">💰</div><div class="empty-text">No funding opportunities linked yet</div>
+        <div class="empty-sub">Create a funding opportunity and link it to this WIB</div></div>
+    </div>`
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// WIB LIST PAGE
+// ═══════════════════════════════════════════════════════
+async function pageWibs(){
+  const wibs=await api('/api/wibs?limit=500')
+  window._wibs=wibs.data||[]
+  setTopbar('Workforce Boards',`${wibs.count||0} records`,`
+    <div class="ie-dropdown">
+      <button class="btn" onclick="toggleIEMenu('wibs-ie')">⬇️ Import / Export</button>
+      <div class="ie-menu" id="wibs-ie" style="display:none">
+        <div class="ie-item" onclick="importCSV('wibs')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-sep"></div>
+        <div class="ie-item" onclick="exportCSV('wibs')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="exportExcel('wibs')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportPDF('wibs')"><span class="ie-icon">📄</span>Export PDF</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button>`,
+    'p-blue')
+  document.getElementById('page-area').innerHTML=`
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="search-inp">🔍<input type="text" placeholder="Search boards..." oninput="filterWibs(this.value)" id="wib-search"></div>
+        <select class="filter-btn" onchange="filterWibsByState(this.value)" style="border-radius:6px;padding:5px 9px">
+          <option value="">All States</option>
+          ${'TX,FL,OH,CA,NY,PA,IL,GA,NC,WA'.split(',').map(s=>`<option value="${s}">${s}</option>`).join('')}
+        </select>
+        <select class="filter-btn" onchange="filterWibsByStatus(this.value)" style="border-radius:6px;padding:5px 9px">
+          <option value="">All Statuses</option>
+          <option value="funding_available">Funding Available</option>
+          <option value="follow_up_needed">Follow Up Needed</option>
+          <option value="no_reachout_complete">No Reachout</option>
+          <option value="funding_not_available">Not Available</option>
+        </select>
+      </div>
+    </div>
+    <div id="wibs-table-container">
+      ${renderWibTable(wibs.data||[])}
+    </div>
+    <div class="tbl-footer"><span>${wibs.count||0} workforce boards</span><span>All data from public government sources · ICL required</span></div>
+  </div>`
+}
+
+function renderWibTable(data){
+  if(!data.length)return`<div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">No WIB records yet</div><div class="empty-sub">Add from public sources: CareerOneStop.org, twc.texas.gov, etc.</div></div>`
+  return`<table><thead><tr>
+    <th>Workforce Board</th><th>State</th><th>Status</th><th>IWT</th><th>Score</th><th>Max Award</th><th>Next Steps</th><th>Owner</th><th></th>
+  </tr></thead><tbody>
+  ${data.map(w=>`<tr onclick="openWibProfile('${w.id}')">
+    <td><div style="font-weight:500">${w.wib_name}</div>${w.short_name?`<div style="font-size:10px;color:var(--text3)">${w.short_name}</div>`:''}</td>
+    <td><b>${w.state}</b></td>
+    <td>${wibStatusPill(w.status)}</td>
+    <td>${w.iwt_program_active?'<span class="pill p-green">Active</span>':'<span style="color:var(--text3)">—</span>'}</td>
+    <td><div class="score-wrap"><div class="score-bar"><div class="score-fill" style="width:${w.call_priority_score}%"></div></div><span class="score-n">${w.call_priority_score}</span></div></td>
+    <td>${w.max_award_per_ein?'<span style="color:var(--green);font-weight:500">$'+Number(w.max_award_per_ein).toLocaleString()+'</span>':'—'}</td>
+    <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${w.next_steps||'—'}</td>
+    <td style="font-size:10.5px;color:var(--text2)">${w.owner?.full_name||'—'}</td>
+    <td onclick="event.stopPropagation()"><div class="action-btns">
+      <button class="action-btn" onclick="openWibModal(${JSON.stringify(w).replace(/"/g,"'")})">Edit</button>
+      <button class="action-btn" onclick="openWibProfile('${w.id}')">View</button>
+      <button class="action-btn del" onclick="deleteWib('${w.id}')">Del</button>
+    </div></td>
+  </tr>`).join('')}
+  </tbody></table>`
+}
+
+window._wibFilters={search:'',state:'',status:''}
+function filterWibs(q){window._wibFilters.search=q;applyWibFilters()}
+function filterWibsByState(s){window._wibFilters.state=s;applyWibFilters()}
+function filterWibsByStatus(s){window._wibFilters.status=s;applyWibFilters()}
+function applyWibFilters(){
+  let d=[...(window._wibs||[])]
+  const {search,state,status}=window._wibFilters
+  if(search)d=d.filter(w=>w.wib_name.toLowerCase().includes(search.toLowerCase())||(w.short_name||'').toLowerCase().includes(search.toLowerCase()))
+  if(state)d=d.filter(w=>w.state===state)
+  if(status)d=d.filter(w=>w.status===status)
+  document.getElementById('wibs-table-container').innerHTML=renderWibTable(d)
+}
+
+async function deleteWib(id){
+  if(!confirm('Delete this WIB record? This cannot be undone.'))return
+  try{await api('/api/wibs/'+id,'DELETE');loadPage('wibs')}catch(e){alert(e.message)}
+}
+
+// ═══════════════════════════════════════════════════════
+// WIB MODAL
+// ═══════════════════════════════════════════════════════
+function openWibModal(wib=null){
+  const states='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
+  const stateOpts=states.map(s=>`<option value="${s}"${wib?.state===s?' selected':''}>${s}</option>`).join('')
+  const statusOpts=[['no_reachout_complete','No Reachout Complete'],['follow_up_needed','Follow Up Needed'],['pending_employer','Pending Employer'],['funding_available','Funding Available'],['funding_not_available','Funding Not Available'],['stop_applications','Stop Applications']]
+    .map(([v,l])=>`<option value="${v}"${wib?.status===v?' selected':''}>${l}</option>`).join('')
+  showModal(wib?`Edit: ${wib.wib_name}`:'Add Workforce Board',`
+    <div id="wib-err"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">WIB Name <span class="form-req">*</span></div><input id="wf-name" value="${wib?.wib_name||''}" placeholder="TX — Dallas Workforce Solutions"></div>
+    <div class="form-group"><div class="form-label">Short Name</div><input id="wf-short" value="${wib?.short_name||''}" placeholder="Dallas WS"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">State <span class="form-req">*</span></div><select id="wf-state">${stateOpts}</select></div>
+    <div class="form-group"><div class="form-label">Status</div><select id="wf-status">${statusOpts}</select></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Phone</div><input id="wf-phone" value="${wib?.wib_phone||''}" placeholder="+1 (512) 000-0000"></div>
+    <div class="form-group"><div class="form-label">Email</div><input id="wf-email" type="email" value="${wib?.wib_email||''}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Website</div><input id="wf-website" value="${wib?.website||''}" placeholder="https://..."></div>
+    <div class="form-group"><div class="form-label">Max Award / EIN ($)</div><input id="wf-max" type="number" value="${wib?.max_award_per_ein||''}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Match Required (%)</div><input id="wf-match" type="number" value="${wib?.match_requirement_pct||''}"></div>
+    <div class="form-group"><div class="form-label">WIB Type</div><select id="wf-type"><option value="local"${!wib||wib.wib_type==='local'?' selected':''}>Local</option><option value="state"${wib?.wib_type==='state'?' selected':''}>State</option><option value="regional"${wib?.wib_type==='regional'?' selected':''}>Regional</option><option value="tribal"${wib?.wib_type==='tribal'?' selected':''}>Tribal</option></select></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Source URL <span class="form-req">*</span> (public government page)</div><input id="wf-source" value="${wib?.source_url||''}" placeholder="https://twc.texas.gov/..."></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Google Drive Folder URL</div><input id="wf-drive" value="${wib?.google_drive_folder_url||''}" placeholder="https://drive.google.com/..."></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Next Steps</div><textarea id="wf-steps" rows="2">${wib?.next_steps||''}</textarea></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Blockers</div><textarea id="wf-blockers" rows="2">${wib?.blockers||''}</textarea></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="wf-notes" rows="2">${wib?.notes||''}</textarea></div></div>
+    <label class="checkbox-row" style="margin-bottom:12px"><input type="checkbox" id="wf-iwt"${wib?.iwt_program_active?' checked':''}>IWT Program Active</label>
+    <div class="alert alert-success" style="margin:0">✓ Independent creation logged — all records must be built from public government sources after May 1, 2026</div>`,
+  async()=>{
+    const err=document.getElementById('wib-err')
+    const payload={
+      wib_name:document.getElementById('wf-name').value,
+      short_name:document.getElementById('wf-short').value||null,
+      state:document.getElementById('wf-state').value,
+      status:document.getElementById('wf-status').value,
+      wib_phone:document.getElementById('wf-phone').value||null,
+      wib_email:document.getElementById('wf-email').value||null,
+      website:document.getElementById('wf-website').value||null,
+      max_award_per_ein:document.getElementById('wf-max').value||null,
+      match_requirement_pct:document.getElementById('wf-match').value||null,
+      wib_type:document.getElementById('wf-type').value,
+      source_url:document.getElementById('wf-source').value,
+      google_drive_folder_url:document.getElementById('wf-drive').value||null,
+      next_steps:document.getElementById('wf-steps').value||null,
+      blockers:document.getElementById('wf-blockers').value||null,
+      notes:document.getElementById('wf-notes').value||null,
+      iwt_program_active:document.getElementById('wf-iwt').checked,
+      independent_creation_logged:true,
+      last_verified_date:new Date().toISOString().split('T')[0]
+    }
+    if(!payload.wib_name||!payload.source_url){err.innerHTML='<div class="alert alert-error">WIB name and source URL are required</div>';return false}
+    try{
+      if(wib)await api('/api/wibs/'+wib.id,'PUT',payload)
+      else await api('/api/wibs','POST',payload)
+      if(currentPage==='wibs')loadPage('wibs')
+      else if(currentWib)openWibProfile(wib?.id||'refresh')
+    }catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
+  })
+}
+
+// ═══════════════════════════════════════════════════════
+// TASKS PAGE
+// ═══════════════════════════════════════════════════════
+async function pageTasks(){
+  setTopbar('Tasks','77 today',`
+    <button class="btn filter-btn">📅 Sort by due date</button>
+    <button class="btn filter-btn">🔽 Filter</button>
+    <button class="btn btn-primary" onclick="openTaskModal()">+ New Task</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="search-inp">🔍<input type="text" placeholder="Search tasks..."></div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px">
+          <option>All tasks</option><option>My tasks</option><option>Overdue</option><option>Completed</option>
+        </select>
+      </div>
+    </div>
+    <table><thead><tr><th style="width:40px"></th><th>Task</th><th>Due Date</th><th>Record</th><th>Assigned To</th><th></th></tr></thead>
+    <tbody>
+      <tr><td colspan="6" style="padding:6px 12px;font-size:10px;font-weight:600;color:var(--text3);background:var(--gray)">TODAY · 7</td></tr>
+      ${getDemoTasks().map(t=>`<tr>
+        <td><div class="task-check${t.done?' done':''}" onclick="toggleTask(this)">✓</div></td>
+        <td><span class="${t.done?'task-title done':'task-title'}">${t.title}</span></td>
+        <td><span class="task-due${t.overdue?' overdue':''}">${t.due}</span></td>
+        <td><span class="pill p-gray">${t.record}</span></td>
+        <td><div style="display:flex;align-items:center;gap:5px"><div class="task-assignee">${t.assignee.slice(0,2).toUpperCase()}</div><span style="font-size:11px;color:var(--text2)">${t.assignee}</span></div></td>
+        <td><div class="action-btns"><button class="action-btn">Edit</button><button class="action-btn del">Del</button></div></td>
+      </tr>`).join('')}
+    </tbody></table>
+    <div class="tbl-footer">77 tasks · 7 due today · 3 overdue</div>
+  </div>`
+}
+
+function toggleTask(el){el.classList.toggle('done')}
+
+function openTaskModal(){
+  showModal('New Task',`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Task Title <span class="form-req">*</span></div><input id="task-title" placeholder="Call WIB employer services..."></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Due Date</div><input id="task-due" type="date" value="${new Date().toISOString().split('T')[0]}"></div>
+    <div class="form-group"><div class="form-label">Priority</div><select id="task-priority"><option>Normal</option><option>High</option><option>Urgent</option><option>Low</option></select></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Assigned To</div><input id="task-assign" placeholder="Team member name..."></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="task-notes" rows="2"></textarea></div></div>`,
+  async()=>{
+    alert('Task created! (Full task DB coming in Phase 2 update)')
+  })
+}
+
+// ═══════════════════════════════════════════════════════
+// NOTES PAGE
+// ═══════════════════════════════════════════════════════
+async function pageNotes(){
+  setTopbar('Notes','All notes','<button class="btn btn-primary" onclick="alert(\'Open a record to add notes\')">+ New Note</button>')
+  document.getElementById('page-area').innerHTML=`
+  <div class="g2">
+    <div>
+      <div class="tbl-wrap">
+        <div class="tbl-head"><div class="tbl-title">📝 Recent Notes</div>
+          <div class="search-inp">🔍<input placeholder="Search notes..."></div></div>
+        <div style="padding:12px 14px">
+          ${getDemoAircallNote('TX — Demo Workforce Board')}
+          ${getDemoNotes('TX — Demo Workforce Board').map(n=>renderNoteCard(n)).join('')}
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">🏷️ Note Types</div></div>
+        <div class="card-body">
+          ${[['📱 Aircall Notes','Auto-logged from calls','p-green'],['📝 Outreach Notes','Manual call notes','p-blue'],['🤖 AI Summaries','Generated by Claude AI','p-purple'],['🔔 Follow Up','Action items','p-amber'],['📊 Status Update','Progress updates','p-teal']].map(([t,s,c])=>`
+          <div class="stat-row"><span class="stat-label"><span class="pill ${c}">${t}</span></span><span class="stat-value">${s}</span></div>`).join('')}
+        </div>
+      </div>
+    </div>
+  </div>`
+}
+
+// ═══════════════════════════════════════════════════════
+// AIRCALL LOGS PAGE
+// ═══════════════════════════════════════════════════════
+async function pageAircall(){
+  setTopbar('Aircall Logs','Synced with Aircall','<button class="btn btn-primary" onclick="addAircallNote()">+ Log Call</button>')
+  document.getElementById('page-area').innerHTML=`
+  <div class="alert alert-info">📱 Aircall Integration: Connect your Aircall account in Settings to auto-sync all inbound and outbound calls. AI summaries generated automatically.</div>
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="search-inp">🔍<input placeholder="Search calls..."></div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All calls</option><option>Inbound</option><option>Outbound</option></select>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All records</option><option>WIBs</option><option>Employers</option></select>
+      </div>
+    </div>
+    <table><thead><tr><th>Direction</th><th>Contact</th><th>Record</th><th>Duration</th><th>Date</th><th>AI Summary</th><th></th></tr></thead>
+    <tbody>
+    ${getDemoCallLogs().map(c=>`<tr>
+      <td><span class="pill ${c.dir==='Outbound'?'p-blue':'p-green'}">${c.dir==='Outbound'?'↗':'↙'} ${c.dir}</span></td>
+      <td><div style="font-weight:500">${c.contact}</div><div style="font-size:10px;color:var(--text3)">${c.phone}</div></td>
+      <td><span class="pill p-gray">${c.record}</span></td>
+      <td>${c.duration}</td>
+      <td style="font-size:11px;color:var(--text2)">${c.date}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--text2)">${c.summary}</td>
+      <td><button class="action-btn" onclick="viewCallNote(${JSON.stringify(c).replace(/"/g,"'")})">View Note</button></td>
+    </tr>`).join('')}
+    </tbody></table>
+    <div class="tbl-footer">Showing recent calls · All calls auto-logged from Aircall</div>
+  </div>`
+}
+
+// ═══════════════════════════════════════════════════════
+// AI ASSISTANT PAGE
+// ═══════════════════════════════════════════════════════
+function pageAIAssistant(){
+  setTopbar('AI Assistant — Claude','Powered by Claude Sonnet','')
+  document.getElementById('page-area').innerHTML=`
+  <div class="g2">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title">🤖 AI Quick Actions</div>
+        </div>
+        <div class="card-body">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            ${[
+              {icon:'🏛️',label:'Research a WIB',desc:'Get public info, contacts, IWT program status',action:'researchWIB'},
+              {icon:'📧',label:'Draft Outreach Email',desc:'Personalized cold email to WIB or employer',action:'draftEmail'},
+              {icon:'📞',label:'Generate Call Summary',desc:'Summarize call notes into structured format',action:'summarizeCall'},
+              {icon:'🏢',label:'Employer Eligibility Analysis',desc:'Analyze if employer qualifies for IWT',action:'analyzeEmployer'},
+              {icon:'📋',label:'Complete Grant Application',desc:'AI-assisted application drafting',action:'draftApplication'},
+              {icon:'📊',label:'Compliance Check',desc:'Review compliance requirements for active grants',action:'checkCompliance'},
+              {icon:'🎯',label:'Next Steps Recommendation',desc:'AI-recommended next actions for a record',action:'recommendNext'},
+              {icon:'📝',label:'Meeting Notes Generator',desc:'Turn bullet points into professional notes',action:'generateMeetingNotes'},
+            ].map(a=>`<div onclick="${a.action}()" style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:.5px solid var(--border);border-radius:8px;cursor:pointer;transition:all .1s" onmouseover="this.style.background='var(--blue-bg)'" onmouseout="this.style.background=''">
+              <span style="font-size:18px">${a.icon}</span>
+              <div style="flex:1">
+                <div style="font-size:12px;font-weight:500">${a.label}</div>
+                <div style="font-size:10.5px;color:var(--text2)">${a.desc}</div>
+              </div>
+              <span style="color:var(--text3)">→</span>
+            </div>`).join('')}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="ai-panel" style="flex:1">
+        <div class="ai-header">
+          <span style="font-size:16px">🤖</span>
+          <div class="ai-title">Claude AI</div>
+          <div class="ai-badge">claude-sonnet-4</div>
+        </div>
+        <div class="card-body">
+          <div class="ai-quick-btns">
+            <button class="ai-quick-btn" onclick="aiPrompt('Summarize what Incumbent Worker Training (IWT) programs are and how to pitch them to senior living employers')">What is IWT?</button>
+            <button class="ai-quick-btn" onclick="aiPrompt('Write a cold call script for reaching out to a senior living employer about workforce training grants')">Cold call script</button>
+            <button class="ai-quick-btn" onclick="aiPrompt('What documents are required for a typical IWT grant application?')">App checklist</button>
+            <button class="ai-quick-btn" onclick="aiPrompt('What are the WIOA match requirements by employer size?')">WIOA match %</button>
+          </div>
+          <div id="ai-chat-history" style="max-height:300px;overflow-y:auto;margin-bottom:8px">
+            <div class="ai-msg ai-msg-ai">👋 I'm your Valor AI assistant. I can help you research WIBs, draft emails, analyze employer eligibility, complete grant applications, and much more. What do you need?</div>
+          </div>
+          <div class="ai-input-row">
+            <input class="ai-input" id="ai-main-input" placeholder="Ask me anything about workforce grants..." onkeydown="if(event.key==='Enter'&&!event.shiftKey){aiSubmit();event.preventDefault()}">
+            <button class="btn btn-primary" onclick="aiSubmit()">Send →</button>
+          </div>
+          <div style="font-size:9.5px;color:var(--text3);margin-top:5px;text-align:center">Powered by Anthropic Claude · All responses are AI-generated</div>
+        </div>
+      </div>
+    </div>
+  </div>`
+}
+
+async function aiSubmit(){
+  const input=document.getElementById('ai-main-input')
+  const prompt=input.value.trim()
+  if(!prompt)return
+  input.value=''
+  const hist=document.getElementById('ai-chat-history')
+  hist.innerHTML+=`<div class="ai-msg ai-msg-user">${prompt}</div>`
+  hist.innerHTML+=`<div class="ai-msg ai-msg-ai" id="ai-loading">⏳ Thinking...</div>`
+  hist.scrollTop=hist.scrollHeight
+  try{
+    const response=await apiAI(prompt,'Valor Workforce Funding CRM - workforce grant consulting company matching senior living employers with WIB funding')
+    document.getElementById('ai-loading').textContent=response
+    hist.scrollTop=hist.scrollHeight
+  }catch(e){
+    document.getElementById('ai-loading').textContent='❌ AI unavailable. Check your API connection.'
+  }
+}
+
+async function aiPrompt(prompt){
+  const hist=document.getElementById('ai-chat-history')
+  if(!hist)return
+  hist.innerHTML+=`<div class="ai-msg ai-msg-user">${prompt}</div>`
+  hist.innerHTML+=`<div class="ai-msg ai-msg-ai" id="ai-loading-${Date.now()}">⏳ Thinking...</div>`
+  hist.scrollTop=hist.scrollHeight
+  try{
+    const response=await apiAI(prompt,'Valor Workforce Funding CRM')
+    const loading=hist.querySelector('[id^="ai-loading"]')
+    if(loading)loading.textContent=response
+  }catch(e){}
+}
+
+async function researchWIB(){
+  showModal('🏛️ Research a WIB',`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">WIB Name or State to Research</div><input id="ai-wib-input" placeholder="e.g. Texas Workforce Commission, FL workforce boards..."></div></div>
+    <div id="ai-research-result" style="margin-top:10px"></div>`,
+  async()=>{
+    const q=document.getElementById('ai-wib-input').value
+    document.getElementById('ai-research-result').innerHTML='<div class="loading">🤖 Researching...</div>'
+    const r=await apiAI(`Research publicly available information about this WIB or workforce board: "${q}". Include: official name, state, website if known, IWT/incumbent worker training program info, contact approach, best way to reach employer services. Format as a concise brief.`)
+    document.getElementById('ai-research-result').innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap">${r}</div>`
+    return false
+  })
+}
+
+async function draftEmail(){
+  showModal('📧 Draft Outreach Email',`
+    <div class="form-row"><div class="form-group"><div class="form-label">Recipient Type</div><select id="email-type"><option>WIB Employer Services Contact</option><option>Senior Living HR Director</option><option>Senior Living CEO/COO</option><option>Training Provider</option></select></div>
+    <div class="form-group"><div class="form-label">Purpose</div><select id="email-purpose"><option>Cold Outreach</option><option>Follow Up</option><option>Grant Application</option><option>Compliance Request</option></select></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Any context to include</div><textarea id="email-context" rows="3" placeholder="Company name, specific WIB, previous conversation..."></textarea></div></div>
+    <div id="ai-email-result"></div>`,
+  async()=>{
+    const type=document.getElementById('email-type').value
+    const purpose=document.getElementById('email-purpose').value
+    const ctx=document.getElementById('email-context').value
+    document.getElementById('ai-email-result').innerHTML='<div class="loading">🤖 Drafting email...</div>'
+    const r=await apiAI(`Draft a professional ${purpose} email to a ${type} for Valor Workforce Funding. Context: ${ctx||'None provided'}. The email should be concise, professional, and focused on workforce training grant benefits. Include subject line.`)
+    document.getElementById('ai-email-result').innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div><button onclick="navigator.clipboard.writeText(document.getElementById('ai-email-result').textContent)" class="btn btn-sm" style="margin-top:6px">📋 Copy</button>`
+    return false
+  })
+}
+
+function openAIPanel(type,id){
+  const w=currentWib
+  showModal('🤖 AI Assistant — '+((w?.wib_name)||'Record'),`
+    <div class="ai-quick-btns" style="margin-bottom:12px">
+      <button class="ai-quick-btn" onclick="aiPanelPrompt('Summarize what I know about this WIB and suggest the best next steps to advance the relationship')">Summarize & Next Steps</button>
+      <button class="ai-quick-btn" onclick="aiPanelPrompt('Draft an outreach email to the WIB employer services contact about our IWT grant facilitation services')">Draft Email</button>
+      <button class="ai-quick-btn" onclick="aiPanelPrompt('What publicly available information exists about this WIB programs, eligibility, and max awards?')">Research WIB</button>
+      <button class="ai-quick-btn" onclick="aiPanelPrompt('Generate a professional call script for my next call with this WIB')">Call Script</button>
+    </div>
+    <div id="ai-panel-history" style="max-height:280px;overflow-y:auto;margin-bottom:8px">
+      <div class="ai-msg ai-msg-ai">I'm analyzing ${w?.wib_name||'this record'}. Ask me anything.</div>
+    </div>
+    <div class="ai-input-row">
+      <input class="ai-input" id="ai-panel-input" placeholder="Ask about this record..." onkeydown="if(event.key==='Enter')aiPanelSend()">
+      <button class="btn btn-primary" onclick="aiPanelSend()">Ask →</button>
+    </div>`,
+  ()=>{},false)
+}
+
+async function aiPanelSend(){
+  const input=document.getElementById('ai-panel-input')
+  const prompt=input.value.trim()
+  if(!prompt)return
+  await aiPanelPrompt(prompt)
+  input.value=''
+}
+
+async function aiPanelPrompt(prompt){
+  const hist=document.getElementById('ai-panel-history')
+  if(!hist)return
+  hist.innerHTML+=`<div class="ai-msg ai-msg-user">${prompt}</div>`
+  hist.innerHTML+=`<div class="ai-msg ai-msg-ai" id="ai-pload">⏳...</div>`
+  hist.scrollTop=hist.scrollHeight
+  const ctx=`WIB: ${currentWib?.wib_name||'Unknown'}, State: ${currentWib?.state||''}, Status: ${currentWib?.status||''}, IWT: ${currentWib?.iwt_program_active?'Active':'Unknown'}`
+  try{
+    const r=await apiAI(prompt,ctx)
+    document.getElementById('ai-pload').textContent=r
+  }catch{document.getElementById('ai-pload').textContent='AI unavailable'}
+  hist.scrollTop=hist.scrollHeight
+}
+
+// ═══════════════════════════════════════════════════════
+// INTERNAL CHAT
+// ═══════════════════════════════════════════════════════
+function pageChat(){
+  setTopbar('Internal Chat','Team Messaging','')
+  const channels=[
+    {id:'general',name:'# general',last:'Let\'s start the TX blitz next Monday',time:'2m',unread:2,color:'#3b82f6'},
+    {id:'grants',name:'# grant-coordination',last:'APP-2026-001 submitted to Permian Basin',time:'14m',unread:0,color:'#10b981'},
+    {id:'compliance',name:'# compliance',last:'Q2 reports due in 14 days',time:'1h',unread:1,color:'#f59e0b'},
+    {id:'sales',name:'# sales',last:'New employer qualified — 45 employees',time:'2h',unread:0,color:'#8b5cf6'},
+  ]
+  const dms=[
+    {id:'dm1',name:'Sam Coordinator',initials:'SC',last:'Can you review the app?',time:'30m',unread:1,color:'#6366f1'},
+    {id:'dm2',name:'Alex Compliance',initials:'AC',last:'Attendance sheets received',time:'3h',unread:0,color:'#14b8a6'},
+  ]
+  document.getElementById('page-area').innerHTML=`
+  <div class="chat-layout">
+    <div class="chat-sidebar">
+      <div class="chat-sidebar-hd"><div style="font-size:12px;font-weight:600">Messages</div><button class="btn btn-xs" onclick="alert('New message coming in Phase 2')">+</button></div>
+      <div class="chat-list">
+        <div style="padding:6px 14px 3px;font-size:10px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Channels</div>
+        ${channels.map(c=>`<div class="chat-item${chatChannel===c.id?' active':''}" onclick="switchChannel('${c.id}')">
+          <div style="width:30px;height:30px;border-radius:8px;background:${c.color}22;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0">💬</div>
+          <div style="flex:1;min-width:0">
+            <div class="chat-name">${c.name}</div>
+            <div class="chat-preview">${c.last}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+            <div class="chat-time">${c.time}</div>
+            ${c.unread?`<div class="chat-unread">${c.unread}</div>`:''}
+          </div>
+        </div>`).join('')}
+        <div style="padding:8px 14px 3px;font-size:10px;color:var(--text3);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Direct Messages</div>
+        ${dms.map(d=>`<div class="chat-item${chatChannel===d.id?' active':''}" onclick="switchChannel('${d.id}')">
+          <div class="chat-av" style="background:${d.color}22;color:${d.color}">${d.initials}</div>
+          <div style="flex:1;min-width:0">
+            <div class="chat-name">${d.name}</div>
+            <div class="chat-preview">${d.last}</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+            <div class="chat-time">${d.time}</div>
+            ${d.unread?`<div class="chat-unread">${d.unread}</div>`:''}
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>
+    <div class="chat-main">
+      <div class="chat-topbar">
+        <div style="font-size:14px">💬</div>
+        <div>
+          <div style="font-size:13px;font-weight:600"># general</div>
+          <div style="font-size:10.5px;color:var(--text2)">Team channel · 4 members</div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          <button class="btn btn-sm">🔍 Search</button>
+          <button class="btn btn-sm">📌 Pins</button>
+        </div>
+      </div>
+      <div class="chat-messages" id="chat-messages">
+        ${getDemoMessages().map(m=>renderMessage(m)).join('')}
+      </div>
+      <div class="chat-input-row">
+        <textarea class="chat-input" id="chat-input" placeholder="Message #general... (Enter to send)" rows="1" onkeydown="if(event.key==='Enter'&&!event.shiftKey){sendChatMessage();event.preventDefault()}"></textarea>
+        <button class="btn" onclick="alert('Attach file')">📎</button>
+        <button class="btn" onclick="alert('@mention')">@</button>
+        <button class="btn btn-primary" onclick="sendChatMessage()">Send</button>
+      </div>
+    </div>
+  </div>`
+}
+
+function switchChannel(id){chatChannel=id;pageChat()}
+
+function sendChatMessage(){
+  const input=document.getElementById('chat-input')
+  const text=input.value.trim()
+  if(!text)return
+  const msgs=document.getElementById('chat-messages')
+  const initials=(currentUser?.full_name||currentUser?.email||'?').slice(0,2).toUpperCase()
+  msgs.innerHTML+=renderMessage({name:currentUser?.full_name||'You',initials,color:'#3b82f6',text,time:'Just now',mine:true})
+  input.value=''
+  msgs.scrollTop=msgs.scrollHeight
+}
+
+function renderMessage(m){
+  return`<div class="msg${m.mine?' mine':''}">
+    <div class="msg-av" style="background:${m.color}22;color:${m.color}">${m.initials}</div>
+    <div>
+      ${!m.mine?`<div style="font-size:10.5px;font-weight:600;margin-bottom:3px">${m.name}</div>`:''}
+      <div class="msg-bubble${m.mine?' mine-b':' other'}">${m.text}</div>
+      <div class="msg-meta">${m.time}</div>
+    </div>
+  </div>`
+}
+
+// ═══════════════════════════════════════════════════════
+// USER MANAGEMENT
+// ═══════════════════════════════════════════════════════
+async function pageUsers(){
+  const data=await api('/api/users')
+  setTopbar('User Management',`${(data.data||[]).length} users`,`
+    <div class="ie-dropdown">
+      <button class="btn" onclick="toggleIEMenu('users-ie')">⬇️ Export</button>
+      <div class="ie-menu" id="users-ie" style="display:none">
+        <div class="ie-item" onclick="exportCSV('users')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="exportExcel('users')"><span class="ie-icon">📊</span>Export Excel</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="alert alert-warn">🔐 Admin area — user changes take effect immediately. Deleted users lose access instantly.</div>
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="search-inp">🔍<input placeholder="Search users..." oninput="filterUsers(this.value)"></div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px">
+          <option>All roles</option><option>Super Admin</option><option>Admin</option><option>Sales Specialist</option><option>Grant Coordinator</option><option>Compliance Manager</option><option>Read-Only</option>
+        </select>
+      </div>
+    </div>
+    <table><thead><tr><th>User</th><th>Role</th><th>Title</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead>
+    <tbody id="users-tbody">
+    ${(data.data||[]).map(u=>renderUserRow(u)).join('')}
+    </tbody></table>
+    <div class="tbl-footer">
+      <span>${(data.data||[]).length} users</span>
+      <span>🔐 Role-based access · sessions expire after 8h inactivity</span>
+    </div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <div class="card-header"><div class="card-title">🔐 Role Permissions Matrix</div></div>
+    <div class="card-body">
+      <table style="font-size:11px"><thead><tr><th>Permission</th><th>Super Admin</th><th>Admin</th><th>Sales Specialist</th><th>Grant Coordinator</th><th>Compliance Mgr</th><th>Read-Only</th></tr></thead>
+      <tbody>
+        ${[
+          ['View all records','✅','✅','✅','✅','✅','✅'],
+          ['Create records','✅','✅','✅','✅','⬜','⬜'],
+          ['Edit records','✅','✅','✅','✅','✅','⬜'],
+          ['Delete records','✅','✅','⬜','⬜','⬜','⬜'],
+          ['Manage users','✅','✅','⬜','⬜','⬜','⬜'],
+          ['View revenue','✅','✅','✅','✅','⬜','⬜'],
+          ['Manage invoices','✅','✅','⬜','✅','⬜','⬜'],
+          ['Access audit logs','✅','✅','⬜','⬜','⬜','⬜'],
+          ['AI assistant','✅','✅','✅','✅','✅','⬜'],
+          ['Import/Export','✅','✅','✅','✅','✅','⬜'],
+        ].map(r=>`<tr>${r.map((c,i)=>`<td style="${i===0?'font-weight:500':'text-align:center'}">${c}</td>`).join('')}</tr>`).join('')}
+      </tbody></table>
+    </div>
+  </div>`
+  window._users=data.data||[]
+}
+
+function renderUserRow(u){
+  const initials=(u.full_name||u.email||'?').slice(0,2).toUpperCase()
+  const c=colorFor(u.email)
+  return`<tr>
+    <td><div style="display:flex;align-items:center;gap:9px">
+      <div style="width:30px;height:30px;border-radius:50%;background:${c}22;color:${c};display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">${initials}</div>
+      <div><div style="font-weight:500">${u.full_name||'—'}</div><div style="font-size:10px;color:var(--text3)">${u.email}</div></div>
+    </div></td>
+    <td>${rolePill(u.role)}</td>
+    <td style="font-size:11px;color:var(--text2)">${u.title||'—'}</td>
+    <td><span class="pill ${u.is_active?'p-green':'p-gray'}" onclick="toggleUserActive('${u.id}','${u.is_active}',this)" style="cursor:pointer">${u.is_active?'✓ Active':'Inactive'}</span></td>
+    <td style="font-size:10.5px;color:var(--text2)">${u.last_login_at?new Date(u.last_login_at).toLocaleDateString():'Never'}</td>
+    <td><div class="action-btns">
+      <button class="action-btn" onclick="openEditUserModal(${JSON.stringify(u).replace(/"/g,"'")})">Edit</button>
+      <button class="action-btn" onclick="resetUserPassword('${u.id}','${u.email}')">Reset PW</button>
+      <button class="action-btn" onclick="toggleUserActive('${u.id}',${u.is_active},null)">${u.is_active?'Disable':'Enable'}</button>
+      ${currentUser?.role==='super_admin'&&u.id!==currentUser?.id?`<button class="action-btn del" onclick="deleteUserConfirm('${u.id}','${u.full_name||u.email}')">Delete</button>`:''}
+    </div></td>
+  </tr>`
+}
+
+function filterUsers(q){
+  if(!window._users)return
+  const d=q?window._users.filter(u=>(u.email+' '+(u.full_name||'')).toLowerCase().includes(q.toLowerCase())):window._users
+  document.getElementById('users-tbody').innerHTML=d.map(u=>renderUserRow(u)).join('')
+}
+
+async function toggleUserActive(id,active,pill){
+  try{
+    await api('/api/users/'+id,'PUT',{is_active:!active})
+    pageUsers()
+  }catch(e){alert(e.message)}
+}
+
+function deleteUserConfirm(id,name){
+  showModal('⚠️ Delete User — Irreversible',`
+    <div class="alert alert-error">⚠️ You are about to permanently delete <strong>${name}</strong>. This action will:<br><br>
+    • Immediately revoke all system access<br>
+    • Terminate all active sessions<br>
+    • Remove login credentials permanently<br>
+    • This CANNOT be undone</div>
+    <div style="margin-top:12px;font-size:12px">Type <strong>DELETE</strong> to confirm:</div>
+    <input id="delete-confirm-input" placeholder="Type DELETE here..." style="margin-top:8px">`,
+  async()=>{
+    if(document.getElementById('delete-confirm-input').value!=='DELETE'){
+      alert('You must type DELETE to confirm');return false
+    }
+    try{await api('/api/users/'+id,'DELETE');pageUsers()}catch(e){alert(e.message);return false}
+  })
+}
+
+async function resetUserPassword(id,email){
+  if(!confirm(`Send password reset email to ${email}?`))return
+  alert(`Password reset email sent to ${email}. (Full reset flow requires email service configuration)`)
+}
+
+function openUserModal(){
+  showModal('Add New User',`
+    <div id="user-err"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Full Name</div><input id="u-name" placeholder="Jane Smith"></div>
+    <div class="form-group"><div class="form-label">Email <span class="form-req">*</span></div><input id="u-email" type="email" placeholder="jane@valorworkforce.com"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Password <span class="form-req">*</span></div><input id="u-pass" type="password" placeholder="Min 8 chars"></div>
+    <div class="form-group"><div class="form-label">Role <span class="form-req">*</span></div><select id="u-role">
+      <option value="team_member">Sales Specialist (Team Member)</option>
+      <option value="admin">Admin</option>
+      <option value="external_partner">Read-Only (External Partner)</option>
+      <option value="super_admin">Super Admin</option>
+    </select></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Title</div><input id="u-title" placeholder="Grant Coordinator"></div>
+    <div class="form-group"><div class="form-label">Phone</div><input id="u-phone" placeholder="+1 (555) 000-0000"></div></div>
+    <div class="alert alert-info" style="margin-top:8px">User will be created immediately with confirmed access. No email confirmation needed for admin-created accounts.</div>`,
+  async()=>{
+    const err=document.getElementById('user-err')
+    const payload={email:document.getElementById('u-email').value,password:document.getElementById('u-pass').value,full_name:document.getElementById('u-name').value,role:document.getElementById('u-role').value,title:document.getElementById('u-title').value||null,phone:document.getElementById('u-phone').value||null}
+    if(!payload.email||!payload.password){err.innerHTML='<div class="alert alert-error">Email and password required</div>';return false}
+    if(payload.password.length<8){err.innerHTML='<div class="alert alert-error">Password must be at least 8 characters</div>';return false}
+    try{await api('/api/users','POST',payload);pageUsers()}catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
+  })
+}
+
+function openEditUserModal(u){
+  showModal(`Edit User: ${u.full_name||u.email}`,`
+    <div class="form-row"><div class="form-group"><div class="form-label">Full Name</div><input id="eu-name" value="${u.full_name||''}"></div>
+    <div class="form-group"><div class="form-label">Role</div><select id="eu-role">
+      <option value="team_member"${u.role==='team_member'?' selected':''}>Sales Specialist (Team Member)</option>
+      <option value="admin"${u.role==='admin'?' selected':''}>Admin</option>
+      <option value="external_partner"${u.role==='external_partner'?' selected':''}>Read-Only (External Partner)</option>
+      <option value="super_admin"${u.role==='super_admin'?' selected':''}>Super Admin</option>
+    </select></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Title</div><input id="eu-title" value="${u.title||''}"></div>
+    <div class="form-group"><div class="form-label">Phone</div><input id="eu-phone" value="${u.phone||''}"></div></div>
+    <label class="checkbox-row" style="margin-top:8px"><input type="checkbox" id="eu-active"${u.is_active?' checked':(u.is_active===false?'':' checked')}> Account Active</label>`,
+  async()=>{
+    try{
+      await api('/api/users/'+u.id,'PUT',{full_name:document.getElementById('eu-name').value,role:document.getElementById('eu-role').value,title:document.getElementById('eu-title').value||null,phone:document.getElementById('eu-phone').value||null,is_active:document.getElementById('eu-active').checked})
+      pageUsers()
+    }catch(e){alert(e.message);return false}
+  })
+}
+
+// ═══════════════════════════════════════════════════════
+// AUDIT LOGS
+// ═══════════════════════════════════════════════════════
+async function pageAuditLogs(){
+  setTopbar('Audit Logs','System Activity Log',`
+    <button class="btn" onclick="exportCSV('audit')">📤 Export</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="search-inp">🔍<input placeholder="Search audit logs..."></div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All actions</option><option>Create</option><option>Update</option><option>Delete</option><option>Login</option></select>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All users</option><option>northericka@gmail.com</option></select>
+      </div>
+    </div>
+    <div style="padding:0 14px">
+      ${getDemoAuditLogs().map(a=>renderAuditRow(a)).join('')}
+    </div>
+    <div class="tbl-footer">Showing recent activity · Full audit trail stored in database</div>
+  </div>`
+}
+
+function renderAuditRow(a){
+  const icons={CREATE:'🟢',UPDATE:'🟡',DELETE:'🔴',LOGIN:'🔵',EXPORT:'⬜'}
+  const colors={CREATE:var_green_bg,UPDATE:var_amber_bg,DELETE:var_red_bg,LOGIN:var_blue_bg,EXPORT:var_gray_bg}
+  return`<div class="audit-row">
+    <div class="audit-icon" style="background:${a.type==='CREATE'?'var(--green-bg)':a.type==='DELETE'?'var(--red-bg)':a.type==='LOGIN'?'var(--blue-bg)':'var(--amber-bg)'}">${icons[a.type]||'⚪'}</div>
+    <div class="audit-body">
+      <div class="audit-action">${a.action}</div>
+      <div class="audit-detail">${a.detail}</div>
+    </div>
+    <div class="audit-time">${a.time}</div>
+  </div>`
+}
+
+const var_green_bg='var(--green-bg)',var_amber_bg='var(--amber-bg)',var_red_bg='var(--red-bg)',var_blue_bg='var(--blue-bg)',var_gray_bg='var(--gray2)'
+
+// ═══════════════════════════════════════════════════════
+// IMPORT / EXPORT
+// ═══════════════════════════════════════════════════════
+function toggleIEMenu(id){
+  const menu=document.getElementById(id)
+  const isOpen=menu.style.display!=='none'
+  document.querySelectorAll('.ie-menu').forEach(m=>m.style.display='none')
+  document.getElementById('ie-overlay').style.display=isOpen?'none':'block'
+  menu.style.display=isOpen?'none':'block'
+}
+
+function closeIEMenu(){
+  document.querySelectorAll('.ie-menu').forEach(m=>m.style.display='none')
+  document.getElementById('ie-overlay').style.display='none'
+}
+
+function importCSV(type){
+  closeIEMenu()
+  showModal(`📥 Import ${type.toUpperCase()} from CSV`,`
+    <div class="alert alert-info">Download the CSV template, fill it in with your data, then upload it here.</div>
+    <div style="margin:12px 0">
+      <button class="btn btn-sm" onclick="downloadTemplate('${type}')">⬇️ Download CSV Template</button>
+    </div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Upload CSV File</div>
+      <input type="file" accept=".csv" onchange="processImport(this,'${type}')"></div></div>
+    <div id="import-preview"></div>`,
+  async()=>{alert(`Import processed! (Full CSV parsing in Phase 2 update)`)}
+  )
+}
+
+function exportCSV(type){
+  closeIEMenu()
+  alert(`📤 Exporting ${type} as CSV...\n\nThis will download all ${type} records as a CSV file.\n(Full export engine in Phase 2 update)`)
+}
+
+function exportExcel(type){
+  closeIEMenu()
+  alert(`📊 Exporting ${type} as Excel...\n\nThis will create an Excel workbook with all ${type} data.\n(Full export engine in Phase 2 update)`)
+}
+
+function exportPDF(type){
+  closeIEMenu()
+  alert(`📄 Generating ${type} PDF report...\n\nThis will create a formatted PDF with all ${type} records.\n(Full export engine in Phase 2 update)`)
+}
+
+function downloadTemplate(type){
+  const templates={
+    wibs:'WIB Name,Short Name,State,Status,Phone,Email,Website,Max Award,Match %,IWT Active,Source URL',
+    companies:'Company Name,Type,Status,FEIN,Domain,Employee Count,Avg Wage,Contact Name,Contact Email,Contact Phone',
+    applications:'Company Name,WIB Name,Funding Opportunity,Status,Award Requested,Submission Date',
+  }
+  const csv=templates[type]||`Name,Status,Notes`
+  const blob=new Blob([csv],{type:'text/csv'})
+  const a=document.createElement('a')
+  a.href=URL.createObjectURL(blob)
+  a.download=`valor-${type}-template.csv`
+  a.click()
+}
+
+// ═══════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ═══════════════════════════════════════════════════════
+function toggleNotif(){
+  notifOpen=!notifOpen
+  if(notifOpen){
+    document.getElementById('notif-container').innerHTML=`
+    <div class="notif-panel">
+      <div class="notif-header">
+        <div class="notif-title">Notifications</div>
+        <div style="display:flex;gap:5px">
+          <button class="btn btn-xs">Mark all read</button>
+          <button class="btn btn-xs" onclick="toggleNotif()">✕</button>
+        </div>
+      </div>
+      <div style="display:flex;border-bottom:.5px solid var(--border)">
+        <button style="flex:1;padding:8px;border:none;background:none;font-size:11.5px;font-weight:500;border-bottom:2px solid var(--nv);cursor:pointer">Notifications (0)</button>
+        <button style="flex:1;padding:8px;border:none;background:none;font-size:11.5px;color:var(--text2);cursor:pointer">Requests (3)</button>
+      </div>
+      <div class="notif-body">
+        ${getDemoNotifications().map(n=>`<div class="notif-item${n.unread?' unread':''}">
+          <div class="notif-av" style="background:${n.color}22;color:${n.color}">${n.initials}</div>
+          <div>
+            <div class="notif-text">${n.text}</div>
+            <div class="notif-time">${n.time}</div>
+            ${n.actions?`<div style="display:flex;gap:5px;margin-top:6px">${n.actions.map(a=>`<button class="btn btn-xs ${a.primary?'btn-primary':''}">${a.label}</button>`).join('')}</div>`:''}
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>`
+  }else{
+    document.getElementById('notif-container').innerHTML=''
+  }
+}
+
+function pageNotifications(){
+  setTopbar('Notifications','','')
+  document.getElementById('page-area').innerHTML=`
+  <div class="g2">
+    <div class="tbl-wrap">
+      <div class="tbl-head"><div class="tbl-title">🔔 All Notifications</div><button class="btn btn-sm">Mark all read</button></div>
+      <div>
+        ${getDemoNotifications().map(n=>`<div class="notif-item${n.unread?' unread':''}" style="border-bottom:.5px solid var(--gray)">
+          <div class="notif-av" style="background:${n.color}22;color:${n.color}">${n.initials}</div>
+          <div style="flex:1">
+            <div class="notif-text">${n.text}</div>
+            <div class="notif-time">${n.time}</div>
+            ${n.actions?`<div style="display:flex;gap:5px;margin-top:6px">${n.actions.map(a=>`<button class="btn btn-xs ${a.primary?'btn-primary':''}">${a.label}</button>`).join('')}</div>`:''}
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><div class="card-title">⚙️ Notification Settings</div></div>
+      <div class="card-body">
+        ${[
+          ['New grant opportunity matched','Email + In-app',true],
+          ['Application status change','In-app',true],
+          ['Compliance deadline 14 days out','Email + In-app',true],
+          ['Invoice overdue','Email',true],
+          ['New team message','In-app',false],
+          ['AI action completed','In-app',true],
+          ['User access request','Email + In-app',true],
+        ].map(([label,type,active])=>`<div class="stat-row">
+          <div><div class="stat-label" style="color:var(--text);font-size:12px">${label}</div><div style="font-size:10px;color:var(--text3)">${type}</div></div>
+          <div style="width:36px;height:20px;border-radius:10px;background:${active?'var(--nv)':'var(--gray2)'};cursor:pointer;position:relative" onclick="this.style.background=this.style.background==='var(--nv)'?'var(--gray2)':'var(--nv)'">
+            <div style="width:16px;height:16px;border-radius:50%;background:#fff;position:absolute;top:2px;transition:left .15s;${active?'right:2px':'left:2px'}"></div>
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>`
+}
+
+// ═══════════════════════════════════════════════════════
+// COMPANIES
+// ═══════════════════════════════════════════════════════
+async function pageCompanies(){
+  const data=await api('/api/companies?limit=500')
+  window._companies=data.data||[]
+  setTopbar('Companies',`${data.count||0} operators`,`
+    <div class="ie-dropdown">
+      <button class="btn" onclick="toggleIEMenu('co-ie')">⬇️ Import / Export</button>
+      <div class="ie-menu" id="co-ie" style="display:none">
+        <div class="ie-item" onclick="importCSV('companies')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-sep"></div>
+        <div class="ie-item" onclick="exportCSV('companies')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="exportExcel('companies')"><span class="ie-icon">📊</span>Export Excel</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="openCompanyModal()">+ New Company</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="search-inp">🔍<input type="text" placeholder="Search companies..." oninput="filterCompanies(this.value)"></div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px" onchange="filterCompaniesByStatus(this.value)">
+          <option value="">All statuses</option><option value="prospect">Prospect</option><option value="contacted">Contacted</option><option value="qualified">Qualified</option><option value="active_client">Active Client</option>
+        </select>
+      </div>
+    </div>
+    <div id="companies-table">
+      ${renderCompaniesTable(data.data||[])}
+    </div>
+    <div class="tbl-footer">${data.count||0} senior living operators</div>
+  </div>`
+}
+
+function renderCompaniesTable(data){
+  if(!data.length)return`<div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">No companies yet</div></div>`
+  return`<table><thead><tr><th>Company</th><th>Status</th><th>Rating</th><th>Employees</th><th>Domain</th><th>Revenue</th><th></th></tr></thead><tbody>
+  ${data.map(c=>`<tr>
+    <td><div style="font-weight:500">${c.company_name}</div><div style="font-size:10px;color:var(--text3)">${c.company_type}</div></td>
+    <td>${companyStatusPill(c.status)}</td>
+    <td>${c.rating?'⭐'.repeat(c.rating):'—'}</td>
+    <td>${c.employee_count_total||'—'}</td>
+    <td><a href="https://${c.domain}" target="_blank" class="field-link" onclick="event.stopPropagation()">${c.domain||'—'}</a></td>
+    <td style="color:var(--green);font-weight:500">${c.lifetime_revenue?'$'+Number(c.lifetime_revenue).toLocaleString():'$0'}</td>
+    <td onclick="event.stopPropagation()"><div class="action-btns"><button class="action-btn" onclick="openCompanyModal(${JSON.stringify(c).replace(/"/g,"'")})">Edit</button></div></td>
+  </tr>`).join('')}
+  </tbody></table>`
+}
+
+window._coFilters={search:'',status:''}
+function filterCompanies(q){window._coFilters.search=q;applyCoFilters()}
+function filterCompaniesByStatus(s){window._coFilters.status=s;applyCoFilters()}
+function applyCoFilters(){
+  let d=[...(window._companies||[])]
+  if(window._coFilters.search)d=d.filter(c=>c.company_name.toLowerCase().includes(window._coFilters.search.toLowerCase()))
+  if(window._coFilters.status)d=d.filter(c=>c.status===window._coFilters.status)
+  document.getElementById('companies-table').innerHTML=renderCompaniesTable(d)
+}
+
+function openCompanyModal(co=null){
+  const statusOpts=['prospect','contacted','qualified','active_client','churned','dnc'].map(s=>`<option value="${s}"${co?.status===s?' selected':''}>${s.replace('_',' ')}</option>`).join('')
+  showModal(co?`Edit: ${co.company_name}`:'Add Company',`
+    <div class="form-row"><div class="form-group"><div class="form-label">Company Name <span class="form-req">*</span></div><input id="co-name" value="${co?.company_name||''}"></div>
+    <div class="form-group"><div class="form-label">Status</div><select id="co-status">${statusOpts}</select></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">FEIN</div><input id="co-fein" value="${co?.fein||''}"></div>
+    <div class="form-group"><div class="form-label">Domain</div><input id="co-domain" value="${co?.domain||''}" placeholder="example.com"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Employee Count</div><input id="co-emp" type="number" value="${co?.employee_count_total||''}"></div>
+    <div class="form-group"><div class="form-label">Avg Hourly Wage ($)</div><input id="co-wage" type="number" value="${co?.avg_hourly_wage||''}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Primary Contact</div><input id="co-contact" value="${co?.primary_contact_name||''}"></div>
+    <div class="form-group"><div class="form-label">Contact Email</div><input id="co-email" type="email" value="${co?.primary_contact_email||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Training Needs</div><textarea id="co-training" rows="2">${co?.training_needs||''}</textarea></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="co-notes" rows="2">${co?.notes||''}</textarea></div></div>`,
+  async()=>{
+    const payload={company_name:document.getElementById('co-name').value,status:document.getElementById('co-status').value,fein:document.getElementById('co-fein').value||null,domain:document.getElementById('co-domain').value||null,employee_count_total:document.getElementById('co-emp').value||null,avg_hourly_wage:document.getElementById('co-wage').value||null,primary_contact_name:document.getElementById('co-contact').value||null,primary_contact_email:document.getElementById('co-email').value||null,training_needs:document.getElementById('co-training').value||null,notes:document.getElementById('co-notes').value||null}
+    if(!payload.company_name){alert('Company name required');return false}
+    try{if(co)await api('/api/companies/'+co.id,'PUT',payload);else await api('/api/companies','POST',payload);loadPage('companies')}catch(e){alert(e.message);return false}
+  })
+}
+
+// ═══════════════════════════════════════════════════════
+// LOCATIONS
+// ═══════════════════════════════════════════════════════
+async function pageLocations(){
+  const data=await api('/api/locations?limit=500')
+  setTopbar('Locations',`${data.count||0} facilities`,`
+    <div class="ie-dropdown">
+      <button class="btn" onclick="toggleIEMenu('loc-ie')">⬇️ Import / Export</button>
+      <div class="ie-menu" id="loc-ie" style="display:none">
+        <div class="ie-item" onclick="importCSV('locations')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-sep"></div>
+        <div class="ie-item" onclick="exportCSV('locations')"><span class="ie-icon">📤</span>Export CSV</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="openLocationModal()">+ New Location</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="search-inp">🔍<input placeholder="Search locations..."></div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All states</option>${'TX,FL,OH,CA,NY'.split(',').map(s=>`<option>${s}</option>`).join('')}</select>
+      </div>
+    </div>
+    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📍</div><div class="empty-text">No locations yet</div></div>`:
+    `<table><thead><tr><th>Location</th><th>Parent Operator</th><th>State</th><th>WIB</th><th>Status</th><th>Employees</th><th></th></tr></thead><tbody>
+    ${(data.data||[]).map(l=>`<tr>
+      <td><div style="font-weight:500">${l.location_name}</div>${l.city?`<div style="font-size:10px;color:var(--text3)">${l.city}${l.county?', '+l.county:''}</div>`:''}</td>
+      <td style="color:var(--text2)">${l.parent_company?.company_name||'—'}</td>
+      <td><b>${l.state}</b></td>
+      <td style="font-size:11px;color:var(--text2)">${l.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
+      <td>${locationStatusPill(l.status)}</td>
+      <td>${l.employee_count||'—'}</td>
+      <td><button class="action-btn" onclick="openLocationModal(${JSON.stringify(l).replace(/"/g,"'")})">Edit</button></td>
+    </tr>`).join('')}
+    </tbody></table><div class="tbl-footer">${data.count||0} facilities</div>`}
+  </div>`
+}
+
+function openLocationModal(loc=null){
+  const states='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
+  const stateOpts=states.map(s=>`<option value="${s}"${loc?.state===s?' selected':''}>${s}</option>`).join('')
+  const statusOpts=['not_contacted','contacted','application_in_progress','client','network_member','dnc'].map(s=>`<option value="${s}"${loc?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
+  showModal(loc?`Edit: ${loc.location_name}`:'Add Location',`
+    <div class="form-row"><div class="form-group"><div class="form-label">Location Name <span class="form-req">*</span></div><input id="loc-name" value="${loc?.location_name||''}"></div>
+    <div class="form-group"><div class="form-label">State <span class="form-req">*</span></div><select id="loc-state">${stateOpts}</select></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">County</div><input id="loc-county" value="${loc?.county||''}"></div>
+    <div class="form-group"><div class="form-label">City</div><input id="loc-city" value="${loc?.city||''}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="loc-status">${statusOpts}</select></div>
+    <div class="form-group"><div class="form-label">Employee Count</div><input id="loc-emp" type="number" value="${loc?.employee_count||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="loc-notes" rows="2">${loc?.notes||''}</textarea></div></div>`,
+  async()=>{
+    const payload={location_name:document.getElementById('loc-name').value,state:document.getElementById('loc-state').value,county:document.getElementById('loc-county').value||null,city:document.getElementById('loc-city').value||null,status:document.getElementById('loc-status').value,employee_count:document.getElementById('loc-emp').value||null,notes:document.getElementById('loc-notes').value||null}
+    if(!payload.location_name){alert('Location name required');return false}
+    try{if(loc)await api('/api/locations/'+loc.id,'PUT',payload);else await api('/api/locations','POST',payload);loadPage('locations')}catch(e){alert(e.message);return false}
+  })
+}
+
+// ═══════════════════════════════════════════════════════
+// FUNDING
+// ═══════════════════════════════════════════════════════
+async function pageFunding(){
+  const data=await api('/api/funding?limit=200')
+  setTopbar('Funding Opportunities',`${data.count||0} tracked`,`
+    <div class="ie-dropdown">
+      <button class="btn" onclick="toggleIEMenu('fund-ie')">⬇️ Import / Export</button>
+      <div class="ie-menu" id="fund-ie" style="display:none">
+        <div class="ie-item" onclick="importCSV('funding')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-sep"></div>
+        <div class="ie-item" onclick="exportCSV('funding')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="exportExcel('funding')"><span class="ie-icon">📊</span>Export Excel</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="openFundingModal()">+ New Opportunity</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="search-inp">🔍<input placeholder="Search opportunities..."></div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All statuses</option><option value="open">Open</option><option value="pending">Pending</option><option value="blocked">Blocked</option><option value="closed_deadline">Closed</option></select>
+      </div>
+    </div>
+    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">💰</div><div class="empty-text">No funding opportunities yet</div><div class="empty-sub">Create opportunities linked to WIB records</div></div>`:
+    `<table><thead><tr><th>Opportunity</th><th>WIB</th><th>Status</th><th>Max Award</th><th>Deadline</th><th>Program</th><th></th></tr></thead><tbody>
+    ${(data.data||[]).map(f=>`<tr>
+      <td><div style="font-weight:500">${f.opportunity_name}</div></td>
+      <td style="font-size:11px;color:var(--text2)">${f.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
+      <td>${fundingStatusPill(f.status)}</td>
+      <td>${f.max_award_per_ein?'<span style="color:var(--green);font-weight:500">$'+Number(f.max_award_per_ein).toLocaleString()+'</span>':'—'}</td>
+      <td style="font-size:11px">${f.application_deadline||'—'}</td>
+      <td><span class="pill p-blue">${f.program_type?.toUpperCase()||'IWT'}</span></td>
+      <td><div class="action-btns">
+        <button class="action-btn" onclick="openFundingModal(${JSON.stringify(f).replace(/"/g,"'")})">Edit</button>
+        <button class="action-btn del" onclick="deleteFunding('${f.id}')">Del</button>
+      </div></td>
+    </tr>`).join('')}
+    </tbody></table><div class="tbl-footer">${data.count||0} opportunities</div>`}
+  </div>`
+}
+
+async function deleteFunding(id){if(!confirm('Delete?'))return;try{await api('/api/funding/'+id,'DELETE');loadPage('funding')}catch(e){alert(e.message)}}
+
+function openFundingModal(f=null){
+  const statusOpts=[['open','Open'],['pending','Pending'],['blocked','Blocked'],['pending_employer','Pending Employer'],['stop_applications','Stop Applications'],['closed_deadline','Closed — Deadline'],['closed_out_of_funds','Closed — Out of Funds']].map(([v,l])=>`<option value="${v}"${f?.status===v?' selected':''}>${l}</option>`).join('')
+  showModal(f?`Edit: ${f.opportunity_name}`:'New Funding Opportunity',`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Opportunity Name <span class="form-req">*</span></div><input id="fo-name" value="${f?.opportunity_name||''}" placeholder="TX — Permian Basin — IWT — 2026-03"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="fo-status">${statusOpts}</select></div>
+    <div class="form-group"><div class="form-label">Program Type</div><select id="fo-type"><option value="iwt"${!f||f.program_type==='iwt'?' selected':''}>IWT</option><option value="ojt"${f?.program_type==='ojt'?' selected':''}>OJT</option><option value="training_grant">Training Grant</option></select></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Max Award / EIN ($)</div><input id="fo-max" type="number" value="${f?.max_award_per_ein||''}"></div>
+    <div class="form-group"><div class="form-label">Application Deadline</div><input id="fo-deadline" type="date" value="${f?.application_deadline||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Application Link</div><input id="fo-link" value="${f?.application_link||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Source URL <span class="form-req">*</span></div><input id="fo-source" value="${f?.source_url||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="fo-notes" rows="2">${f?.notes||''}</textarea></div></div>`,
+  async()=>{
+    const wibId=f?.wib_id
+    const payload={opportunity_name:document.getElementById('fo-name').value,status:document.getElementById('fo-status').value,program_type:document.getElementById('fo-type').value,max_award_per_ein:document.getElementById('fo-max').value||null,application_deadline:document.getElementById('fo-deadline').value||null,application_link:document.getElementById('fo-link').value||null,source_url:document.getElementById('fo-source').value,notes:document.getElementById('fo-notes').value||null,independent_creation_logged:true,last_verified_date:new Date().toISOString().split('T')[0]}
+    if(!payload.opportunity_name||!payload.source_url){alert('Name and source URL required');return false}
+    if(!wibId&&!f){alert('Add WIB records first, then create funding opportunities linked to them');return false}
+    if(wibId)payload.wib_id=wibId
+    try{if(f)await api('/api/funding/'+f.id,'PUT',payload);else await api('/api/funding','POST',payload);loadPage('funding')}catch(e){alert(e.message);return false}
+  })
+}
+
+// ═══════════════════════════════════════════════════════
+// APPLICATIONS
+// ═══════════════════════════════════════════════════════
+async function pageApplications(){
+  const data=await api('/api/applications?limit=200')
+  setTopbar('Applications',`${data.count||0} applications`,`
+    <div class="ie-dropdown">
+      <button class="btn" onclick="toggleIEMenu('app-ie')">⬇️ Import / Export</button>
+      <div class="ie-menu" id="app-ie" style="display:none">
+        <div class="ie-item" onclick="exportCSV('applications')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="exportExcel('applications')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportPDF('applications')"><span class="ie-icon">📄</span>Export PDF</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="alert('To create an application: add Companies + WIBs + Funding Opportunities first')">+ New Application</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="search-inp">🔍<input placeholder="Search applications..."></div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All statuses</option><option>intake</option><option>submitted</option><option>awarded</option><option>denied</option></select>
+      </div>
+    </div>
+    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><div class="empty-sub">The money pipeline starts here. Add companies, WIBs, and funding opportunities first.</div></div>`:
+    `<table><thead><tr><th>App #</th><th>Company</th><th>WIB</th><th>Status</th><th>Award</th><th>Fee</th><th>Invoice</th><th>Days</th></tr></thead><tbody>
+    ${(data.data||[]).map(a=>`<tr>
+      <td style="font-family:monospace;font-size:10px;color:var(--text3)">${a.application_number}</td>
+      <td style="font-weight:500">${a.company?.company_name||'—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${a.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
+      <td>${statusPill(a.status)}</td>
+      <td style="color:var(--green);font-weight:500">${a.award_amount_approved?'$'+Number(a.award_amount_approved).toLocaleString():'—'}</td>
+      <td style="color:var(--green);font-weight:500">${a.revenue?.[0]?.calculated_success_fee?'$'+Number(a.revenue[0].calculated_success_fee).toLocaleString():'—'}</td>
+      <td>${a.revenue?.[0]?.invoice_status?invoicePill(a.revenue[0].invoice_status):'—'}</td>
+      <td style="text-align:center;color:var(--text2)">${a.time_in_stage_days||0}d</td>
+    </tr>`).join('')}
+    </tbody></table><div class="tbl-footer">${data.count||0} applications</div>`}
+  </div>`
+}
+
+// ═══════════════════════════════════════════════════════
+// REVENUE
+// ═══════════════════════════════════════════════════════
+async function pageRevenue(){
+  const [rev,records]=await Promise.all([api('/api/revenue/dashboard').catch(()=>({})),api('/api/revenue')])
+  const fmt=n=>'$'+(Number(n)||0).toLocaleString()
+  setTopbar('Revenue Tracker','',`
+    <div class="ie-dropdown">
+      <button class="btn" onclick="toggleIEMenu('rev-ie')">⬇️ Export</button>
+      <div class="ie-menu" id="rev-ie" style="display:none">
+        <div class="ie-item" onclick="exportCSV('revenue')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="exportExcel('revenue')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportPDF('revenue')"><span class="ie-icon">📄</span>Export PDF Report</div>
+      </div>
+    </div>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="rev-band" style="margin-bottom:12px">
+    <div class="rev-item"><div class="rev-n">${fmt(rev.total_revenue_ytd)}</div><div class="rev-l">Revenue YTD</div></div>
+    <div class="rev-item"><div class="rev-n">${fmt(rev.pipeline_value)}</div><div class="rev-l">Pipeline</div></div>
+    <div class="rev-item"><div class="rev-n">${rev.total_awards||0}</div><div class="rev-l">Grants awarded</div></div>
+    <div class="rev-item"><div class="rev-n">${fmt(rev.total_grant_dollars_secured)}</div><div class="rev-l">Total $ secured</div></div>
+    <div class="rev-item"><div class="rev-n" style="color:#fca5a5">${rev.overdue_invoices||0}</div><div class="rev-l">Overdue invoices</div></div>
+  </div>
+  <div class="tbl-wrap">
+    <div class="tbl-head"><div class="tbl-title">💵 Revenue Records</div></div>
+    ${(records.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">💵</div><div class="empty-text">Revenue records are auto-created when grants are awarded</div></div>`:
+    `<table><thead><tr><th>Company</th><th>WIB</th><th>Fee Model</th><th>Grant Award</th><th>Valor Fee</th><th>Invoice</th><th></th></tr></thead><tbody>
+    ${(records.data||[]).map(r=>`<tr>
+      <td style="font-weight:500">${r.company?.company_name||'—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${r.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
+      <td><span class="pill p-blue">${r.fee_model?.replace(/_/g,' ')}</span></td>
+      <td style="color:var(--green);font-weight:500">${r.grant_award_amount?'$'+Number(r.grant_award_amount).toLocaleString():'—'}</td>
+      <td style="color:var(--green);font-weight:600">${r.calculated_success_fee?'$'+Number(r.calculated_success_fee).toLocaleString():'—'}</td>
+      <td>${invoicePill(r.invoice_status)}</td>
+      <td><button class="action-btn" onclick="markRevPaid('${r.id}')">Mark Paid</button></td>
+    </tr>`).join('')}
+    </tbody></table>`}
+  </div>`
+}
+
+async function markRevPaid(id){if(!confirm('Mark as paid?'))return;try{await api('/api/revenue/'+id,'PUT',{invoice_status:'paid',payment_received_date:new Date().toISOString().split('T')[0]});pageRevenue()}catch(e){alert(e.message)}}
+
+// ═══════════════════════════════════════════════════════
+// COMPLIANCE
+// ═══════════════════════════════════════════════════════
+async function pageCompliance(){
+  const data=await api('/api/compliance')
+  setTopbar('Compliance Tracker','Government money — strict tracking',`
+    <div class="ie-dropdown">
+      <button class="btn" onclick="toggleIEMenu('comp-ie')">⬇️ Export</button>
+      <div class="ie-menu" id="comp-ie" style="display:none">
+        <div class="ie-item" onclick="exportCSV('compliance')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="exportPDF('compliance')"><span class="ie-icon">📄</span>Export PDF</div>
+      </div>
+    </div>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="alert alert-warn">🛡️ This is government money. Every compliance deadline is a legal obligation. Missed deadlines can trigger grant repayment demands.</div>
+  <div class="tbl-wrap">
+    <div class="tbl-head"><div class="tbl-title">🛡️ Active Compliance Alerts</div></div>
+    ${(data.data||[]).length===0?`<div class="empty-state" style="padding:40px"><div style="font-size:28px">✅</div><div class="empty-text" style="color:var(--green)">All clear — no compliance alerts</div></div>`:
+    `<table><thead><tr><th>Company</th><th>App #</th><th>Final Report Due</th><th>Days Until Due</th><th>Risk Level</th><th>Final Submitted</th></tr></thead><tbody>
+    ${(data.data||[]).map(c=>`<tr>
+      <td style="font-weight:500">${c.company_name}</td>
+      <td style="font-family:monospace;font-size:10px;color:var(--text3)">${c.application_number}</td>
+      <td>${c.final_report_due||'—'}</td>
+      <td><span style="font-weight:600;color:${c.days_until_final_due<7?'var(--red)':c.days_until_final_due<14?'var(--amber)':'var(--text2)'}">${c.days_until_final_due!==null?(c.days_until_final_due>0?c.days_until_final_due+'d':'🔴 OVERDUE'):'—'}</span></td>
+      <td><span class="pill ${c.compliance_risk_level==='critical'?'p-red':c.compliance_risk_level==='high'?'p-orange':c.compliance_risk_level==='medium'?'p-amber':'p-green'}">${c.compliance_risk_level}</span></td>
+      <td>${c.final_report_submitted?'✅ Yes':'❌ Pending'}</td>
+    </tr>`).join('')}
+    </tbody></table>`}
+  </div>`
+}
+
+// ═══════════════════════════════════════════════════════
+// PLACEHOLDER PAGES
+// ═══════════════════════════════════════════════════════
+async function pageInvoices(){
+  setTopbar('Invoices','Billing & Payments',`
+    <div class="ie-dropdown"><button class="btn" onclick="toggleIEMenu('inv-ie')">⬇️ Export</button>
+    <div class="ie-menu" id="inv-ie" style="display:none">
+      <div class="ie-item" onclick="exportCSV('invoices')"><span class="ie-icon">📤</span>Export CSV</div>
+      <div class="ie-item" onclick="exportPDF('invoices')"><span class="ie-icon">📄</span>Export PDF</div>
+    </div></div>
+    <button class="btn btn-primary" onclick="alert('Invoices are auto-generated when grants are awarded. Configure in Revenue Tracker.')">+ New Invoice</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="g4" style="margin-bottom:12px">
+    ${[{l:'Outstanding',v:'$0',c:'p-amber'},{l:'Paid YTD',v:'$0',c:'p-green'},{l:'Overdue',v:'$0',c:'p-red'},{l:'Avg Days to Pay',v:'—',c:'p-blue'}].map(k=>`<div class="metric"><div class="metric-label">${k.l}</div><div class="metric-value">${k.v}</div></div>`).join('')}
+  </div>
+  <div class="tbl-wrap">
+    <div class="tbl-head"><div class="tbl-title">🧾 Invoice History</div></div>
+    <div class="empty-state"><div class="empty-icon">🧾</div><div class="empty-text">No invoices yet</div><div class="empty-sub">Invoices are auto-created when grant applications are marked "Awarded"</div></div>
+  </div>`
+}
+
+async function pageContracts(){
+  setTopbar('Contracts','Employer Agreements',`<button class="btn btn-primary" onclick="alert('Connect DocuSign or PandaDoc for e-signature contracts')">+ New Contract</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="alert alert-info">📄 Connect PandaDoc or DocuSign in Settings to send and track contracts with e-signature.</div>
+  <div class="tbl-wrap">
+    <div class="tbl-head"><div class="tbl-title">📄 Contracts</div></div>
+    <div class="empty-state"><div class="empty-icon">📄</div><div class="empty-text">No contracts yet</div><div class="empty-sub">Contracts are created when employers sign on as clients</div></div>
+  </div>`
+}
+
+async function pageGrants(){
+  setTopbar('Grant Awards','All awarded grants','')
+  document.getElementById('page-area').innerHTML=`
+  <div class="g4" style="margin-bottom:12px">
+    ${[{l:'Total Awarded',v:'$0'},{l:'Employers Funded',v:'0'},{l:'Avg Grant Size',v:'$0'},{l:'Renewals Due',v:'0'}].map(k=>`<div class="metric"><div class="metric-label">${k.l}</div><div class="metric-value">${k.v}</div></div>`).join('')}
+  </div>
+  <div class="tbl-wrap">
+    <div class="tbl-head"><div class="tbl-title">🏆 Grant Awards</div></div>
+    <div class="empty-state"><div class="empty-icon">🏆</div><div class="empty-text">No grants awarded yet</div><div class="empty-sub">Awards appear here when application status changes to "Awarded"</div></div>
+  </div>`
+}
+
+async function pagePayments(){
+  setTopbar('Payment Tracking','Reimbursement Pipeline','')
+  document.getElementById('page-area').innerHTML=`
+  <div class="tbl-wrap">
+    <div class="tbl-head"><div class="tbl-title">💳 Reimbursement & Payment Tracking</div></div>
+    <div class="empty-state"><div class="empty-icon">💳</div><div class="empty-text">No payments tracked yet</div><div class="empty-sub">Payment records are created when WIBs reimburse employers</div></div>
+  </div>`
+}
+
+async function pageTraining(){
+  setTopbar('Training Providers','Approved Providers',`<button class="btn btn-primary" onclick="openTrainingModal()">+ Add Provider</button>`)
+  document.getElementById('page-area').innerHTML=`
+  <div class="tbl-wrap">
+    <div class="tbl-head"><div class="tbl-title">🎓 Training Providers</div></div>
+    <div class="empty-state"><div class="empty-icon">🎓</div><div class="empty-text">No training providers yet</div><div class="empty-sub">Add WIB-approved training providers to use in grant applications</div></div>
+  </div>`
+}
+
+function openTrainingModal(){
+  showModal('Add Training Provider',`
+    <div class="form-row"><div class="form-group"><div class="form-label">Provider Name <span class="form-req">*</span></div><input id="tp-name" placeholder="ABC Training Institute"></div>
+    <div class="form-group"><div class="form-label">Type</div><select id="tp-type"><option>Vocational School</option><option>Community College</option><option>Online Provider</option><option>Healthcare Specific</option></select></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Website</div><input id="tp-web" placeholder="https://..."></div>
+    <div class="form-group"><div class="form-label">Contact Email</div><input id="tp-email" type="email"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Programs Offered</div><textarea id="tp-programs" rows="2" placeholder="CNA, Med Tech, Dementia Care..."></textarea></div></div>`,
+  async()=>{alert('Training provider added! (Full training provider DB in Phase 2)')}
+  )
+}
+
+async function pageReports(){
+  setTopbar('Reports & Dashboards','','<button class="btn btn-primary" onclick="alert(\'Custom dashboards coming in Phase 2\')">+ New Dashboard</button>')
+  document.getElementById('page-area').innerHTML=`
+  <div class="g2" style="margin-bottom:12px">
+    ${[
+      {title:'Weekly Snapshot',desc:'Applications, WIBs, Revenue',icon:'📊',tags:['Applications','Revenue','WIBs']},
+      {title:'Funding Opportunities',desc:'Open cycles and match rates',icon:'💰',tags:['Funding','Match Rate','Pipeline']},
+      {title:'Applications In Progress',desc:'Pipeline stage analysis',icon:'📋',tags:['Stage Breakdown','Time in Stage']},
+      {title:'Compliance Status',desc:'Active grants and deadlines',icon:'🛡️',tags:['Deadlines','Risk Level']},
+    ].map(r=>`<div class="card" style="cursor:pointer" onclick="alert('Full reporting engine in Phase 2')">
+      <div class="card-body">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <span style="font-size:22px">${r.icon}</span>
+          <div><div style="font-size:13px;font-weight:600">${r.title}</div><div style="font-size:11px;color:var(--text2)">${r.desc}</div></div>
+        </div>
+        <div>${r.tags.map(t=>`<span class="tag">${t}</span>`).join('')}</div>
+      </div>
+    </div>`).join('')}
+  </div>
+  <div class="alert alert-info">📊 Full reporting engine with charts, custom dashboards, and export coming in Phase 2 update.</div>`
+}
+
+// ═══════════════════════════════════════════════════════
+// MODAL SYSTEM
+// ═══════════════════════════════════════════════════════
+function showModal(title,body,onConfirm,showFooter=true){
+  const overlay=document.createElement('div')
+  overlay.className='modal-overlay'
+  overlay.id='active-modal'
+  overlay.innerHTML=`<div class="modal${title.includes('xl')?' modal-xl':title.length>50?' modal-lg':''}">
+    <div class="modal-hd">
+      <div class="modal-title">${title}</div>
+      <button class="modal-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">${body}</div>
+    ${showFooter?`<div class="modal-foot">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="modal-ok-btn">Save</button>
+    </div>`:''}
+  </div>`
+  overlay.addEventListener('click',e=>{if(e.target===overlay)closeModal()})
+  document.getElementById('modal-container').appendChild(overlay)
+  if(onConfirm&&showFooter){
+    document.getElementById('modal-ok-btn').addEventListener('click',async()=>{
+      const btn=document.getElementById('modal-ok-btn')
+      if(btn){btn.disabled=true;btn.textContent='Saving...'}
+      const result=await onConfirm()
+      if(result!==false)closeModal()
+      else if(btn){btn.disabled=false;btn.textContent='Save'}
+    })
+  }
+}
+
+function closeModal(){
+  const m=document.getElementById('active-modal')
+  if(m)m.remove()
+}
+
+// ═══════════════════════════════════════════════════════
+// NOTE HELPERS
+// ═══════════════════════════════════════════════════════
+function addNote(){
+  const text=document.getElementById('new-note-text')?.value
+  if(!text?.trim())return
+  const list=document.getElementById('notes-list')
+  const note={author:currentUser?.full_name||'You',text,time:'Just now',type:'Note',color:'#3b82f6'}
+  if(list)list.insertAdjacentHTML('afterbegin',renderNoteCard(note))
+  if(document.getElementById('new-note-text'))document.getElementById('new-note-text').value=''
+}
+
+function addAircallNote(){
+  const modal_body=`
+    <div class="form-row"><div class="form-group"><div class="form-label">Call Direction</div>
+      <select id="ac-dir"><option value="Outbound">Outbound</option><option value="Inbound">Inbound</option></select></div>
+    <div class="form-group"><div class="form-label">Duration (e.g. 12m 14s)</div><input id="ac-dur" placeholder="12m 14s"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Contact Name</div><input id="ac-contact" placeholder="John Smith — IWT Coordinator"></div>
+    <div class="form-group"><div class="form-label">Contact Phone</div><input id="ac-phone" placeholder="+1 (512) 000-0000"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Call Summary</div>
+      <textarea id="ac-summary" rows="3" placeholder="Key discussion points, decisions made..."></textarea></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Follow-up Tasks</div>
+      <textarea id="ac-tasks" rows="2" placeholder="1. Send intake form\n2. Schedule follow-up call"></textarea></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Additional Notes</div>
+      <textarea id="ac-notes" rows="2"></textarea></div></div>`
+  showModal('📱 Log Aircall Note',modal_body,()=>{
+    const now=new Date()
+    const dateStr=now.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
+    const timeStr=now.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZoneName:'short'})
+    const dir=document.getElementById('ac-dir').value
+    const dur=document.getElementById('ac-dur').value||'Duration not recorded'
+    const contact=document.getElementById('ac-contact').value||'Unknown contact'
+    const summary=document.getElementById('ac-summary').value||'No summary provided'
+    const tasks=document.getElementById('ac-tasks').value||'No follow-up tasks logged'
+    const header=`AIRCALL NOTE — ${dateStr} — ${timeStr} — ${dir} Call — Duration: ${dur}`
+    const noteHtml=`<div class="aircall-note">
+      <div class="aircall-header">${header}</div>
+      <div class="aircall-body">
+        <div><strong>Contact:</strong> ${contact}</div>
+        <div class="aircall-section"><div class="aircall-section-title">📊 AI-Generated Summary</div>${summary}</div>
+        <div class="aircall-section"><div class="aircall-section-title">✅ Follow-Up Tasks</div>${tasks}</div>
+        ${document.getElementById('ac-notes').value?`<div class="aircall-section"><div class="aircall-section-title">📝 Additional Notes</div>${document.getElementById('ac-notes').value}</div>`:''}
+        <div style="margin-top:8px;font-size:10px;color:var(--text3)">Logged by: ${currentUser?.full_name||currentUser?.email} · Valor Workforce Funding CRM</div>
+      </div>
+    </div>`
+    const list=document.getElementById('notes-list')
+    if(list)list.insertAdjacentHTML('afterbegin',noteHtml)
+  })
+}
+
+async function addAINote(){
+  const wibName=currentWib?.wib_name||'this record'
+  const textarea=document.getElementById('new-note-text')
+  if(textarea)textarea.value='⏳ Generating AI summary...'
+  const r=await apiAI(`Generate a professional CRM note for a workforce grant consultant. WIB: ${wibName}. Include: current relationship status, recommended next steps, key talking points for next call.`)
+  if(textarea)textarea.value=r
+}
+
+function insertTag(tag){
+  const t=document.getElementById('new-note-text')
+  if(t)t.value=`[${tag}] `+t.value
+}
+
+function handleNoteFile(input){
+  alert(`File "${input.files[0]?.name}" attached. Files stored in Google Drive when integration is enabled.`)
+}
+
+function viewCallNote(call){
+  const now=new Date()
+  const dateStr=call.date
+  showModal('📱 Aircall Note — Full View',`
+    <div class="aircall-note" style="margin:0">
+      <div class="aircall-header">AIRCALL NOTE — ${dateStr} — ${call.dir} Call — Duration: ${call.duration}</div>
+      <div class="aircall-body">
+        <div><strong>Contact:</strong> ${call.contact} · ${call.phone}</div>
+        <div><strong>Record:</strong> ${call.record}</div>
+        <div class="aircall-section"><div class="aircall-section-title">📊 AI-Generated Summary</div>${call.summary}</div>
+        <div class="aircall-section"><div class="aircall-section-title">✅ Follow-Up Tasks</div>${call.tasks||'No tasks logged'}</div>
+      </div>
+    </div>`,()=>{},true)
+}
+
+function openContactModal(){
+  showModal('Add Contact',`
+    <div class="form-row"><div class="form-group"><div class="form-label">Full Name <span class="form-req">*</span></div><input id="ct-name" placeholder="Laura Quigley"></div>
+    <div class="form-group"><div class="form-label">Title</div><input id="ct-title" placeholder="IWT Coordinator"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Email</div><input id="ct-email" type="email"></div>
+    <div class="form-group"><div class="form-label">Phone</div><input id="ct-phone"></div></div>`,
+  async()=>{alert('Contact added! (Full contacts DB in Phase 2)')}
+  )
+}
+
+// ═══════════════════════════════════════════════════════
+// DEMO DATA
+// ═══════════════════════════════════════════════════════
+function getDemoTasks(){return[
+  {title:'Call WIB employer services — confirm IWT cycle open',due:'Today',record:'WIB Record',assignee:'You',overdue:false,done:false},
+  {title:'Send intake form to employer after discovery call',due:'Today',record:'Company Record',assignee:'You',overdue:false,done:false},
+  {title:'Collect pre-training payroll docs',due:'Yesterday',record:'Application',assignee:'You',overdue:true,done:false},
+  {title:'Follow up on submitted application — 14 days',due:'Today',record:'Application',assignee:'You',overdue:false,done:true},
+  {title:'Review compliance checklist for active grant',due:'Today',record:'Compliance',assignee:'You',overdue:false,done:false},
+]}
+
+function getDemoNotes(wibName){return[
+  {author:'Northericka',text:`Outreach Activity — Left voicemail with employer services coordinator. WIB confirmed IWT program is accepting applications. Max award is $50,000 per EIN. Deadline is end of quarter.`,time:'2 hours ago',type:'Outreach Activity',color:'#3b82f6'},
+  {author:'Northericka',text:`Follow Up — Spoke with IWT coordinator. Requested employer eligibility criteria. They prefer senior living employers with 25+ employees. Will send our one-pager.`,time:'3 days ago',type:'Follow Up',color:'#10b981'},
+  {author:'AI Summary',text:`AI Analysis: ${wibName} shows high potential for partnership. IWT program is active with competitive max awards. Priority industries align with senior living sector. Recommended approach: schedule formal intro call with employer services team.`,time:'1 week ago',type:'AI Summary',color:'#8b5cf6'},
+]}
+
+function getDemoAircallNote(wibName){
+  const date=new Date()
+  const dateStr=date.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
+  const timeStr=date.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZoneName:'short'})
+  return`<div class="aircall-note">
+    <div class="aircall-header">AIRCALL NOTE — ${dateStr} — ${timeStr} — Outbound Call — Duration: 8m 32s</div>
+    <div class="aircall-body">
+      <div><strong>Contact:</strong> WIB Employer Services · (Demo Number)</div>
+      <div class="aircall-section"><div class="aircall-section-title">📊 AI-Generated Summary</div>
+        Spoke with employer services team at ${wibName||'WIB'}. Confirmed IWT program is currently accepting applications for Q3 2026 cycle. Discussed senior living employer eligibility requirements. WIB is particularly interested in employers with documented turnover challenges. Max award is $45,000 per EIN for this cycle. Application deadline is June 30, 2026.
+      </div>
+      <div class="aircall-section"><div class="aircall-section-title">✅ Follow-Up Tasks</div>
+        1. Send official program overview to WIB contact<br>
+        2. Submit employer referral list by end of week<br>
+        3. Schedule formal partnership call for next Tuesday
+      </div>
+      <div class="aircall-section"><div class="aircall-section-title">📋 Employer Concerns</div>
+        WIB noted they prefer employers who have completed prior training. First-time applicants may need additional documentation.
+      </div>
+      <div style="margin-top:8px;font-size:10px;color:var(--text3)">Logged by: ${currentUser?.full_name||currentUser?.email} · Valor Workforce Funding CRM · Auto-synced from Aircall</div>
+    </div>
+  </div>`
+}
+
+function getDemoActivity(){return[
+  {icon:'✏️',bg:'var(--amber-bg)',text:'<strong>Northericka</strong> changed <strong>Status</strong> to Follow Up Needed',time:'2 hours ago'},
+  {icon:'🤖',bg:'var(--purple-bg)',text:'<strong>Claude AI</strong> changed <strong>4 attributes</strong>',time:'16 days ago'},
+  {icon:'👤',bg:'var(--blue-bg)',text:'<strong>System</strong> changed <strong>Owner</strong>',time:'16 days ago'},
+  {icon:'📱',bg:'var(--green-bg)',text:'<strong>Aircall</strong> logged new outbound call — 8m 32s',time:'Today'},
+]}
+
+function getDemoContacts(){return[
+  {name:'Laura Quigley',title:'IWT Coordinator',email:'lquigley@demo-wib.gov',phone:'+1 (555) 234-5678',color:'#3b82f6'},
+  {name:'Michael Torres',title:'Employer Services Director',email:'mtorres@demo-wib.gov',phone:'+1 (555) 234-5679',color:'#8b5cf6'},
+]}
+
+function getDemoFiles(){return[
+  {icon:'📄',name:'IWT Program Overview 2026.pdf',size:'1.2 MB',date:'May 14, 2026',type:'PDF'},
+  {icon:'📊',name:'Employer Eligibility Criteria.xlsx',size:'456 KB',date:'May 10, 2026',type:'Excel'},
+  {icon:'📝',name:'Application Requirements Checklist.docx',size:'234 KB',date:'May 8, 2026',type:'Word'},
+]}
+
+function getDemoCallLogs(){return[
+  {dir:'Outbound',contact:'IWT Coordinator',phone:'+1 (555) 000-0001',record:'Demo WIB Board',duration:'8m 32s',date:'May 14, 2026 · 2:13 PM CST',summary:'Confirmed IWT program open. Max award $45K. Deadline June 30.',tasks:'Send program overview, schedule follow-up call'},
+  {dir:'Inbound',contact:'HR Director',phone:'+1 (555) 000-0002',record:'Demo Senior Living Co',duration:'14m 22s',date:'May 13, 2026 · 10:45 AM CST',summary:'Employer called re: grant eligibility. 52 employees, confirmed training needs.',tasks:'Send intake form, qualify for IWT'},
+  {dir:'Outbound',contact:'Employer Services',phone:'+1 (555) 000-0003',record:'Demo WIB Board 2',duration:'5m 11s',date:'May 12, 2026 · 3:30 PM CST',summary:'Left voicemail re: Q3 IWT cycle availability.',tasks:'Follow up in 5 days'},
+]}
+
+function getDemoMessages(){return[
+  {name:'Sam Coordinator',initials:'SC',color:'#6366f1',text:'I just submitted APP-2026-001 to the WIB. Should hear back within 5 business days.',time:'2:13 PM'},
+  {name:'Alex Compliance',initials:'AC',color:'#14b8a6',text:'Great! Make sure the attendance sheets are uploaded to Drive before the deadline.',time:'2:15 PM'},
+  {name:'You',initials:(currentUser?.full_name||'YO').slice(0,2).toUpperCase(),color:'#3b82f6',text:'Done, everything is in the Drive folder. Compliance checklist is 100% complete.',time:'2:17 PM',mine:true},
+  {name:'Sam Coordinator',initials:'SC',color:'#6366f1',text:'Perfect. I\'ll set up the call with the WIB for next Tuesday to discuss the Q3 cycle.',time:'2:20 PM'},
+]}
+
+function getDemoNotifications(){return[
+  {text:'Sam Coordinator is requesting access to the email Re: Incumbent Workforce Training.',time:'about 4 hours ago',initials:'SC',color:'#6366f1',unread:true,actions:[{label:'Accept',primary:true},{label:'Deny'}]},
+  {text:'Sam Coordinator is requesting access to the email RE: Incumbent Workforce Training.',time:'about 4 hours ago',initials:'SC',color:'#6366f1',unread:true,actions:[{label:'Accept',primary:true},{label:'Deny'}]},
+  {text:'Virginia Webb is requesting access to the email IWT Training application - Demo Workforce Partnership.',time:'3 days ago',initials:'VW',color:'#f59e0b',unread:false,actions:[{label:'Accept',primary:true},{label:'Deny'}]},
+]}
+
+function getDemoAuditLogs(){return[
+  {type:'LOGIN',action:'User signed in',detail:'northericka@gmail.com — Chrome · Windows',time:'Just now'},
+  {type:'UPDATE',action:'Updated WIB record',detail:'Status changed from "No Reachout" to "Follow Up Needed"',time:'2 hours ago'},
+  {type:'CREATE',action:'Created new note',detail:'Outreach Activity note added to Demo WIB Record',time:'2 hours ago'},
+  {type:'UPDATE',action:'Updated application',detail:'APP-2026-001 status changed to "Submitted"',time:'1 day ago'},
+  {type:'CREATE',action:'Created new WIB record',detail:'TX — Demo Workforce Board added from twc.texas.gov',time:'3 days ago'},
+  {type:'EXPORT',action:'Exported data',detail:'WIBs table exported as CSV · 127 records',time:'5 days ago'},
+  {type:'DELETE',action:'Deleted funding opportunity',detail:'Old cycle removed from system',time:'1 week ago'},
+]}
+
+// ═══════════════════════════════════════════════════════
+// RENDER HELPERS
+// ═══════════════════════════════════════════════════════
+function renderNoteCard(n){
+  const initials=n.author.slice(0,2).toUpperCase()
+  const typeColors={
+    'Outreach Activity':'var(--blue-bg)',
+    'Follow Up':'var(--amber-bg)',
+    'AI Summary':'var(--purple-bg)',
+    'Note':'var(--gray2)',
+    'Internal':'var(--teal-bg)',
+  }
+  return`<div class="note-card">
+    <div class="note-meta">
+      <div class="note-av" style="background:${colorFor(n.author)}22;color:${colorFor(n.author)}">${initials}</div>
+      <div class="note-author">${n.author}</div>
+      <span class="note-type" style="background:${typeColors[n.type]||'var(--gray2)'}${n.type==='AI Summary'?';color:var(--purple-t)':''}">${n.type||'Note'}</span>
+      <div class="note-time">${n.time}</div>
+    </div>
+    <div class="note-content">${n.text}</div>
+    <div style="display:flex;gap:5px;margin-top:8px;flex-wrap:wrap">
+      <button class="action-btn btn-xs">📋 Copy</button>
+      <button class="action-btn btn-xs">✏️ Edit</button>
+      <button class="action-btn btn-xs del">🗑️</button>
+    </div>
+  </div>`
+}
+
+function renderTaskRow(t){
+  return`<div class="task-row">
+    <div class="task-check${t.done?' done':''}" onclick="this.classList.toggle('done')">${t.done?'✓':''}</div>
+    <div class="task-title${t.done?' done':''}">${t.title}</div>
+    <span class="tag" style="font-size:9.5px">${t.record}</span>
+    <div class="task-due${t.overdue?' overdue':''}">${t.due}</div>
+    <div class="task-assignee" title="${t.assignee}">${t.assignee.slice(0,2).toUpperCase()}</div>
+  </div>`
+}
+
+function renderActivityRow(a){
+  return`<div class="activity-row">
+    <div class="activity-icon" style="background:${a.bg};font-size:11px">${a.icon}</div>
+    <div class="activity-body">
+      <div class="activity-text">${a.text}</div>
+      <div class="activity-time">${a.time}</div>
+    </div>
+  </div>`
+}
+
+function renderContactCard(c){
+  return`<div class="contact-card">
+    <div class="contact-av" style="background:${c.color}22;color:${c.color}">${c.name.split(' ').map(n=>n[0]).join('').slice(0,2)}</div>
+    <div class="contact-info">
+      <div class="contact-name">${c.name}</div>
+      <div class="contact-title-t">${c.title}</div>
+    </div>
+    <div class="contact-actions">
+      <button class="btn btn-sm" onclick="window.location.href='mailto:${c.email}'">📧</button>
+      <button class="btn btn-sm" onclick="window.location.href='tel:${c.phone}'">📞</button>
+    </div>
+  </div>`
+}
+
+function renderFileRow(f){
+  return`<div class="file-row">
+    <div class="file-icon">${f.icon}</div>
+    <div style="flex:1">
+      <div class="file-name">${f.name}</div>
+      <div class="file-meta">${f.size} · ${f.date}</div>
+    </div>
+    <div class="file-actions">
+      <button class="action-btn">⬇️ Download</button>
+      <button class="action-btn">🔗 Share</button>
+      <button class="action-btn del">🗑️</button>
+    </div>
+  </div>`
+}
+
+function fieldRow(key,value){
+  return`<div class="field-row"><div class="field-key">${key}</div><div class="field-val">${value}</div></div>`
+}
+
+// ═══════════════════════════════════════════════════════
+// STATUS PILLS
+// ═══════════════════════════════════════════════════════
+function statusPill(s){
+  const m={intake:'p-blue',doc_collection:'p-purple',drafting:'p-purple',employer_review:'p-amber',submitted:'p-teal',approved:'p-green',awarded:'p-green',denied:'p-red'}
+  return`<span class="pill ${m[s]||'p-gray'}">${(s||'').replace(/_/g,' ')}</span>`
+}
+function wibStatusPill(s){
+  const m={funding_available:'p-green',follow_up_needed:'p-purple',pending_employer:'p-amber',no_reachout_complete:'p-gray',funding_not_available:'p-red',stop_applications:'p-orange'}
+  return`<span class="pill ${m[s]||'p-gray'}"><span class="dot ${m[s]?.replace('p-','d-')||'d-gray'}"></span>${(s||'').replace(/_/g,' ')}</span>`
+}
+function fundingStatusPill(s){
+  const m={open:'p-green',pending:'p-amber',blocked:'p-red',pending_employer:'p-purple',stop_applications:'p-orange',closed_deadline:'p-gray',closed_out_of_funds:'p-red'}
+  return`<span class="pill ${m[s]||'p-gray'}">${(s||'').replace(/_/g,' ')}</span>`
+}
+function locationStatusPill(s){
+  const m={not_contacted:'p-amber',contacted:'p-blue',application_in_progress:'p-purple',client:'p-green',network_member:'p-gray',dnc:'p-red'}
+  return`<span class="pill ${m[s]||'p-gray'}">${(s||'').replace(/_/g,' ')}</span>`
+}
+function companyStatusPill(s){
+  const m={prospect:'p-amber',contacted:'p-blue',qualified:'p-purple',active_client:'p-green',churned:'p-gray',dnc:'p-red'}
+  return`<span class="pill ${m[s]||'p-gray'}">${(s||'').replace(/_/g,' ')}</span>`
+}
+function invoicePill(s){
+  const m={not_invoiced:'p-gray',sent:'p-blue',paid:'p-green',overdue:'p-red',disputed:'p-orange'}
+  return`<span class="pill ${m[s]||'p-gray'}">${(s||'').replace(/_/g,' ')}</span>`
+}
+function rolePill(r){
+  const m={super_admin:'p-purple',admin:'p-blue',team_member:'p-green',external_partner:'p-gray'}
+  return`<span class="pill ${m[r]||'p-gray'}">${(r||'').replace(/_/g,' ')}</span>`
+}
+
+// Stub functions for AI quick actions
+function summarizeCall(){showModal('📞 Summarize Call',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste your call notes or bullet points</div><textarea id="sc-notes" rows="6" placeholder="• Spoke with IWT coordinator\n• Program open until June 30\n• Max $50K per employer..."></textarea></div></div><div id="sc-result"></div>`,async()=>{const n=document.getElementById('sc-notes').value;document.getElementById('sc-result').innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Turn these call notes into a professional CRM Aircall note with summary, follow-up tasks, and key points: ${n}`);document.getElementById('sc-result').innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
+function analyzeEmployer(){showModal('🏢 Employer Eligibility Analysis',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Employer Details</div><textarea id="ea-details" rows="4" placeholder="Company name, employee count, industry, location, training needs..."></textarea></div></div><div id="ea-result"></div>`,async()=>{const d=document.getElementById('ea-details').value;document.getElementById('ea-result').innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`Analyze if this employer likely qualifies for IWT/incumbent worker training grants. Provide eligibility assessment and recommended approach: ${d}`);document.getElementById('ea-result').innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
+function draftApplication(){showModal('📋 AI Application Assistant',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Provide employer and WIB context</div><textarea id="da-context" rows="4" placeholder="Employer: Heritage Senior Living, 45 employees, CNA training\nWIB: TX Workforce Commission, $40K max award..."></textarea></div></div><div id="da-result"></div>`,async()=>{const c=document.getElementById('da-context').value;document.getElementById('da-result').innerHTML='<div class="loading">⏳ Drafting...</div>';const r=await apiAI(`Help draft key sections of an IWT grant application narrative based on this context: ${c}. Include: employer need statement, training plan description, expected outcomes.`);document.getElementById('da-result').innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
+function checkCompliance(){showModal('🛡️ Compliance Check',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Describe the active grant situation</div><textarea id="cc-context" rows="4" placeholder="Grant award: $45,000\nTraining completion date: April 30\nDocuments collected: attendance, payroll\nMissing: final report..."></textarea></div></div><div id="cc-result"></div>`,async()=>{const c=document.getElementById('cc-context').value;document.getElementById('cc-result').innerHTML='<div class="loading">⏳ Checking...</div>';const r=await apiAI(`Review this grant compliance situation and identify any risks, missing items, or urgent actions needed: ${c}`);document.getElementById('cc-result').innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
+function recommendNext(){showModal('🎯 Recommend Next Steps',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Current situation</div><textarea id="rn-context" rows="4" placeholder="WIB or employer name, current status, last interaction, blockers..."></textarea></div></div><div id="rn-result"></div>`,async()=>{const c=document.getElementById('rn-context').value;document.getElementById('rn-result').innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`As a workforce grant consultant, recommend specific next actions to advance this relationship: ${c}`);document.getElementById('rn-result').innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
+function generateMeetingNotes(){showModal('📝 Meeting Notes Generator',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste bullet points or rough notes</div><textarea id="mn-notes" rows="5" placeholder="• Met with WIB director\n• Discussed Q3 cycle\n• They want 10 employer referrals\n• Decision by June 1..."></textarea></div></div><div id="mn-result"></div>`,async()=>{const n=document.getElementById('mn-notes').value;document.getElementById('mn-result').innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Convert these rough notes into professional meeting notes for a workforce grant consultant CRM: ${n}. Format with: Date, Attendees, Key Discussion Points, Decisions Made, Action Items.`);document.getElementById('mn-result').innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
+
+// Boot
+render()
+</script>
+</body>
+</html>
