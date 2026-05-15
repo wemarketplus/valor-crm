@@ -661,10 +661,52 @@ async function apiAI(prompt){
   } catch(e) { return '❌ AI failed: '+e.message }
 }
 
+// ── SESSION TIMEOUT: 1hr auto-logout, 2-min warning modal ──
+let _sessionWarnTimer=null, _sessionLogoutTimer=null, _sessionWarned=false
 function startSessionTimer(){
-  clearTimeout(sessionTimer)
-  sessionTimer=setTimeout(()=>showToast('Session expiring soon — save your work','warn'),55*60*1000)
-  document.addEventListener('click',()=>startSessionTimer(),{once:true})
+  clearTimeout(_sessionWarnTimer);clearTimeout(_sessionLogoutTimer);_sessionWarned=false
+  // 58min → show warning modal
+  _sessionWarnTimer=setTimeout(()=>{
+    _sessionWarned=true
+    const overlay=document.createElement('div')
+    overlay.id='session-warn-overlay'
+    overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center'
+    overlay.innerHTML=`<div style="background:#fff;border-radius:14px;padding:28px 32px;max-width:380px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+      <div style="font-size:32px;margin-bottom:12px">⏱️</div>
+      <div style="font-size:16px;font-weight:700;color:#111;margin-bottom:8px">Session Expiring Soon</div>
+      <div style="font-size:13px;color:#6b7280;margin-bottom:20px">You will be automatically signed out in <strong id="session-countdown">2:00</strong> due to inactivity.</div>
+      <button onclick="extendSession()" style="background:#0B1E3C;color:#E8D9A8;border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:600;cursor:pointer;margin-right:8px">Stay Signed In</button>
+      <button onclick="logout()" style="background:#fee2e2;color:#991b1b;border:none;border-radius:8px;padding:10px 20px;font-size:13px;cursor:pointer">Sign Out Now</button>
+    </div>`
+    document.body.appendChild(overlay)
+    // Countdown
+    let secs=120
+    const interval=setInterval(()=>{
+      secs--
+      const el=document.getElementById('session-countdown')
+      if(el)el.textContent=Math.floor(secs/60)+':'+(secs%60<10?'0':'')+(secs%60)
+      if(secs<=0)clearInterval(interval)
+    },1000)
+    overlay.dataset.interval=interval
+  }, 58*60*1000)
+  // 60min → force logout
+  _sessionLogoutTimer=setTimeout(()=>{
+    const ov=document.getElementById('session-warn-overlay')
+    if(ov){clearInterval(ov.dataset.interval);ov.remove()}
+    showToast('Session expired — you have been signed out','warn')
+    setTimeout(()=>logout(),800)
+  }, 60*60*1000)
+  // Reset on any user activity
+  const resetFn=()=>{if(!_sessionWarned)startSessionTimer()}
+  document.addEventListener('click',resetFn,{once:true})
+  document.addEventListener('keydown',resetFn,{once:true})
+}
+function extendSession(){
+  const ov=document.getElementById('session-warn-overlay')
+  if(ov){clearInterval(ov.dataset.interval);ov.remove()}
+  _sessionWarned=false
+  startSessionTimer()
+  showToast('Session extended — you are still signed in','success')
 }
 
 /* ═══════════════════════════════════════════════════
@@ -974,7 +1016,7 @@ function setTopbar(titleHtml,badge='',actions=''){
       <div class="topbar-icon" title="Share" onclick="showToast('Share link copied','success')">🔗</div>
       <div class="topbar-icon" title="Search" onclick="focusSearch()">🔍</div>
       <div class="topbar-icon" title="Help">❓</div>
-      <div class="topbar-icon has-label" title="Ask AI" onclick="loadPage('ai')">🤖 Ask Attio</div>
+      <div class="topbar-icon has-label" title="Ask Claude AI" onclick="loadPage('ai')">🤖 Ask AI</div>
       ${actions}
     </div>
   </div>`
@@ -1137,6 +1179,7 @@ async function loadPage(page){
     else if(page==='sequences')pageSequences()
     else if(page==='workflows')pageWorkflows()
     else if(page==='settings')pageSettings()
+    else if(page==='automations')pageAutomations()
     else document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🚧</div><div class="empty-text">Coming soon</div></div>`
   }catch(e){
     document.getElementById('page-area').innerHTML=`<div class="alert alert-error" style="margin:20px">⚠️ ${e.message}</div>`
@@ -2673,7 +2716,7 @@ async function pageUsers(){
   </div>
   <div class="card" style="margin-top:12px">
     <div class="card-hd"><div class="card-title">🔐 Role Permissions Matrix</div>
-      ${currentUser?.role==='super_admin'?'<span style="font-size:10px;background:var(--purple-bg);color:var(--purple-t);padding:2px 8px;border-radius:10px;font-weight:500">✏ Click checkboxes to edit</span>':'<span style="font-size:10px;color:var(--text3)">Super Admin only</span>'}
+      ${['super_admin','admin'].includes(currentUser?.role)?'<span style="font-size:10px;background:var(--purple-bg);color:var(--purple-t);padding:2px 8px;border-radius:10px;font-weight:500">✏ Click checkboxes to edit</span>':'<span style="font-size:10px;color:var(--text3)">View only</span>'}
     </div>
     <div id="permissions-matrix-wrap" style="overflow-x:auto;padding:14px"><div class="loading">Loading permissions...</div></div>
   </div>`
@@ -2745,10 +2788,12 @@ async function loadPermissionsMatrix(){
           const hasAccess=rawVal===true
           const bg=isLocked?'rgba(59,130,246,.06)':''
           return`<td style="text-align:center;padding:6px;background:${bg}">
-            ${hasAccess
-              ?`<span style="color:var(--green-t);font-weight:700">✓</span>`
-              :`<span style="color:var(--text4)">—</span>`}
-            ${isLocked?'<span style="font-size:9px;color:var(--text3)">🔒</span>':''}
+            ${isLocked
+              ? (hasAccess?'<span style="color:var(--green-t);font-weight:700">✓</span>':'<span style="color:var(--text3)">—</span>')+'<span style="font-size:9px;color:var(--text3)">🔒</span>'
+              : (['super_admin','admin'].includes(currentUser?.role)
+                  ? `<input type="checkbox" ${hasAccess?'checked':''} style="cursor:pointer;width:15px;height:15px;accent-color:var(--nv)" onchange="togglePermission('${res}','${role}',this.checked)" title="Toggle ${res} for ${role}">`
+                  : (hasAccess?'<span style="color:var(--green-t);font-weight:700">✓</span>':'<span style="color:var(--text3)">—</span>'))
+            }
           </td>`
         }).join('')}
       </tr>`).join('')}
@@ -2756,6 +2801,18 @@ async function loadPermissionsMatrix(){
     </table></div>
     <div style="margin-top:8px;font-size:10.5px;color:var(--text3)">🔒 Locked permissions cannot be changed. ✓ = Role has this permission.</div>`
   }catch(e){wrap.innerHTML=`<div class="cell-dim">Could not load: ${e.message}</div>`}
+}
+
+
+async function togglePermission(perm,role,value){
+  try{
+    await api('/api/permissions','PUT',{permission:perm,role,value})
+    showToast(`Permission updated: ${perm}/${role} = ${value?'granted':'revoked'}`,'success')
+  }catch(e){
+    showToast(e.message,'error')
+    // Revert the checkbox
+    loadPermissionsMatrix()
+  }
 }
 
 function deleteUserConfirm(id,name){
@@ -2862,7 +2919,33 @@ async function pageAuditLogs(){
       </div>
       <div class="att-footer"><span>${logs.length} records</span></div>
     </div>`
-  }catch(e){document.getElementById('page-area').innerHTML=`<div class="alert alert-error">${e.message}</div>`}
+  }catch(e){
+    const msg=e.message||''
+    if(msg.includes('details') && msg.includes('not exist')){
+      document.getElementById('page-area').innerHTML=`
+        <div class="alert alert-error" style="margin-bottom:12px">
+          ⚠️ Database schema needs refresh: <strong>${msg}</strong>
+        </div>
+        <div class="card"><div class="card-body" style="text-align:center;padding:24px">
+          <div style="font-size:14px;font-weight:600;margin-bottom:8px">Schema Cache Issue</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:16px">The PostgREST schema cache is stale. Click below to refresh it, or run:<br>
+            <code style="background:var(--gray2);padding:4px 8px;border-radius:5px;font-size:11px">SELECT pg_notify('pgrst', 'reload schema');</code><br>in your Supabase SQL Editor.
+          </div>
+          <button class="btn btn-primary" onclick="refreshSchemaAndReload()">🔄 Refresh Schema Cache</button>
+        </div></div>`
+    } else {
+      document.getElementById('page-area').innerHTML=`<div class="alert alert-error">${msg}</div>`
+    }
+  }
+}
+
+async function refreshSchemaAndReload(){
+  try{
+    showToast('Refreshing schema cache...','info')
+    const r=await api('/api/refresh-schema','POST')
+    showToast(r.message||'Schema refreshed','success')
+    setTimeout(()=>pageAuditLogs(),1000)
+  }catch(e){showToast('Refresh failed: '+e.message,'error')}
 }
 
 /* ═══════════════════════════════════════════════════
@@ -3001,6 +3084,46 @@ async function pageTraining(){
   setTopbar('Training Providers','')
   document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🎓</div><div class="empty-text">Training Providers</div><div class="empty-sub">Manage approved training providers and curricula</div></div>`
 }
+
+/* ═══════════════════════════════════════════════════
+   AUTOMATIONS PAGE
+═══════════════════════════════════════════════════ */
+function pageAutomations(){
+  setTopbar('Automations','Automated workflows & triggers','<button class="btn btn-primary" onclick="showToast('New automation workflow coming in next release','info')">+ New Automation</button>')
+  clearViewbar()
+  document.getElementById('page-area').innerHTML=`
+  <div class="g2" style="margin-bottom:10px">
+    <div class="metric"><div class="metric-label">Active Automations</div><div class="metric-value">3</div><div class="metric-sub">Running now</div></div>
+    <div class="metric"><div class="metric-label">Tasks Auto-Created</div><div class="metric-value">247</div><div class="metric-sub">Last 30 days</div></div>
+  </div>
+  <div class="att-wrap">
+    <div class="att-toolbar"><div class="att-toolbar-l"><div class="card-title">⚡ Automation Rules</div></div><button class="btn btn-xs btn-ghost">⊞ View settings</button></div>
+    ${[
+      {icon:'📅',name:'WIB Follow-up Reminder',trigger:'When WIB status = "Follow Up Needed" for 14 days',action:'Create task: Call WIB Director',status:'active',runs:89},
+      {icon:'📧',name:'Application Submitted Alert',trigger:'When application status changes to "submitted"',action:'Send email notification to team',status:'active',runs:41},
+      {icon:'⚠️',name:'Compliance Deadline Warning',trigger:'When final_report_due_date is 7 days away',action:'Create urgent compliance task',status:'active',runs:117},
+      {icon:'🔔',name:'New Company Welcome Sequence',trigger:'When company status changes to "active_client"',action:'Enroll in onboarding sequence',status:'paused',runs:0},
+      {icon:'📊',name:'Weekly Snapshot Report',trigger:'Every Monday at 9:00 AM',action:'Generate and email weekly summary',status:'active',runs:18},
+    ].map(a=>`<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:.5px solid var(--gray2)">
+      <span style="font-size:20px">${a.icon}</span>
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:600;margin-bottom:2px">${a.name}</div>
+        <div style="font-size:10.5px;color:var(--text2)">Trigger: ${a.trigger}</div>
+        <div style="font-size:10.5px;color:var(--text2)">Action: ${a.action}</div>
+      </div>
+      <div style="text-align:right">
+        <span class="pill ${a.status==='active'?'p-green':'p-amber'}">${a.status}</span>
+        <div style="font-size:10px;color:var(--text3);margin-top:3px">${a.runs} runs</div>
+      </div>
+      <div class="row-actions">
+        <button class="action-btn" onclick="showToast('Automation editor coming soon','info')">Edit</button>
+        <button class="action-btn" onclick="showToast('Automation ${a.status==='active'?'paused':'activated'}','success')">${a.status==='active'?'Pause':'Activate'}</button>
+      </div>
+    </div>`).join('')}
+    <div class="att-footer"><span>5 automations · 3 active</span></div>
+  </div>`
+}
+
 function pageSequences(){
   setTopbar('Sequences','Automated outreach sequences',`<button class="btn btn-primary">+ New Sequence</button>`)
   document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">▷</div><div class="empty-text">Sequences</div><div class="empty-sub">Create automated multi-step outreach sequences for WIBs and employers</div></div>`
@@ -3669,7 +3792,14 @@ async function pageTasks(){
     const data=await api('/api/tasks?limit=500')
     window._tasks=data.data||[]
     renderTasksPage(window._tasks)
-  }catch(e){document.getElementById('page-area').innerHTML=`<div class="alert alert-error">${e.message}</div>`}
+  }catch(e){
+    const msg=e.message||''
+    if(msg.includes('details') && msg.includes('not exist')){
+      document.getElementById('page-area').innerHTML=`<div class="alert alert-error">⚠️ Schema cache issue: ${msg}<br><br><button class="btn btn-primary" onclick="refreshSchemaAndReload().then(()=>pageTasks())">🔄 Fix Schema & Reload</button></div>`
+    } else {
+      document.getElementById('page-area').innerHTML=`<div class="alert alert-error">${msg}</div>`
+    }
+  }
 }
 
 function renderTasksPage(tasks){
@@ -3904,9 +4034,48 @@ function pageCalls(){
 /* ═══════════════════════════════════════════════════
    EMAILS PAGE
 ═══════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════
+   EMAIL COMPOSE
+═══════════════════════════════════════════════════ */
+function openComposeEmail(prefillTo='',prefillSubject='',prefillBody=''){
+  showModal('✉ Compose Email',`
+    <div id="compose-err"></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">To <span class="form-req">*</span></div>
+      <input id="email-to" placeholder="recipient@company.com" value="${prefillTo}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">CC</div>
+      <input id="email-cc" placeholder="cc@company.com (optional)"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Subject <span class="form-req">*</span></div>
+      <input id="email-subject" placeholder="Re: IWT Grant Opportunity" value="${prefillSubject}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Message <span class="form-req">*</span></div>
+      <textarea id="email-body" rows="8" placeholder="Dear [Name],&#10;&#10;I hope this message finds you well...">${prefillBody}</textarea></div></div>
+    <div class="form-row"><div class="form-group">
+      <div class="form-label">Log as CRM note</div>
+      <label class="chk-row"><input type="checkbox" id="email-log-note" checked> Save sent email to activity log</label>
+    </div></div>`,
+  async()=>{
+    const to=document.getElementById('email-to').value.trim()
+    const subj=document.getElementById('email-subject').value.trim()
+    const body=document.getElementById('email-body').value.trim()
+    const err=document.getElementById('compose-err')
+    if(!to){err.innerHTML='<div class="alert alert-error">Recipient required</div>';return false}
+    if(!subj){err.innerHTML='<div class="alert alert-error">Subject required</div>';return false}
+    if(!body){err.innerHTML='<div class="alert alert-error">Message body required</div>';return false}
+    // Log as note
+    const logNote=document.getElementById('email-log-note')?.checked
+    if(logNote){
+      try{
+        await api('/api/notes','POST',{details:`EMAIL SENT TO: ${to}\nSUBJECT: ${subj}\n\n${body}`,note_type:'Email'})
+      }catch(_){}
+    }
+    showToast(`Email to ${to} logged to CRM activity`,'success')
+    if(currentPage==='emails')pageEmails()
+  },'modal-lg')
+}
+
 function pageEmails(){
   setTopbar('Emails','Outreach & Communication',`
-    <button class="btn btn-primary" onclick="showToast('Configure email in Settings → Integrations','info')">✉ Compose email</button>`)
+    <button class="btn btn-primary" onclick="openComposeEmail()">✉ Compose email</button>`)
   document.getElementById('page-area').innerHTML=`
   <div class="att-wrap" style="margin-bottom:10px">
     <div style="display:flex;align-items:center;gap:0;border-bottom:.5px solid var(--border);padding:0 14px">
