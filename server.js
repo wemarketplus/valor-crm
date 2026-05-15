@@ -1049,53 +1049,166 @@ app.post('/api/import/:type', auth, async (req, res) => {
       for (let i = 0; i < valid.length; i += 500) await bulkInsert('funding_opportunities', valid.slice(i, i + 500))
 
     } else if (type === 'applications') {
-      const valid = []
+      // Helper: extract company name from Attio's "Record" field
+      // Attio formats application names as "Company Name - Grant Type" or "Company Name - WIB Name - IWT"
+      const extractCompanyFromRecord = (record) => {
+        if (!record) return null
+        // Try splitting on common Attio separators
+        const separators = [' - CO ', ' - IW', ' - Tri', ' - TX', ' - FL', ' - NY', ' - CA', ' - AL', ' - TN']
+        for (const sep of separators) {
+          const idx = record.indexOf(sep)
+          if (idx > 3) return record.substring(0, idx).trim()
+        }
+        // Fall back: split on ' - ' (first occurrence, must leave at least 5 chars on each side)
+        const dashIdx = record.indexOf(' - ')
+        if (dashIdx > 4 && dashIdx < record.length - 4) return record.substring(0, dashIdx).trim()
+        return record.trim()
+      }
+
+      // Pre-load ALL companies into memory to avoid 50+ DB lookups per batch
+      const { data: allCompanies } = await supabase.from('companies').select('id,company_name')
+      const companyMap = new Map()
+      for (const co of (allCompanies || [])) {
+        companyMap.set(co.company_name.toLowerCase().trim(), co.id)
+        // Also index by first 30 chars for partial matching
+        companyMap.set(co.company_name.toLowerCase().trim().substring(0, 30), co.id)
+      }
+
+      // Pre-load ALL WIBs
+      const { data: allWibs } = await supabase.from('wib_records').select('id,wib_name,short_name,state')
+      const wibMap = new Map()
+      for (const w of (allWibs || [])) {
+        wibMap.set(w.wib_name.toLowerCase().trim(), w.id)
+        if (w.short_name) wibMap.set(w.short_name.toLowerCase().trim(), w.id)
+      }
+
+      // Helper: find company ID with fuzzy matching
+      const findCompanyId = (name) => {
+        if (!name) return null
+        const lower = name.toLowerCase().trim()
+        // Exact match
+        if (companyMap.has(lower)) return companyMap.get(lower)
+        // Partial match — company name starts with search term
+        for (const [key, id] of companyMap) {
+          if (key.startsWith(lower.substring(0, Math.min(20, lower.length)))) return id
+          if (lower.startsWith(key.substring(0, Math.min(20, key.length)))) return id
+        }
+        // Contains match
+        for (const [key, id] of companyMap) {
+          if (key.includes(lower.substring(0, 15)) || lower.includes(key.substring(0, 15))) return id
+        }
+        return null
+      }
+
+      // Helper: find WIB ID
+      const findWibId = (name) => {
+        if (!name) return null
+        const lower = name.toLowerCase().trim()
+        if (wibMap.has(lower)) return wibMap.get(lower)
+        for (const [key, id] of wibMap) {
+          if (key.includes(lower.substring(0, 10)) || lower.includes(key.substring(0, 10))) return id
+        }
+        return null
+      }
+
+      const appStatusMap = {
+        'intake': 'intake', 'new': 'intake', 'open': 'intake', 'lead': 'intake',
+        'in progress': 'in_progress', 'in_progress': 'in_progress', 'active': 'in_progress',
+        'submitted': 'submitted', 'pending': 'submitted',
+        'under review': 'under_review', 'under_review': 'under_review', 'review': 'under_review',
+        'awarded': 'awarded', 'won': 'awarded', 'approved': 'awarded', 'funded': 'awarded',
+        'denied': 'denied', 'rejected': 'denied', 'lost': 'denied', 'closed lost': 'denied',
+        'withdrawn': 'withdrawn', 'cancelled': 'withdrawn',
+        'completed': 'active', 'closed': 'active',
+      }
+
       for (const row of rows) {
-        // Look up company and WIB by name to get their IDs
-        const companyName = row['Company']?.trim() || row['Company Name']?.trim() || row['Employer']?.trim() || row['Record']?.trim()
-        const wibName = row['WIB']?.trim() || row['Workforce Board']?.trim() || row['WIB Name']?.trim()
-        if (!companyName) { results.errors.push('Skipped row — Company name required'); continue }
+        // Get the record/application name (e.g. "Pine Valley - CO Tri-County - IWT")
+        const recordName = row['Record']?.trim() || row['Application']?.trim() || row['Name']?.trim() || ''
+        
+        // Get company — try dedicated column first, then parse from Record
+        const rawCompany = row['Company']?.trim() || row['Company Name']?.trim() || 
+          row['Employer']?.trim() || row['Account']?.trim() || row['Account Name']?.trim()
+        const companyName = rawCompany || extractCompanyFromRecord(recordName)
+        
+        if (!companyName) { results.errors.push('Skipped row — no company name'); continue }
 
         // Find company ID
-        let company_id = null
-        if (companyName) {
-          const { data: cos } = await supabase.from('companies').select('id').ilike('company_name', `%${companyName}%`).limit(1)
-          company_id = cos?.[0]?.id || null
-        }
-        // Find WIB ID
-        let wib_id = null
-        if (wibName) {
-          const { data: wibs } = await supabase.from('wib_records').select('id').ilike('wib_name', `%${wibName}%`).limit(1)
-          wib_id = wibs?.[0]?.id || null
+        const company_id = findCompanyId(companyName)
+        
+        // Get WIB — try dedicated column first, then parse from Record
+        const rawWib = row['WIB']?.trim() || row['Workforce Board']?.trim() || 
+          row['WIB Name']?.trim() || row['Board']?.trim()
+        const wibName = rawWib || (() => {
+          // Try to extract WIB from record name: "Company - WIB - Type"
+          const parts = recordName.split(' - ')
+          if (parts.length >= 2) return parts[1]?.trim()
+          return null
+        })()
+        const wib_id = findWibId(wibName)
+
+        if (!company_id) {
+          results.errors.push(`Skipped "${companyName}" — not found in Companies (import companies first)`)
+          continue
         }
 
-        if (!company_id) { results.errors.push(`Skipped "${companyName}" — company not found in system (add it first)`); continue }
+        const rawStatus = (row['Status'] || row['Stage'] || row['Application Stage'] || 'intake').toLowerCase().trim()
+        const status = appStatusMap[rawStatus] || 'intake'
 
-        const rawStatus = (row['Status'] || row['Stage'] || 'intake').toLowerCase()
-        const statusMap = {
-          'intake': 'intake', 'in progress': 'in_progress', 'in_progress': 'in_progress',
-          'submitted': 'submitted', 'under review': 'under_review', 'under_review': 'under_review',
-          'awarded': 'awarded', 'denied': 'denied', 'withdrawn': 'withdrawn', 'active': 'active',
+        const getAmt = (...keys) => {
+          for (const k of keys) {
+            const v = row[k]
+            if (v && String(v).trim()) return parseFloat(String(v).replace(/[$, ]/g,'')) || null
+          }
+          return null
         }
-        const status = statusMap[rawStatus] || 'intake'
+        
+        const getDate = (...keys) => {
+          for (const k of keys) {
+            const v = row[k]
+            if (v && String(v).trim()) return String(v).trim().split('T')[0]
+          }
+          return null
+        }
 
-        valid.push({
+        // Build notes from all captured fields
+        const noteParts = []
+        if (recordName) noteParts.push(`Application: ${recordName}`)
+        if (row['Notes'] || row['Description'] || row['Comments']) noteParts.push(row['Notes'] || row['Description'] || row['Comments'])
+        // Capture any extra Attio fields
+        const knownKeys = new Set(['Record ID','Record','Status','Stage','Company','Company Name','Employer','Account','Account Name',
+          'WIB','Workforce Board','WIB Name','Board','Notes','Description','Comments',
+          'Award Requested','Amount Requested','Award Approved','Amount Approved','Application Approved Amount',
+          'Submission Date','Submitted','Decision Date','Decision','Created','Updated','Owner','Record Stage'])
+        const extras = Object.entries(row).filter(([k,v]) => !knownKeys.has(k) && v && String(v).trim())
+        if (extras.length) noteParts.push('--- Additional ---\n' + extras.map(([k,v])=>k+': '+v).join('\n'))
+
+        const insertRow = {
           company_id,
-          wib_id,
           status,
-          award_amount_requested: (() => { const v = row['Award Requested'] || row['Amount Requested'] || row['Requested']; return v ? parseFloat(String(v).replace(/[$,]/g,'')) : null })(),
-          award_amount_approved: (() => { const v = row['Award Approved'] || row['Amount Approved'] || row['Approved']; return v ? parseFloat(String(v).replace(/[$,]/g,'')) : null })(),
-          submission_date: row['Submission Date'] || row['Submitted'] || null,
-          decision_date: row['Decision Date'] || row['Decision'] || null,
-          notes: row['Notes'] || row['Description'] || null,
+          notes: noteParts.join('\n') || null,
           owner_id: req.user.id,
-        })
-      }
-      // Applications must be inserted one at a time (triggers auto-number generation)
-      for (const app of valid) {
-        const { error } = await supabase.from('applications').insert(app)
-        if (error) results.errors.push(`Insert error: ${error.message}`)
-        else results.created++
+        }
+        if (wib_id) insertRow.wib_id = wib_id
+        const awarded = getAmt('Application Approved Amount','Award Approved','Amount Approved','Approved Amount','Awarded Amount')
+        const requested = getAmt('Award Requested','Amount Requested','Requested Amount','Application Amount')
+        if (awarded) insertRow.award_amount_approved = awarded
+        if (requested) insertRow.award_amount_requested = requested
+        const subDate = getDate('Submission Date','Submitted','Submit Date','Date Submitted')
+        const decDate = getDate('Decision Date','Decision','Approved Date','Award Date')
+        if (subDate) insertRow.submission_date = subDate
+        if (decDate) insertRow.decision_date = decDate
+
+        const { error } = await supabase.from('applications').insert(insertRow)
+        if (error) {
+          results.errors.push(`"${companyName}": ${error.message}`)
+          if (results.errors.length === 1) {
+            console.error('First app import error:', error.code, error.message)
+            console.error('Row:', JSON.stringify(insertRow))
+          }
+        } else {
+          results.created++
+        }
       }
 
     } else if (type === 'wibs') {
