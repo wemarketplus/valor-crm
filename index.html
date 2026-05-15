@@ -1989,6 +1989,21 @@ function closeIEMenu(){
   if(ol)ol.style.display='none'
 }
 
+async function runImportDiagnostic(type){
+  const preview=document.getElementById('import-preview')
+  if(preview)preview.innerHTML='<div style="padding:8px;color:var(--text3)">🔍 Testing database connection...</div>'
+  try{
+    const r=await api('/api/import-test','POST',{row:{company_name:'Diagnostic Test '+Date.now(),status:'prospect'}})
+    if(r.success){
+      if(preview)preview.innerHTML='<div class="alert alert-success">✅ Database connection OK — the issue is with your CSV column names or data format. Download the template to see required columns.</div>'
+    } else {
+      if(preview)preview.innerHTML=`<div class="alert alert-error">❌ Database error: <strong>${r.db_error||r.threw}</strong>${r.db_hint?'<br>Hint: '+r.db_hint:''}</div>`
+    }
+  }catch(e){
+    if(preview)preview.innerHTML=`<div class="alert alert-error">❌ Could not connect: ${e.message}</div>`
+  }
+}
+
 function importCSV(type){
   closeIEMenu()
   const typeNotes={
@@ -2009,7 +2024,8 @@ function importCSV(type){
     </div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Upload CSV or Excel File (.csv, .xlsx, .xls)</div>
       <input type="file" accept=".csv,.xlsx,.xls" id="import-file-input" onchange="processCSVImport(this,'${type}')"></div></div>
-    <div id="import-preview" style="margin-top:10px"></div>`,
+    <div id="import-preview" style="margin-top:10px"></div>
+    <div style="margin-top:8px"><button class="btn btn-sm btn-ghost" onclick="runImportDiagnostic('${type}')">🔍 Test DB Connection</button></div>`,
   async()=>{
     if(!window._importRows||!window._importRows.length){
       showToast('Please select and preview a CSV file first','warn');return false
@@ -2087,6 +2103,13 @@ function importCSV(type){
         if(!r)throw lastErr
         totalCreated+=r.created||0
         if(r.errors?.length)totalErrors.push(...r.errors)
+        // Show column names detected on first batch for debugging
+        if(b===0 && r.first_row_keys?.length){
+          const colInfo=document.getElementById('import-prog-detail')
+          if(colInfo&&!totalCreated)colInfo.textContent='Columns detected: '+r.first_row_keys.join(', ')
+        }
+        // Use server's error_count for accurate total if truncated
+        if(r.error_count&&r.error_count>totalErrors.length)totalErrors.length=Math.min(r.error_count,totalErrors.length+50)
       }
 
       // Final progress update
@@ -2107,11 +2130,29 @@ function importCSV(type){
         if(detail)detail.innerHTML=`<span style="color:var(--amber-t)">${totalErrors.length} rows skipped — ${totalErrors.slice(0,3).join('; ')}${totalErrors.length>3?' ...':''}</span>`
       }
 
-      // Close modal after a short delay then reload
-      setTimeout(()=>{
-        closeModal()
-        if(currentPage===type||currentPage===type.replace('-',''))loadPage(currentPage)
-      },1500)
+      // If errors, stay open and show them — don't auto-close
+      if(totalErrors.length>0 && totalCreated===0){
+        // Nothing imported — show error details prominently
+        if(preview){
+          const sample=totalErrors.slice(0,5).join('<br>')
+          preview.innerHTML=`
+            <div class="alert alert-error" style="margin-top:8px">
+              <strong>⚠️ Import failed — 0 records created, ${totalErrors.length} rows had errors</strong><br><br>
+              <strong>First errors:</strong><br>${sample}${totalErrors.length>5?'<br>...and '+(totalErrors.length-5)+' more':''}<br><br>
+              <strong>Common fixes:</strong><br>
+              • Check that your column names match the template<br>
+              • Make sure required fields (Company Name) are not empty<br>
+              • Check for duplicate company names already in the system
+            </div>`
+        }
+        if(btn){btn.textContent='Save';btn.disabled=false}
+      } else {
+        // Partial or full success — close and reload
+        setTimeout(()=>{
+          closeModal()
+          if(currentPage===type||currentPage===type.replace('-',''))loadPage(currentPage)
+        },totalErrors.length>0?3000:1500)
+      }
 
     }catch(e){
       const errMsg=e.message||'Unknown error'
