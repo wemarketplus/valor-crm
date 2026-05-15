@@ -692,7 +692,13 @@ async function api(url, method='GET', body=null){
   try { d = await r.json() } catch(e) { throw new Error(`Server error (${r.status})`) }
   if(r.status===401){ token=null; localStorage.removeItem('valor_token'); render(); throw new Error('Session expired') }
   if(r.status===403) throw new Error(d.error||'Permission denied')
-  if(!r.ok) throw new Error(d.error||`Request failed (${r.status})`)
+  if(!r.ok) {
+    const err = new Error(d.error||`Request failed (${r.status})`)
+    err.status = r.status
+    err.raw = JSON.stringify(d)
+    err.data = d
+    throw err
+  }
   return d
 }
 
@@ -2028,6 +2034,80 @@ async function deleteNote(id){
 /* ═══════════════════════════════════════════════════
    WIB MODAL
 ═══════════════════════════════════════════════════ */
+function showDuplicateCompanyModal(newData, existing) {
+  showModal('⚠️ Duplicate Company Detected',
+    `<div style="margin-bottom:14px">
+      <div style="font-size:13px;font-weight:600;color:var(--text);margin-bottom:8px">
+        A company with this name already exists in the CRM:
+      </div>
+      <div style="background:var(--bg2);border-radius:8px;padding:12px 14px;border:.5px solid var(--border1)">
+        <div style="font-size:13px;font-weight:700;color:var(--nv)">${existing?.company_name||newData.company_name}</div>
+        ${existing?.domain?`<div style="font-size:11px;color:var(--text3);margin-top:3px">🌐 ${existing.domain}</div>`:''}
+        ${existing?.status?`<div style="font-size:11px;color:var(--text3);margin-top:2px">Status: ${existing.status}</div>`:''}
+      </div>
+      <div style="margin-top:14px;font-size:12px;color:var(--text2);line-height:1.6">
+        What would you like to do?
+      </div>
+      <div style="display:grid;gap:10px;margin-top:12px">
+        <div style="border:.5px solid var(--green);border-radius:8px;padding:12px 14px;cursor:pointer;background:var(--green-bg)" 
+             onclick="doMergeCompany('${existing?.id}',${JSON.stringify(JSON.stringify(newData))})">
+          <div style="font-weight:600;color:var(--green-t);font-size:12px">🔀 Merge — Fill in missing fields</div>
+          <div style="font-size:10.5px;color:var(--text3);margin-top:3px">
+            Adds any new information to the existing record. Never overwrites existing data.
+          </div>
+        </div>
+        <div style="border:.5px solid var(--border1);border-radius:8px;padding:12px 14px;cursor:pointer;background:var(--bg2)"
+             onclick="doForceCreateCompany(${JSON.stringify(JSON.stringify(newData))})">
+          <div style="font-weight:600;color:var(--text);font-size:12px">➕ Create Anyway — Add as separate record</div>
+          <div style="font-size:10.5px;color:var(--text3);margin-top:3px">Creates a new duplicate entry regardless.</div>
+        </div>
+        <div style="border:.5px solid var(--border1);border-radius:8px;padding:12px 14px;cursor:pointer"
+             onclick="closeModal()">
+          <div style="font-weight:600;color:var(--text3);font-size:12px">✕ Cancel — Do not add</div>
+        </div>
+      </div>
+    </div>`,
+  null  /* no OK button — action buttons are inline */
+  )
+}
+
+async function doMergeCompany(existingId, newDataJson) {
+  try {
+    const newData = JSON.parse(newDataJson)
+    await api('/api/companies','POST',{ ...newData, merge: true, merge_into_id: existingId, force: true })
+    closeModal()
+    showToast('✅ Records merged successfully','success')
+    loadPage('companies')
+  } catch(e) { showToast(e.message,'error') }
+}
+
+async function doForceCreateCompany(newDataJson) {
+  try {
+    const newData = JSON.parse(newDataJson)
+    await api('/api/companies','POST',{ ...newData, force: true })
+    closeModal()
+    showToast('Company created','success')
+    loadPage('companies')
+  } catch(e) { showToast(e.message,'error') }
+}
+
+async function runDeduplication() {
+  showModal('🧹 De-duplicate Companies',
+    `<div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+      This will scan all companies for duplicates (same name), merge their data, 
+      and delete the redundant records. Locations and Applications will be re-linked 
+      to the surviving record automatically.
+    </div>
+    <div class="alert alert-warn">This action cannot be undone. Make sure you have a backup.</div>`,
+  async()=>{
+    try{
+      const r=await api('/api/companies/dedup','POST',{})
+      showToast('Done — '+r.merged+' merged, '+r.deleted+' deleted','success')
+      loadPage('companies')
+    }catch(e){showToast(e.message,'error');return false}
+  })
+}
+
 function openWibModal(wib=null){
   const statusOpts=['not_contacted','contacted','funding_available','follow_up_needed','funding_not_available','network_member'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
@@ -2101,6 +2181,7 @@ async function pageCompanies(){
         <div class="ie-item" onclick="closeAllIE();exportPDF('companies')"><span class="ie-icon">📄</span>Export as PDF</div>
       </div>
     </div>
+    <button class="btn" onclick="runDeduplication()" style="display:inline-flex;align-items:center;gap:4px;background:var(--bg2);border-color:var(--border1);color:var(--text2)">🧹 De-dup</button>
     <button class="btn btn-primary" onclick="openCompanyModal()">+ New Company</button>`)
 
   setViewbar([
@@ -2612,7 +2693,22 @@ function openCompanyModal(co=null){
     if(!payload.company_name){showToast('Company name required','error');return false}
     try{
       if(co)await api('/api/companies/'+co.id,'PUT',payload)
-      else await api('/api/companies','POST',payload)
+      else {
+        // Duplicate detection — catch 409 and show merge dialog
+        try {
+          await api('/api/companies','POST',payload)
+        } catch(e) {
+          if(e.status===409||e.message?.includes('already exists')) {
+            // Parse the duplicate info from the error
+            let existing=null
+            try{ existing=JSON.parse(e.raw||'{}').existing }catch{}
+            closeModal()
+            showDuplicateCompanyModal(payload, existing)
+            return
+          }
+          throw e
+        }
+      }
       showToast(co?'Company updated':'Company created','success')
       if(currentPage==='company-profile'&&co){currentCompany={...currentCompany,...payload};renderCompanyProfile()}
       else loadPage('companies')
@@ -3901,8 +3997,14 @@ async function pageApplications(){
     <div class="ie-wrap">
       <button class="btn ie-btn" onclick="toggleIEMenu('app-ie')">⬆ Import / Export ∨</button>
       <div class="ie-menu" id="app-ie">
-        <div class="ie-item" onclick="closeAllIE();exportCSV('applications')"><span class="ie-icon">📤</span>Export CSV</div>
-        <div class="ie-item" onclick="closeAllIE();exportExcel('applications')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-menu-hd">Import & Export</div>
+        <div class="ie-group-label">Import</div>
+        <div class="ie-item" onclick="closeAllIE();openImportModal('applications')"><span class="ie-icon">📥</span>Import from CSV / Excel<span class="ie-item-hint">Requires companies imported first</span></div>
+        <div class="ie-sep"></div>
+        <div class="ie-group-label">Export</div>
+        <div class="ie-item" onclick="closeAllIE();exportCSV('applications')"><span class="ie-icon">📤</span>Export as CSV</div>
+        <div class="ie-item" onclick="closeAllIE();exportExcel('applications')"><span class="ie-icon">📊</span>Export as Excel (.xlsx)</div>
+        <div class="ie-item" onclick="closeAllIE();exportPDF('applications')"><span class="ie-icon">📄</span>Export as PDF</div>
       </div>
     </div>
     <button class="btn btn-primary" onclick="openNewApplicationModal()">+ New Application</button>`)
