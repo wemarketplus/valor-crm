@@ -1983,11 +1983,19 @@ function closeIEMenu(){
 
 function importCSV(type){
   closeIEMenu()
+  const typeNotes={
+    applications:'<div class="alert alert-warn" style="margin-top:8px">⚠️ Applications import requires Companies to already exist in the system. Rows where the company isn\'t found will be skipped.</div>',
+    wibs:'<div class="alert alert-warn" style="margin-top:8px">📋 Required columns: <strong>WIB Name</strong>. Source URL will use WIB Name as fallback if missing.</div>',
+    companies:'<div class="alert alert-info" style="margin-top:8px">📋 Accepts any column format — the system auto-detects company name, status, email, phone, and more.</div>',
+    locations:'<div class="alert alert-warn" style="margin-top:8px">📋 Required columns: <strong>Location Name</strong>.</div>',
+    funding:'<div class="alert alert-warn" style="margin-top:8px">📋 Required columns: <strong>Opportunity Name</strong>.</div>',
+  }
   showModal(`📥 Import ${type.charAt(0).toUpperCase()+type.slice(1)}`,`
     <div class="alert alert-info">
       No row limit — import files of any size. Large files are automatically sent in batches.
       Download the template to see the required column format.
     </div>
+    ${typeNotes[type]||''}
     <div style="margin:10px 0">
       <button class="btn btn-sm" onclick="downloadTemplate('${type}')">⬇️ Download CSV Template</button>
     </div>
