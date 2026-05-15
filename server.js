@@ -129,19 +129,50 @@ async function logActivity(payload) {
 // Refresh Supabase PostgREST schema cache to fix 'column not found' errors
 async function refreshSchemaCache() {
   try {
-    // Trigger schema cache reload by making a simple query
-    await supabase.from('activity_log').select('id,action,details,metadata,created_at').limit(1)
-    console.log('✓ Schema cache verified: activity_log.details accessible')
+    // Try to access 'details' column to test schema cache
+    const { data, error } = await supabase.from('activity_log').select('id,action,details,metadata,created_at').limit(1)
+    if (error && error.message?.includes("'details'")) {
+      console.warn('PostgREST schema cache missing details column — triggering reload via RPC')
+      // Use Supabase service key to call pg_notify to reload PostgREST schema
+      try {
+        await supabase.rpc('reload_pgrst_schema').catch(() => null)
+      } catch(e2) { /* rpc may not exist, that's ok */ }
+      global._detailsColumnMissing = true
+      console.warn('Will use metadata-only inserts until schema cache refreshes')
+    } else {
+      global._detailsColumnMissing = false
+      console.log('✓ Schema cache OK: activity_log.details accessible')
+    }
   } catch(e) {
     console.warn('Schema cache check failed:', e.message)
+    global._detailsColumnMissing = true
   }
 }
-// Run on startup
-setTimeout(refreshSchemaCache, 2000)
+// Run on startup and every 5 minutes
+setTimeout(refreshSchemaCache, 1000)
+setInterval(refreshSchemaCache, 5 * 60 * 1000)
 
 app.post('/api/refresh-schema', auth, requireAdmin, async (req, res) => {
+  try {
+    // Method 1: Try pg_notify via RPC to reload PostgREST schema
+    const { error: rpcError } = await supabase.rpc('reload_pgrst_schema')
+    if (!rpcError) {
+      global._detailsColumnMissing = false
+      return res.json({ success: true, message: 'Schema cache reloaded via pg_notify' })
+    }
+  } catch(e1) { /* rpc might not exist */ }
+  
+  // Method 2: Test if details column is now accessible
   await refreshSchemaCache()
-  res.json({ success: true, message: 'Schema cache refreshed' })
+  const accessible = !global._detailsColumnMissing
+  res.json({
+    success: accessible,
+    details_column: accessible ? 'accessible' : 'still missing - using metadata fallback',
+    message: accessible
+      ? 'Schema cache OK - tasks and notes will use the details column'
+      : 'Schema cache issue persists. Run this SQL in Supabase SQL Editor: SELECT pg_notify($$pgrst$$, $$reload schema$$); Then retry.',
+    sql_fix: "SELECT pg_notify('pgrst', 'reload schema');" 
+  })
 })
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
@@ -490,44 +521,56 @@ app.put('/api/revenue/:id', auth, async (req, res) => {
 // ─── NOTES ────────────────────────────────────────────────────────────────────
 app.get('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, limit = 50 } = req.query
-  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name,email)').eq('action', 'NOTE')
+  let q = supabase.from('activity_log').select('id,action,metadata,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)').eq('action', 'NOTE')
   if (record_type) q = q.eq('record_type', record_type)
   if (record_id) q = q.eq('record_id', record_id)
-  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 100))
+  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 200))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
+  // Normalize: add details from metadata.content for compatibility
+  const normalized = (data || []).map(n => ({
+    ...n, details: n.metadata?.content || n.metadata?.note_type || 'Note'
+  }))
+  res.json({ data: normalized })
 })
 
 app.post('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, content, note_type = 'Note', is_aircall = false } = req.body
   if (!content?.trim()) return res.status(400).json({ error: 'Note content required' })
   const insertPayload = {
-    user_id: req.user.id, action: 'NOTE', record_type: record_type || null, record_id: record_id || null,
-    details: content.trim(), metadata: { note_type, is_aircall, content: content.trim() }
+    user_id: req.user.id, action: 'NOTE',
+    record_type: record_type || null, record_id: record_id || null,
+    metadata: { note_type, is_aircall, content: content.trim() }
   }
+  // Only include 'details' if schema cache confirms it exists
+  if (!global._detailsColumnMissing) insertPayload.details = content.trim()
   let { data, error } = await supabase.from('activity_log').insert(insertPayload)
     .select('*, user:user_profiles!user_id(full_name,email)').single()
   if (error && error.message?.includes("'details'")) {
-    // Schema cache issue — retry without details, store content in metadata only
-    console.warn('details column cache miss — using metadata.content fallback')
+    global._detailsColumnMissing = true
     delete insertPayload.details
     ;({ data, error } = await supabase.from('activity_log').insert(insertPayload)
       .select('*, user:user_profiles!user_id(full_name,email)').single())
   }
   if (error) return res.status(400).json({ error: error.message })
+  // Normalize: ensure details field exists in response from metadata fallback
+  if (data && !data.details && data.metadata?.content) data.details = data.metadata.content
   res.json(data)
 })
 
 // ─── TASKS ────────────────────────────────────────────────────────────────────
 app.get('/api/tasks', auth, async (req, res) => {
   const { record_id, limit = 100 } = req.query
-  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name)').eq('action', 'TASK')
+  let q = supabase.from('activity_log').select('id,action,metadata,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name)').eq('action', 'TASK')
   if (record_id) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 100))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
+  // Normalize: add details from metadata.title for compatibility
+  const normalized = (data || []).map(t => ({
+    ...t, details: t.metadata?.title || t.metadata?.content || 'Task'
+  }))
+  res.json({ data: normalized })
 })
 
 app.post('/api/tasks', auth, async (req, res) => {
@@ -535,16 +578,18 @@ app.post('/api/tasks', auth, async (req, res) => {
   if (!title?.trim()) return res.status(400).json({ error: 'Task title required' })
   const taskPayload = {
     user_id: req.user.id, action: 'TASK', record_type: record_type || null, record_id: record_id || null,
-    details: title.trim(),
     metadata: { due_date, priority, notes, done: false, assigned_to, title: title.trim(), created_by: req.user.full_name || req.user.email }
   }
+  if (!global._detailsColumnMissing) taskPayload.details = title.trim()
   let { data, error } = await supabase.from('activity_log').insert(taskPayload).select().single()
   if (error && error.message?.includes("'details'")) {
-    console.warn('details column cache miss on task insert — using metadata fallback')
+    global._detailsColumnMissing = true
     delete taskPayload.details
     ;({ data, error } = await supabase.from('activity_log').insert(taskPayload).select().single())
   }
   if (error) return res.status(400).json({ error: error.message })
+  // Normalize: ensure title is accessible for frontend
+  if (data && !data.details) data.details = data.metadata?.title || 'Task'
   res.json(data)
 })
 
@@ -897,17 +942,57 @@ app.post('/api/import/:type', auth, async (req, res) => {
         ])
         const extras = Object.entries(row).filter(([k,v]) => !knownWibKeys.has(k) && v && String(v).trim() && String(v).trim() !== 'Not applicable')
         const noteParts = []
-        if (extras.length) noteParts.push('Attio Data:\n' + extras.map(([k,v]) => k+': '+v).join('\n'))
+        // Extract contacts (Attio: "Contacts > Name" column has multiple people)
+        const contactCols = Object.entries(row).filter(([k,v]) => /contact.*name|contacts.*name/i.test(k) && v && String(v).trim() !== 'Not applicable')
+        if (contactCols.length) noteParts.push('Contacts: ' + contactCols.map(([,v])=>v).join(', '))
+        // Call priority score from Attio readonly field
+        const callPriorityVal = getWibField(row, 'Call Priority','call_priority','READONLY In-Network','Priority Score','In-Network Locations')
+        if (callPriorityVal) noteParts.push('Call Priority Score: ' + callPriorityVal)
+        // Type (State vs Regional)
+        const wibTypeVal = getWibField(row, 'Type','WIB Type','Board Type','Organization Type')
+        if (wibTypeVal) noteParts.push('WIB Type: ' + wibTypeVal)
+        // Zipcodes from Attio
+        const zipVal = getWibField(row, 'Zipcode','Regional Zipcode','State Zipcode','zip','zipcodes')
+        if (zipVal) noteParts.push('Service Area Zipcodes: ' + zipVal)
+        if (extras.length) noteParts.push('Additional Data:\n' + extras.map(([k,v]) => k+': '+v).join('\n'))
+
+        // Extract state from name prefix (Attio format: "TX - Board Name" or "MN - Board Name")
+        const stateFromName = (() => {
+          const match = name.match(/^([A-Z]{2})\s*-\s*/)
+          if (match) return match[1]
+          return null
+        })()
+
+        // State full-name to abbreviation map
+        const stateAbbr = {
+          'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA',
+          'colorado':'CO','connecticut':'CT','delaware':'DE','florida':'FL','georgia':'GA',
+          'hawaii':'HI','idaho':'ID','illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS',
+          'kentucky':'KY','louisiana':'LA','maine':'ME','maryland':'MD','massachusetts':'MA',
+          'michigan':'MI','minnesota':'MN','mississippi':'MS','missouri':'MO','montana':'MT',
+          'nebraska':'NE','nevada':'NV','new hampshire':'NH','new jersey':'NJ','new mexico':'NM',
+          'new york':'NY','north carolina':'NC','north dakota':'ND','ohio':'OH','oklahoma':'OK',
+          'oregon':'OR','pennsylvania':'PA','rhode island':'RI','south carolina':'SC',
+          'south dakota':'SD','tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT',
+          'virginia':'VA','washington':'WA','west virginia':'WV','wisconsin':'WI','wyoming':'WY',
+          'district of columbia':'DC','puerto rico':'PR'
+        }
+
+        const rawState = getWibField(row, 'State','Region','State/Province','Zipcode > State','State Zipcode > State')
+        const stateValue = stateFromName
+          || (rawState && rawState.length === 2 ? rawState.toUpperCase() : null)
+          || (rawState ? stateAbbr[rawState.toLowerCase()] : null)
+          || 'US'  // Final fallback — 'state' is NOT NULL in wib_records
 
         valid.push({
           wib_name: name,
           short_name: getWibField(row, 'Short Name','Short','Abbreviation','Acronym') || null,
-          state: getWibField(row, 'State','Region') || null,
+          state: stateValue,
           status,
           wib_email: getWibField(row, 'WIB Email Address','Email Address','Email','Contact Email') || null,
           wib_phone: getWibField(row, 'Phone','WIB Phone','Contact Phone','Phone Number') || null,
           website: domain || null,
-          source_url: website || name,
+          source_url: website || name || 'https://careerOneStop.org', // NOT NULL in DB
           notes: noteParts.join('\n') || null,
           independent_creation_logged: true,
           owner_id: req.user.id,
