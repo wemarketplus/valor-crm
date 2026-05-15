@@ -601,6 +601,109 @@ app.delete('/api/users/:id', auth, requireSuper, async (req, res) => {
   }
 })
 
+
+// ─── ROLE PERMISSIONS ────────────────────────────────────────────────────────
+// Default permissions matrix — used as fallback if DB table doesn't exist yet
+const DEFAULT_PERMISSIONS = {
+  view_records:          { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:true,  external_partner:true  },
+  create_wibs_companies: { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:true,  external_partner:false },
+  edit_wibs_companies:   { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:true,  external_partner:false },
+  delete_records:        { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
+  create_edit_apps:      { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:true,  external_partner:false },
+  view_revenue:          { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:true,  external_partner:false },
+  manage_invoices:       { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:false, external_partner:false },
+  compliance_tracking:   { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:false, external_partner:false },
+  notes_tasks:           { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:true,  external_partner:false },
+  ai_assistant:          { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:true,  external_partner:false },
+  import_export:         { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:true,  external_partner:false },
+  audit_logs:            { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
+  manage_users:          { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
+  assign_roles:          { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
+  assign_super_admin:    { super_admin:true,  admin:false, grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
+  system_settings:       { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
+}
+
+// Locked permissions that can never be changed (core security rules)
+const LOCKED_PERMISSIONS = {
+  view_records:       { external_partner: true },  // Read-only must be able to view
+  manage_users:       { super_admin: true },         // Super admin always manages users
+  assign_super_admin: { super_admin: true },         // Super admin always self-assigns
+  system_settings:    { super_admin: true },         // Super admin always has settings
+  assign_roles:       { super_admin: true },         // Super admin always assigns roles
+}
+
+// In-memory permission store (persists for server lifetime, survives across requests)
+let _permissionsCache = null
+
+async function loadPermissions() {
+  if (_permissionsCache) return _permissionsCache
+  try {
+    const { data, error } = await supabase.from('role_permissions').select('*').single()
+    if (!error && data?.permissions) {
+      _permissionsCache = { ...DEFAULT_PERMISSIONS, ...data.permissions }
+    } else {
+      _permissionsCache = { ...DEFAULT_PERMISSIONS }
+    }
+  } catch {
+    _permissionsCache = { ...DEFAULT_PERMISSIONS }
+  }
+  return _permissionsCache
+}
+
+async function savePermissions(perms) {
+  _permissionsCache = perms
+  try {
+    // Try upsert into role_permissions table
+    const { error } = await supabase.from('role_permissions').upsert({ id: 1, permissions: perms, updated_at: new Date().toISOString() })
+    if (error) console.warn('role_permissions table may not exist yet — permissions stored in memory only. Run the SQL migration to persist.')
+  } catch(e) {
+    console.warn('Permissions save failed:', e.message)
+  }
+}
+
+app.get('/api/permissions', auth, async (req, res) => {
+  try {
+    const perms = await loadPermissions()
+    res.json({ permissions: perms, locked: LOCKED_PERMISSIONS })
+  } catch(e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.put('/api/permissions', auth, requireSuper, async (req, res) => {
+  try {
+    const { permission, role, value } = req.body
+    if (!permission || !role || value === undefined) return res.status(400).json({ error: 'permission, role, and value required' })
+    if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' })
+    // Check if this is a locked permission
+    if (LOCKED_PERMISSIONS[permission]?.[role] !== undefined) {
+      return res.status(400).json({ error: `The "${permission}" permission for "${role}" is locked and cannot be changed` })
+    }
+    const perms = await loadPermissions()
+    if (!perms[permission]) return res.status(400).json({ error: 'Unknown permission key' })
+    perms[permission][role] = !!value
+    await savePermissions(perms)
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_PERMISSIONS', details: `Set ${permission}/${role} = ${value}` }) } catch(_) {}
+    res.json({ success: true, permissions: perms })
+  } catch(e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// Middleware that checks a named permission against the live permissions table
+function requirePermission(permKey) {
+  return async (req, res, next) => {
+    try {
+      const perms = await loadPermissions()
+      const allowed = perms[permKey]?.[req.user?.role]
+      if (!allowed) return res.status(403).json({ error: 'You do not have permission to perform this action' })
+      next()
+    } catch {
+      next() // Fail open on permission load error (system already authed)
+    }
+  }
+}
+
 // ─── EXPORT ───────────────────────────────────────────────────────────────────
 const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`
 app.get('/api/export/:type', auth, async (req, res) => {
@@ -690,4 +793,13 @@ app.listen(PORT, () => {
   console.log(`   SUPABASE_URL: ${SUPABASE_URL ? 'SET ✓' : 'MISSING ✗'}`)
   console.log(`   SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY ? 'SET ✓' : 'MISSING — login may fail'}`)
   console.log(`   SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY ? 'SET ✓' : 'MISSING ✗'}`)
+  console.log(``)
+  console.log(`   📋 PERMISSIONS TABLE SQL (run once in Supabase SQL Editor):`)
+  console.log(`   CREATE TABLE IF NOT EXISTS role_permissions (`)
+  console.log(`     id INTEGER PRIMARY KEY DEFAULT 1,`)
+  console.log(`     permissions JSONB NOT NULL DEFAULT '{}',`)
+  console.log(`     updated_at TIMESTAMPTZ DEFAULT NOW()`)
+  console.log(`   );`)
+  console.log(`   ALTER TABLE role_permissions ENABLE ROW LEVEL SECURITY;`)
+  console.log(`   CREATE POLICY "Service role full access" ON role_permissions USING (true) WITH CHECK (true);`)
 })
