@@ -132,28 +132,40 @@ global._hasMetadata = false  // assume NO metadata column until confirmed
 global._detailsColumnMissing = false
 
 async function refreshSchemaCache() {
-  try {
-    // Test with just details (no metadata) - safest query
-    const { data, error } = await supabase.from('activity_log').select('id,action,details,created_at').limit(1)
-    if (error && (error.message?.includes('details') || error.message?.includes('column'))) {
-      global._detailsColumnMissing = true
-      console.warn('activity_log.details column missing or inaccessible:', error.message)
-    } else {
-      global._detailsColumnMissing = false
-      console.log('✓ activity_log.details column accessible')
-    }
-    // Test if metadata column exists
-    const { error: metaErr } = await supabase.from('activity_log').select('metadata').limit(1)
-    if (!metaErr) {
-      global._hasMetadata = true
-      console.log('✓ activity_log.metadata column exists')
-    } else {
-      global._hasMetadata = false
-      console.warn('activity_log.metadata column NOT in DB — storing all data in details as JSON')
-    }
-  } catch(e) {
-    console.warn('Schema check failed:', e.message)
+  // Test each column individually to see what's accessible in PostgREST's schema cache
+  const testCol = async (col) => {
+    try {
+      const { error } = await supabase.from('activity_log').select(col).limit(1)
+      return !error
+    } catch(e) { return false }
   }
+  
+  const hasDetails    = await testCol('details')
+  const hasMetadata   = await testCol('metadata')
+  const hasRecordType = await testCol('record_type')
+  const hasRecordId   = await testCol('record_id')
+  const hasUserId     = await testCol('user_id')
+  
+  global._detailsColumnMissing = !hasDetails
+  global._hasMetadata          = hasMetadata
+  global._hasRecordType        = hasRecordType
+  global._hasRecordId          = hasRecordId
+  global._hasUserId            = hasUserId
+  
+  console.log('Schema cache:', {
+    details: hasDetails, metadata: hasMetadata,
+    record_type: hasRecordType, record_id: hasRecordId, user_id: hasUserId
+  })
+  
+  // Build the safe column string for queries
+  const cols = ['id','action','created_at']
+  if (hasDetails)    cols.push('details')
+  if (hasMetadata)   cols.push('metadata')
+  if (hasRecordType) cols.push('record_type')
+  if (hasRecordId)   cols.push('record_id')
+  if (hasUserId)     cols.push('user_id')
+  global._safeActivityCols = cols.join(',')
+  console.log('Safe activity_log columns:', global._safeActivityCols)
 }
 setTimeout(refreshSchemaCache, 500)
 
@@ -568,9 +580,9 @@ app.put('/api/revenue/:id', auth, async (req, res) => {
 // ─── NOTES ────────────────────────────────────────────────────────────────────
 app.get('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, limit = 50 } = req.query
-  const detailsPart = global._detailsColumnMissing ? '' : ',details'
-  const metaPart = global._hasMetadata ? ',metadata' : ''
-  const cols = `id,action${detailsPart}${metaPart},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)`
+  const baseCols = global._safeActivityCols || 'id,action,created_at'
+  const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
+  const cols = baseCols + userJoin
   let q = supabase.from('activity_log').select(cols).eq('action', 'NOTE')
   if (record_type) q = q.eq('record_type', record_type)
   if (record_id) q = q.eq('record_id', record_id)
@@ -594,9 +606,9 @@ app.post('/api/notes', auth, async (req, res) => {
   })
   if (error) return res.status(400).json({ error: error.message })
   // Fetch with user join using safe column list
-  const detailsPart = global._detailsColumnMissing ? '' : ',details'
-  const metaPart2 = global._hasMetadata ? ',metadata' : ''
-  const cols2 = `id,action${detailsPart}${metaPart2},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)`
+  const baseCols2 = global._safeActivityCols || 'id,action,created_at'
+  const userJoin2 = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
+  const cols2 = baseCols2 + userJoin2
   const { data: full } = await supabase.from('activity_log').select(cols2).eq('id', data.id).single()
   res.json(parseLogRow(full || data))
 })
@@ -605,9 +617,9 @@ app.post('/api/notes', auth, async (req, res) => {
 app.get('/api/tasks', auth, async (req, res) => {
   const { record_id, limit = 100 } = req.query
   // Build column list based on what actually exists in the DB
-  const detailsPart = global._detailsColumnMissing ? '' : ',details'
-  const metaPart = global._hasMetadata ? ',metadata' : ''
-  const cols = `id,action${detailsPart}${metaPart},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name)`
+  const baseCols = global._safeActivityCols || 'id,action,created_at'
+  const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name)' : ''
+  const cols = baseCols + userJoin
   let q = supabase.from('activity_log').select(cols).eq('action', 'TASK')
   if (record_id) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
@@ -633,7 +645,7 @@ app.post('/api/tasks', auth, async (req, res) => {
 app.put('/api/tasks/:id', auth, async (req, res) => {
   // Fetch existing to merge state
   const { data: existing } = await supabase.from('activity_log')
-    .select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
+    .select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
   const existingParsed = parseLogRow(existing)
   const currentMeta = existingParsed?.metadata || {}
   const newMeta = { ...currentMeta, ...req.body }
@@ -649,9 +661,9 @@ app.put('/api/tasks/:id', auth, async (req, res) => {
 // ─── ACTIVITY / AUDIT ─────────────────────────────────────────────────────────
 app.get('/api/activity', auth, async (req, res) => {
   const { record_type, record_id, limit = 100 } = req.query
-  const detailsPart = global._detailsColumnMissing ? '' : ',details'
-  const metaPart = global._hasMetadata ? ',metadata' : ''
-  const cols = `id,action${detailsPart}${metaPart},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)`
+  const baseCols = global._safeActivityCols || 'id,action,created_at'
+  const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
+  const cols = baseCols + userJoin
   let q = supabase.from('activity_log').select(cols).neq('action', 'NOTE').neq('action', 'TASK')
   if (record_type) q = q.eq('record_type', record_type)
   if (record_id) q = q.eq('record_id', record_id)
@@ -663,9 +675,9 @@ app.get('/api/activity', auth, async (req, res) => {
 
 app.get('/api/audit', auth, requireAdmin, async (req, res) => {
   const { limit = 100, offset = 0 } = req.query
-  const detailsPart = global._detailsColumnMissing ? '' : ',details'
-  const metaPart = global._hasMetadata ? ',metadata' : ''
-  const cols = `id,action${detailsPart}${metaPart},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)`
+  const baseCols = global._safeActivityCols || 'id,action,created_at'
+  const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
+  const cols = baseCols + userJoin
   const { data, error, count } = await supabase.from('activity_log').select(cols, { count: 'exact' }).order('created_at', { ascending: false }).range(+offset, +offset + Math.min(+limit, 200) - 1)
   if (error) return res.status(400).json({ error: error.message })
   res.json({ data: (data||[]).map(r=>parseLogRow(r)), count })
@@ -784,7 +796,7 @@ app.post('/api/contacts', auth, async (req, res) => {
 
 app.put('/api/contacts/:id', auth, async (req, res) => {
   const { name, title, email, phone, notes } = req.body
-  const { data: existing } = await supabase.from('activity_log').select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
   const existingParsed = parseLogRow(existing)
   const merged = { ...(existingParsed?.metadata || {}), name, title, email, phone, notes }
   const updateVal = global._hasMetadata ? { metadata: merged, details: name || existingParsed?.metadata?.name } : { details: JSON.stringify({ text: name, ...merged }) }
@@ -823,7 +835,7 @@ app.post('/api/training-providers', auth, async (req, res) => {
 })
 
 app.put('/api/training-providers/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
   const existingParsed = parseLogRow(existing)
   const merged = { ...(existingParsed?.metadata || {}), ...req.body }
   const tpUpdateData = global._hasMetadata
@@ -867,7 +879,7 @@ app.post('/api/invoices', auth, async (req, res) => {
 })
 
 app.put('/api/invoices/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
   const merged = { ...(existing?.metadata || {}), ...req.body }
   const updateData = global._hasMetadata ? { metadata: merged } : { details: JSON.stringify(merged) }
   const { data, error } = await supabase.from('activity_log').update(updateData).eq('id', req.params.id).select().single()
@@ -901,7 +913,7 @@ app.post('/api/contracts', auth, async (req, res) => {
 })
 
 app.put('/api/contracts/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
   const merged = { ...(existing?.metadata || {}), ...req.body }
   const updateData = global._hasMetadata ? { metadata: merged } : { details: JSON.stringify(merged) }
   const { data, error } = await supabase.from('activity_log').update(updateData).eq('id', req.params.id).select().single()
