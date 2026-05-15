@@ -61,16 +61,16 @@ const authClient = SUPABASE_ANON_KEY
 console.log(`Auth client using: ${SUPABASE_ANON_KEY ? 'ANON KEY ✓' : 'SERVICE KEY (set SUPABASE_ANON_KEY for best results)'}`)
 
 // ─── BLOCK SOURCE FILE EXPOSURE ────────────────────────────────────────────────
-const BLOCKED = ['.js','.ts','.json','.env','.md','.lock','.sh','.sql']
-const BLOCKED_NAMES = ['server.js','server.ts','package.json','package-lock.json','.env']
+const BLOCKED = ['.ts','.json','.env','.md','.lock','.sh','.sql']
+const BLOCKED_NAMES = ['server.js','server.ts','package.json','package-lock.json','.env','package.js']
 app.use((req, res, next) => {
   const p = req.path.toLowerCase()
   const filename = p.split('/').pop()
   if (p.startsWith('/api/')) return next()
   if (p === '/' || p === '/index.html' || p === '/favicon.ico') return next()
-  // Block source files by name
+  // CRITICAL: always block server.js directly
+  if (filename === 'server.js') return res.status(404).send('Not found')
   if (BLOCKED_NAMES.includes(filename)) return res.status(404).send('Not found')
-  // Block source files by extension
   if (BLOCKED.some(ext => p.endsWith(ext))) return res.status(404).send('Not found')
   next()
 })
