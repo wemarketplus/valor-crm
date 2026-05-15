@@ -624,6 +624,22 @@ textarea{resize:vertical;min-height:70px}
 .fmr-arrow{text-align:center;color:var(--text3);font-size:12px}
 .fmr-sel{font-size:11px;padding:5px 8px;border:.5px solid var(--border2);border-radius:5px;background:var(--white);color:var(--text);font-family:inherit;outline:none;width:100%}
 .fmr-sel:focus{border-color:var(--blue)}
+/* Attio-style inline filter bar */
+.att-filter-bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.att-sort-chip{font-size:11px;color:var(--text2);cursor:pointer;padding:3px 8px;border-radius:5px;border:.5px solid var(--border1);background:var(--bg2);display:flex;align-items:center;gap:4px;white-space:nowrap}
+.att-sort-chip:hover{background:var(--border1)}
+.att-sort-chip strong{color:var(--text);font-weight:600}
+.att-filter-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border-radius:6px;border:.5px solid var(--border1);background:var(--bg2);font-size:11px;color:var(--text2);cursor:pointer}
+.att-filter-chip:hover{border-color:var(--blue);background:var(--blue-bg)}
+.afc-icon{font-size:10px;opacity:.7}
+.afc-key{font-weight:500;color:var(--text)}
+.afc-is{font-size:10px;color:var(--text3)}
+.afc-val{border:none;background:transparent;font-size:11px;color:var(--text);font-family:inherit;outline:none;cursor:pointer;padding:0 2px;max-width:80px}
+.afc-pill{background:var(--orange-bg);color:var(--orange-t);font-weight:600;font-size:10px;padding:1px 6px;border-radius:4px;cursor:default}
+.afc-more{color:var(--text3);font-size:12px;cursor:pointer;padding:0 2px}
+.afc-more:hover{color:var(--text)}
+.att-filter-add{width:20px;height:20px;border-radius:50%;border:.5px solid var(--border1);background:var(--bg2);display:inline-flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;color:var(--text3)}
+.att-filter-add:hover{background:var(--blue-bg);color:var(--blue-t);border-color:var(--blue)}
 .prog-outer{height:8px;background:var(--gray2);border-radius:4px;overflow:hidden;margin-bottom:6px}
 .prog-inner{height:100%;border-radius:4px;background:var(--nv);transition:width .3s}
 .import-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
@@ -1480,7 +1496,13 @@ function renderWibTable(wibs){
           <span class="search-icon">🔍</span>
           <input placeholder="Search workforce boards..." value="${q}" oninput="window._wibFilters.search=this.value;renderWibTable(window._wibs)">
         </div>
-        <button class="btn btn-sm" onclick="showWibFilterModal()">⊟ Filter</button>
+        <div class="att-filter-bar">
+          <div class="att-sort-chip">⇅ Sorted by <strong>READONLY In-Network 4-5 Star Locations -daily</strong></div>
+          <button class="btn btn-sm" onclick="showWibFilterModal()" style="display:inline-flex;align-items:center;gap:4px">⊟ Filter</button>
+          ${window._wibFilters.status?`<div class="att-filter-chip"><span class="afc-key">Status</span><span class="afc-is">is</span><span class="afc-pill">${window._wibFilters.status.replace(/_/g,' ')}</span><span class="afc-more" onclick="window._wibFilters.status='';renderWibTable(window._wibs)">✕</span></div>`:''}
+          ${window._wibFilters.state?`<div class="att-filter-chip"><span class="afc-key">State</span><span class="afc-is">is</span><span class="afc-pill">${window._wibFilters.state}</span><span class="afc-more" onclick="window._wibFilters.state='';renderWibTable(window._wibs)">✕</span></div>`:''}
+          ${window._wibFilters.type?`<div class="att-filter-chip"><span class="afc-key">Type</span><span class="afc-is">is</span><span class="afc-pill">${window._wibFilters.type}</span><span class="afc-more" onclick="window._wibFilters.type='';renderWibTable(window._wibs)">✕</span></div>`:''}
+        </div>
       </div>
       <div class="att-toolbar-r">
         <div class="ie-wrap">
@@ -1507,9 +1529,11 @@ function renderWibTable(wibs){
         <th onclick="sortWibBy('call_priority')"><div class="th-i"># Call Priority ${sa('call_priority',_wibSort)}</div></th>
         <th><div class="th-i">👤 Contacts › Name</div></th>
         <th><div class="th-i">🕐 Contacts › La... When</div></th>
-        <th><div class="th-i">📍 State Zipcode › State</div></th>
+        <th onclick="sortWibBy('state')"><div class="th-i">📍 State Zipcode › State ${sa('state',_wibSort)}</div></th>
         <th><div class="th-i">📍 State Zipcode › Locations</div></th>
         <th><div class="th-i">💰 Funding Opportunities</div></th>
+        <th><div class="th-i">📮 pcode</div></th>
+        <th onclick="sortWibBy('website')"><div class="th-i">🌐 Website ${sa('website',_wibSort)}</div></th>
       </tr></thead>
       <tbody>
       ${d.length===0?`<tr><td colspan="14"><div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">No workforce boards yet</div><div class="empty-sub">Import a CSV or add boards individually</div><button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button></div></td></tr>`:
@@ -1543,6 +1567,8 @@ function renderWibTable(wibs){
             ? w._funding.slice(0,2).map(f=>`<span style="display:inline-flex;align-items:center;gap:2px;font-size:10.5px;margin-right:3px">⚙️ ${f}</span>`).join('')+(w._funding.length>2?` +${w._funding.length-2}`:'')
             : '<span class="cell-dim">—</span>'
         }</td>
+        <td class="cell-dim" style="max-width:120px;font-size:10px">${w.zip_codes||'—'}</td>
+        <td>${w.website?`<a href="${w.website.startsWith('http')?w.website:'https://'+w.website}" target="_blank" class="cell-link" onclick="event.stopPropagation()">${w.website.replace(/^https?:\/\//,'')}</a>`:'<span class="cell-dim">—</span>'}</td>
       </tr>`).join('')}
       </tbody>
     </table>
@@ -2123,19 +2149,35 @@ function renderCompaniesTable(companies){
           <span class="search-icon">🔍</span>
           <input placeholder="Search companies..." value="${q}" oninput="window._coFilters.search=this.value;renderCompaniesTable(window._companies)">
         </div>
-        <select class="btn btn-xs" style="padding:4px 8px;border-radius:7px" onchange="window._coFilters.status=this.value;renderCompaniesTable(window._companies)">
-          <option value="">All statuses</option>
-          <option value="prospect"${st==='prospect'?' selected':''}>Prospect</option>
-          <option value="contacted"${st==='contacted'?' selected':''}>Contacted</option>
-          <option value="qualified"${st==='qualified'?' selected':''}>Qualified</option>
-          <option value="active_client"${st==='active_client'?' selected':''}>Active Client</option>
-          <option value="churned"${st==='churned'?' selected':''}>Churned</option>
-        </select>
-        <select class="btn btn-xs" style="padding:4px 8px;border-radius:7px" onchange="window._coFilters.rating=this.value;renderCompaniesTable(window._companies)">
-          <option value="">All ratings</option>
-          ${[5,4,3,2,1].map(n=>`<option value="${n}">${'★'.repeat(n)}</option>`).join('')}
-        </select>
-        <button class="btn btn-sm" onclick="clearCoFilters()">✕ Clear</button>
+        <div class="att-filter-bar">
+          <div class="att-sort-chip" onclick="sortCoBy('status')">⇅ Sorted by <strong>Status</strong></div>
+          <div class="att-filter-chip">
+            <span class="afc-icon">⊟</span>
+            <span class="afc-key">Company Type</span>
+            <span class="afc-is">is</span>
+            <select class="afc-val" onchange="window._coFilters.status=this.value;renderCompaniesTable(window._companies)" onclick="event.stopPropagation()">
+              <option value="">All</option>
+              <option value="prospect"${st==='prospect'?' selected':''}>Prospect</option>
+              <option value="contacted"${st==='contacted'?' selected':''}>Contacted</option>
+              <option value="qualified"${st==='qualified'?' selected':''}>Qualified</option>
+              <option value="active_client"${st==='active_client'?' selected':''}>Active Client</option>
+              <option value="churned"${st==='churned'?' selected':''}>Churned</option>
+            </select>
+            <span class="afc-pill" onclick="event.stopPropagation()">Operator</span>
+            <span class="afc-more" onclick="event.stopPropagation()">⋮</span>
+          </div>
+          <div class="att-filter-chip">
+            <span class="afc-icon">☆</span>
+            <span class="afc-key">Rating</span>
+            <select class="afc-val" onchange="window._coFilters.rating=this.value;renderCompaniesTable(window._companies)" onclick="event.stopPropagation()">
+              <option value="">All ratings</option>
+              ${[5,4,3,2,1].map(n=>`<option value="${n}">${'★'.repeat(n)}</option>`).join('')}
+            </select>
+            <span class="afc-more" onclick="event.stopPropagation()">⋮</span>
+          </div>
+          <div class="att-filter-add" onclick="showToast('Custom filters coming soon','info')">+</div>
+          ${(q||st||rt)?`<button class="btn btn-sm" onclick="clearCoFilters()" style="margin-left:4px;font-size:10px;padding:3px 8px">✕ Clear</button>`:''}
+        </div>
       </div>
       <div class="att-toolbar-r">
         <div class="ie-wrap">
@@ -2162,6 +2204,7 @@ function renderCompaniesTable(companies){
         <th onclick="sortCoBy('created_at')"><div class="th-i">📅 Created at ${sa('created_at',_coSort)}</div></th>
         <th><div class="th-i">👤 Lo... › Applications</div></th>
         <th><div class="th-i">📍 Locations › Name</div></th>
+        <th><div class="th-i">👤 Owner</div></th>
         <th><div class="th-i">👤 Created by</div></th>
       </tr></thead>
       <tbody>
@@ -2189,6 +2232,7 @@ function renderCompaniesTable(companies){
             ? c._locations.slice(0,2).map(l=>`<span style="display:inline-flex;align-items:center;gap:3px;font-size:10.5px;margin-right:4px">⚙️ ${l}</span>`).join('')+(c._locations.length>2?` <span style="color:var(--text3);font-size:10px">+${c._locations.length-2}</span>`:'')
             : '<span class="cell-dim">—</span>'
         }</td>
+        <td class="cell-dim">${c.supported_by?`<div style="display:flex;align-items:center;gap:4px"><span style="width:18px;height:18px;border-radius:50%;background:var(--blue-bg);color:var(--blue-t);display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700">${(c.supported_by||'?').charAt(0).toUpperCase()}</span>${c.supported_by}</div>`:'<span class="cell-dim">—</span>'}</td>
         <td><div style="display:flex;align-items:center;gap:4px">
           <span style="width:18px;height:18px;border-radius:50%;background:var(--orange-bg);color:var(--orange-t);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">C</span>
           <span class="cell-dim">Claude</span>
@@ -3564,7 +3608,10 @@ function renderLocationsTable(locs){
     <div class="att-toolbar">
       <div class="att-toolbar-l">
         <div class="search-box"><span class="search-icon">🔍</span><input placeholder="Search locations..." value="${q}" oninput="window._locFilters.search=this.value;renderLocationsTable(window._locations)"></div>
-        <button class="btn btn-sm">⊟ Filter</button>
+        <div class="att-filter-bar">
+          <div class="att-sort-chip">⇅ Sorted by <strong>Name</strong></div>
+          <button class="btn btn-sm" onclick="showLocFilterModal()" style="display:inline-flex;align-items:center;gap:4px">⊟ Filter</button>
+        </div>
       </div>
       <div class="att-toolbar-r">
         <div class="ie-wrap">
@@ -3642,7 +3689,10 @@ function renderFundingTableInner(data){
     <div class="att-toolbar">
       <div class="att-toolbar-l">
         <div class="search-box"><span class="search-icon">🔍</span><input placeholder="Search funding..." oninput="filterFundingTable(this.value)"></div>
-        <button class="btn btn-sm">⊟ Filter</button>
+        <div class="att-filter-bar">
+          <div class="att-sort-chip">⇅ Sort</div>
+          <button class="btn btn-sm" style="display:inline-flex;align-items:center;gap:4px">⊟ Filter</button>
+        </div>
       </div>
       <div class="att-toolbar-r">
         <div class="ie-wrap">
@@ -3801,6 +3851,48 @@ function openFundingModal(f=null){
 /* ═══════════════════════════════════════════════════
    APPLICATIONS
 ═══════════════════════════════════════════════════ */
+function showLocFilterModal(){
+  showModal('Filter Locations',`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">State</div>
+      <select id="lf-state">
+        <option value="">All states</option>
+        ${'AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',').map(s=>`<option value="${s}"${window._locFilters?.state===s?' selected':''}>${s}</option>`).join('')}
+      </select>
+    </div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Status</div>
+      <select id="lf-status">
+        <option value="">All statuses</option>
+        ${['not_contacted','contacted','application_in_progress','client','network_member','open','stop_applications'].map(s=>`<option value="${s}"${window._locFilters?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')}
+      </select>
+    </div></div>`,
+  ()=>{
+    window._locFilters = window._locFilters || {}
+    window._locFilters.state = document.getElementById('lf-state')?.value||''
+    window._locFilters.status = document.getElementById('lf-status')?.value||''
+    let d = [...(window._locations||[])]
+    if(window._locFilters.state) d=d.filter(l=>l.state===window._locFilters.state)
+    if(window._locFilters.status) d=d.filter(l=>l.status===window._locFilters.status)
+    renderLocationsTable(d)
+  })
+}
+
+function showAppFilterModal(){
+  showModal('Filter Applications',`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Status</div>
+      <select id="af-status">
+        <option value="">All statuses</option>
+        ${['draft','submitted','under_review','approved','awarded','rejected'].map(s=>`<option value="${s}">${s.replace(/_/g,' ')}</option>`).join('')}
+      </select>
+    </div></div>`,
+  ()=>{
+    const st=document.getElementById('af-status')?.value||''
+    let d=[...(window._applications||[])]
+    if(st) d=d.filter(a=>a.status===st)
+    const tbody=document.getElementById('apps-tbody')
+    if(tbody) tbody.innerHTML=renderAppsRows(d)
+  })
+}
+
 async function pageApplications(){
   const data=await api('/api/applications?limit=1000')
   window._applications=data.data||[]
@@ -3824,7 +3916,10 @@ async function pageApplications(){
     <div class="att-toolbar">
       <div class="att-toolbar-l">
         <div class="search-box"><span class="search-icon">🔍</span><input placeholder="Search applications..." oninput="filterAppsTable(this.value)"></div>
-        <button class="btn btn-sm">⊟ Filter</button>
+        <div class="att-filter-bar">
+          <div class="att-sort-chip">⇅ Sorted by <strong>Created at</strong></div>
+          <button class="btn btn-sm" onclick="showAppFilterModal()" style="display:inline-flex;align-items:center;gap:4px">⊟ Filter</button>
+        </div>
       </div>
       <div class="att-toolbar-r">
         <div class="ie-wrap">
@@ -3984,87 +4079,124 @@ async function pageTasks(){
 
 function renderTasksPage(tasks){
   const now=new Date()
-  const overdueTasks=tasks.filter(t=>{try{const m=getTaskMeta(t);if(m.done)return false;const d=m.due_date?new Date(m.due_date):null;return d&&d<now}catch{return false}})
-  const futureTasks=tasks.filter(t=>{try{const m=getTaskMeta(t);if(m.done)return false;const d=m.due_date?new Date(m.due_date):null;return !d||(d&&d>=now)}catch{return true}})
-  const doneTasks=tasks.filter(t=>{try{return JSON.parse(t.details||'{}').done}catch{return false}})
+  const isOver=t=>{try{const m=getTaskMeta(t);if(m.done)return false;const d=m.due_date?new Date(m.due_date):null;return d&&d<now}catch{return false}}
+  const isDone=t=>{try{return getTaskMeta(t).done}catch{return false}}
 
-  const renderTask=t=>{
-    const m=getTaskMeta(t),title=m.title||t.details||'Task'
-    const due=m.due_date?new Date(m.due_date):null,over=due&&!m.done&&due<now
+  // Group tasks: Overdue → Today → Future → Done
+  const overdue=tasks.filter(t=>!isDone(t)&&isOver(t))
+  const todayTasks=tasks.filter(t=>!isDone(t)&&!isOver(t)&&(()=>{try{const m=getTaskMeta(t);const d=m.due_date?new Date(m.due_date):null;if(!d)return false;const nd=new Date();return d.toDateString()===nd.toDateString()}catch{return false}})()
+  )
+  const futureTasks=tasks.filter(t=>!isDone(t)&&!isOver(t)&&!todayTasks.includes(t))
+  const doneTasks=tasks.filter(t=>isDone(t))
+
+  const rowHtml=t=>{
+    const m=getTaskMeta(t),title=m.title||t.details||t.action||'Task'
+    const due=m.due_date?new Date(m.due_date):null
+    const over=due&&!m.done&&due<now
     const assignee=m.assigned_to||(t.user?.full_name)||''
-    return`<div style="display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:.5px solid var(--gray2)">
-      <input type="checkbox" class="att-chk" ${m.done?'checked':''}>
-      <div style="flex:1;min-width:0">
-        <div class="task-title-text${m.done?' done':''}" style="font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</div>
-        ${due?`<div class="task-due${over?' over':''}" style="margin-top:1px">${over?'⚠️ ':''} ${due.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}</div>`:''}
-      </div>
-      <div style="display:flex;align-items:center;gap:8px">
-        ${t.record_type?`<span style="font-size:10px;color:var(--text3);padding:2px 6px;background:var(--gray2);border-radius:4px">📍 ${t.record_type?.replace('_records','')}</span>`:''}
-        ${assignee?`<span style="width:22px;height:22px;border-radius:50%;background:var(--orange-bg);color:var(--orange-t);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">${assignee.slice(0,1).toUpperCase()}</span>`:''}
-        <div class="row-actions"><button class="action-btn" onclick="toggleTaskDB('${t.id}',${!!m.done})">${m.done?'Reopen':'Done'}</button><button class="action-btn del" onclick="deleteTask('${t.id}')">Del</button></div>
-      </div>
-    </div>`
+    const record=t.record_id?`<span style="display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:var(--blue-t)">⚙️ ${t.record_id.slice(0,20)}...</span>`:'<span class="cell-dim">—</span>'
+    return`<tr onclick="openTaskEdit('${t.id}')" style="cursor:pointer">
+      <td onclick="event.stopPropagation()" style="width:32px">
+        <input type="checkbox" class="att-chk" ${m.done?'checked':''} onchange="toggleTaskDone('${t.id}',this.checked)">
+      </td>
+      <td style="min-width:260px">
+        <div style="font-size:12px;${m.done?'text-decoration:line-through;color:var(--text3)':''};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:360px">${title}</div>
+      </td>
+      <td style="width:150px">
+        ${due?`<span style="font-size:11px;font-weight:600;color:${over?'var(--red-t)':'var(--text2)'}">${over?'⚠️ ':''}${fmtDateFull(due)}</span>`:'<span class="cell-dim">—</span>'}
+      </td>
+      <td style="width:180px" class="cell-dim" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${record}</td>
+      <td style="width:140px">
+        ${assignee?`<div style="display:flex;align-items:center;gap:5px"><span style="width:18px;height:18px;border-radius:50%;background:var(--orange-bg);color:var(--orange-t);font-size:8px;font-weight:700;display:inline-flex;align-items:center;justify-content:center">${assignee.charAt(0).toUpperCase()}</span><span class="cell-dim">${assignee}</span></div>`:'<span class="cell-dim">—</span>'}
+      </td>
+    </tr>`
   }
 
+  const section=(label,list)=>list.length?`
+    <tr style="background:var(--bg2)"><td colspan="5" style="padding:6px 14px;font-size:10.5px;font-weight:700;color:var(--text2);text-transform:none">${label} <span style="font-weight:400;color:var(--text3);margin-left:4px">${list.length}</span></td></tr>
+    ${list.map(rowHtml).join('')}
+  `:``
+
+  const empty=!tasks.length
   document.getElementById('page-area').innerHTML=`
   <div class="att-wrap">
     <div class="att-toolbar">
       <div class="att-toolbar-l">
-        <div class="search-box"><span class="search-icon">🔍</span><input placeholder="Search tasks..."></div>
-        <button class="btn btn-sm">⊟ Filter</button>
+        <div class="att-filter-bar">
+          <div class="att-sort-chip">⇅ Sorted by <strong>Due date</strong></div>
+          <button class="btn btn-sm" onclick="showTaskFilterModal()" style="display:inline-flex;align-items:center;gap:4px">⊟ Filter</button>
+        </div>
       </div>
     </div>
-    <div style="padding:6px 14px;border-bottom:.5px solid var(--border);display:flex;gap:14px;font-size:10.5px;color:var(--text3)">
-      <span>Task</span>
-      <span style="margin-left:auto">📅 Due date</span>
-      <span>⊡ Record</span>
-      <span>👤 Assigned to</span>
-    </div>
-    ${overdueTasks.length?`<div style="padding:6px 14px;font-size:10px;font-weight:700;color:var(--red-t);text-transform:uppercase;letter-spacing:.6px;background:#fff9f9;border-bottom:.5px solid var(--border)">Overdue ${overdueTasks.length}</div>${overdueTasks.map(renderTask).join('')}`:''}
-    ${futureTasks.length?`<div style="padding:6px 14px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;background:var(--gray);border-bottom:.5px solid var(--border)">Upcoming / No due date ${futureTasks.length}</div>${futureTasks.map(renderTask).join('')}`:''}
-    ${doneTasks.length?`<div style="padding:6px 14px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;background:var(--gray);border-bottom:.5px solid var(--border)">Completed ${doneTasks.length}</div>${doneTasks.map(renderTask).join('')}`:''}
-    ${!tasks.length?'<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-text">No tasks yet</div><div class="empty-sub">Create tasks to track your work</div><button class="btn btn-primary" onclick="openTaskModal()">+ New Task</button></div>':''}
-    <div class="att-footer"><span>${tasks.length} tasks</span></div>
+    ${empty?`<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-text">No tasks yet</div><button class="btn btn-primary" onclick="openTaskModal()">+ New task</button></div>`:
+    `<table class="att-tbl" style="table-layout:fixed">
+      <thead><tr>
+        <th style="width:32px"><input type="checkbox" class="att-chk"></th>
+        <th style="min-width:260px"><div class="th-i">Task</div></th>
+        <th style="width:150px"><div class="th-i">📅 Due date</div></th>
+        <th style="width:180px"><div class="th-i">⊞ Record</div></th>
+        <th style="width:140px"><div class="th-i">👤 Assigned to</div></th>
+      </tr></thead>
+      <tbody>
+        ${section('Overdue',overdue)}
+        ${section('Today',todayTasks)}
+        ${section('Upcoming',futureTasks)}
+        ${section('Completed',doneTasks)}
+      </tbody>
+    </table>`}
+    <div class="att-footer"><span>${tasks.length} count</span></div>
   </div>`
 }
 
-async function toggleTaskDB(id,currentDone){
-  try{
-    const current=window._tasks?.find(t=>t.id===id)||{details:'{}'}
-    const meta=getTaskMeta(current);meta.done=!currentDone
-    await api('/api/tasks/'+id,'PUT',{details:JSON.stringify(meta)})
-    showToast(meta.done?'Task completed!':'Task reopened','success')
-    if(currentPage==='tasks')pageTasks()
-    else if(currentPage==='wib-profile')loadWibTabData(wibTab)
-    else if(currentPage==='company-profile')loadCompanyTabData(companyTab)
-    else if(currentPage==='dashboard')pageDashboard()
-  }catch(e){showToast(e.message,'error')}
+function fmtDateFull(d){
+  if(!d) return '—'
+  const dt = d instanceof Date ? d : new Date(d)
+  return dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
 }
 
-async function deleteTask(id){
-  if(!confirm('Delete this task?'))return
-  try{await api('/api/tasks/'+id,'PUT',{deleted:true});showToast('Deleted','success');if(currentPage==='tasks')pageTasks()}catch(e){showToast(e.message,'error')}
+function showTaskFilterModal(){
+  showModal('Filter Tasks',`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Assigned To</div>
+      <input id="tf-assignee" placeholder="Name or email...">
+    </div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Status</div>
+      <select id="tf-done">
+        <option value="">All tasks</option>
+        <option value="pending">Pending only</option>
+        <option value="done">Completed only</option>
+      </select>
+    </div></div>`,
+  ()=>{
+    const assignee=document.getElementById('tf-assignee')?.value?.toLowerCase()||''
+    const done=document.getElementById('tf-done')?.value
+    let d=[...(window._tasks||[])]
+    if(assignee) d=d.filter(t=>(getTaskMeta(t).assigned_to||t.user?.full_name||'').toLowerCase().includes(assignee))
+    if(done==='done') d=d.filter(t=>getTaskMeta(t).done)
+    if(done==='pending') d=d.filter(t=>!getTaskMeta(t).done)
+    renderTasksPage(d)
+  })
 }
 
-function openTaskModal(recordType='',recordId=''){
-  showModal('New Task',`
-    <div id="task-err"></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Task Title <span class="form-req">*</span></div><input id="task-title" placeholder="Call WIB employer services..."></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Due Date</div><input id="task-due" type="date" value="${new Date().toISOString().split('T')[0]}"></div>
-    <div class="form-group"><div class="form-label">Priority</div><select id="task-priority"><option value="normal">Normal</option><option value="high">High</option><option value="urgent">Urgent</option><option value="low">Low</option></select></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Assigned To</div><input id="task-assign" placeholder="Team member name..."></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="task-notes" rows="2"></textarea></div></div>`,
+function openTaskEdit(id){
+  const t=(window._tasks||[]).find(t=>t.id===id);if(!t)return
+  const m=getTaskMeta(t)
+  showModal('Edit Task',`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Title</div><input id="te-title" value="${(m.title||t.details||'').replace(/"/g,'&quot;')}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Due Date</div><input id="te-due" type="date" value="${m.due_date||''}"></div>
+    <div class="form-group"><div class="form-label">Priority</div>
+      <select id="te-pri">
+        <option value="normal"${m.priority==='normal'?' selected':''}>Normal</option>
+        <option value="high"${m.priority==='high'?' selected':''}>High</option>
+        <option value="low"${m.priority==='low'?' selected':''}>Low</option>
+      </select>
+    </div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Assigned To</div><input id="te-assign" value="${m.assigned_to||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="te-notes" rows="3">${m.notes||''}</textarea></div></div>`,
   async()=>{
-    const title=document.getElementById('task-title').value.trim()
-    const err=document.getElementById('task-err')
-    if(!title){err.innerHTML='<div class="alert alert-error">Task title is required</div>';return false}
     try{
-      await api('/api/tasks','POST',{title,due_date:document.getElementById('task-due').value||null,priority:document.getElementById('task-priority').value,assigned_to:document.getElementById('task-assign').value||null,notes:document.getElementById('task-notes').value||null,record_type:recordType||null,record_id:recordId||null})
-      showToast('Task created','success')
-      if(currentPage==='tasks')pageTasks()
-      else if(currentPage==='wib-profile')loadWibTabData('tasks')
-      else if(currentPage==='company-profile')loadCompanyTabData('tasks')
-    }catch(e){err.innerHTML=`<div class="alert alert-error">${e.message}</div>`;return false}
+      await api('/api/tasks/'+id,'PUT',{title:document.getElementById('te-title').value,due_date:document.getElementById('te-due').value||null,priority:document.getElementById('te-pri').value,assigned_to:document.getElementById('te-assign').value||null,notes:document.getElementById('te-notes').value||null})
+      showToast('Task updated','success');loadPage('tasks')
+    }catch(e){showToast(e.message,'error');return false}
   })
 }
 
