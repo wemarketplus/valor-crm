@@ -1400,6 +1400,20 @@ async function pageWibs(){
   'READONLY In-Network 4-5 Star Locations -daily')
 
   renderWibTable(window._wibs)
+  // Async enrichment: load contacts, locations, funding to populate extra columns
+  Promise.all([
+    api('/api/locations?limit=5000').catch(()=>({data:[]})),
+    api('/api/funding?limit=1000').catch(()=>({data:[]})),
+  ]).then(([locData, fundData])=>{
+    const locs  = locData.data||[]
+    const funds = fundData.data||[]
+    window._wibs.forEach(w=>{
+      w._locations = locs.filter(l=>l.wib_id===w.id).map(l=>l.location_name)
+      w._funding   = funds.filter(f=>f.wib_id===w.id).map(f=>f.opportunity_name)
+      w._contacts  = [w.contact_name, w.contact_name_2].filter(Boolean)
+    })
+    renderWibTable(window._wibs)
+  }).catch(()=>{})
 }
 
 // ── SORT STATE ─────────────────────────────────────────────────────────
@@ -1491,9 +1505,12 @@ function renderWibTable(wibs){
         <th onclick="sortWibBy('wib_type')"><div class="th-i">☰ Type ${sa('wib_type',_wibSort)}</div></th>
         <th onclick="sortWibBy('state')"><div class="th-i">🗺 Regional Zipcode › State ${sa('state',_wibSort)}</div></th>
         <th onclick="sortWibBy('call_priority')"><div class="th-i"># Call Priority ${sa('call_priority',_wibSort)}</div></th>
+        <th><div class="th-i">👤 Contacts › Name</div></th>
+        <th><div class="th-i">📍 State Zipcode › Locations</div></th>
+        <th><div class="th-i">💰 Funding Opportunities</div></th>
       </tr></thead>
       <tbody>
-      ${d.length===0?`<tr><td colspan="9"><div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">No workforce boards yet</div><div class="empty-sub">Import a CSV or add boards individually</div><button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button></div></td></tr>`:
+      ${d.length===0?`<tr><td colspan="12"><div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">No workforce boards yet</div><div class="empty-sub">Import a CSV or add boards individually</div><button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button></div></td></tr>`:
       d.map(w=>`<tr onclick="openWibProfile('${w.id}')">
         <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
         <td><div class="col-name-cell">
@@ -1507,6 +1524,21 @@ function renderWibTable(wibs){
         <td>${w.wib_type?`<span class="pill p-blue" style="font-size:9px">${w.wib_type}</span>`:'<span class="cell-dim">—</span>'}</td>
         <td class="cell-dim">${w.state||'—'}</td>
         <td>${callPriority(w.call_priority)}</td>
+        <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${
+          w._contacts?.length
+            ? w._contacts.slice(0,2).map(name=>`<span style="display:inline-flex;align-items:center;gap:3px;font-size:10.5px;margin-right:3px"><span style="width:14px;height:14px;border-radius:50%;background:var(--orange-bg);color:var(--orange-t);display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700">${name.charAt(0)}</span>${name}</span>`).join('')+(w._contacts.length>2?` +${w._contacts.length-2}`:'')
+            : '<span class="cell-dim">—</span>'
+        }</td>
+        <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${
+          w._locations?.length
+            ? w._locations.slice(0,3).map(l=>`<span style="display:inline-flex;align-items:center;gap:2px;font-size:10.5px;margin-right:3px">⚙️ ${l}</span>`).join('')+(w._locations.length>3?` +${w._locations.length-3}`:'')
+            : '<span class="cell-dim">—</span>'
+        }</td>
+        <td class="cell-dim" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${
+          w._funding?.length
+            ? w._funding.slice(0,2).map(f=>`<span style="display:inline-flex;align-items:center;gap:2px;font-size:10.5px;margin-right:3px">⚙️ ${f}</span>`).join('')+(w._funding.length>2?` +${w._funding.length-2}`:'')
+            : '<span class="cell-dim">—</span>'
+        }</td>
       </tr>`).join('')}
       </tbody>
     </table>
@@ -2055,6 +2087,19 @@ async function pageCompanies(){
   ],'Status')
 
   renderCompaniesTable(window._companies)
+  // Async enrichment: load apps and locations to populate extra columns
+  Promise.all([
+    api('/api/applications?limit=2000').catch(()=>({data:[]})),
+    api('/api/locations?limit=5000').catch(()=>({data:[]})),
+  ]).then(([appData, locData])=>{
+    const apps = appData.data||[]
+    const locs = locData.data||[]
+    window._companies.forEach(c=>{
+      c._app_count = apps.filter(a=>a.company_id===c.id).length
+      c._locations = locs.filter(l=>l.company_id===c.id).map(l=>l.location_name).slice(0,5)
+    })
+    renderCompaniesTable(window._companies)
+  }).catch(()=>{})
 }
 
 function renderCompaniesTable(companies){
@@ -2111,10 +2156,12 @@ function renderCompaniesTable(companies){
         <th><div class="th-i">☰ Supported By</div></th>
         <th onclick="sortCoBy('last_contact_date')"><div class="th-i">👤 Last Interaction ${sa('last_contact_date',_coSort)}</div></th>
         <th onclick="sortCoBy('created_at')"><div class="th-i">📅 Created at ${sa('created_at',_coSort)}</div></th>
+        <th><div class="th-i">👤 Lo... › Applications</div></th>
+        <th><div class="th-i">📍 Locations › Name</div></th>
         <th><div class="th-i">👤 Created by</div></th>
       </tr></thead>
       <tbody>
-      ${d.length===0?`<tr><td colspan="10"><div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">No companies yet</div><div class="empty-sub">Import a CSV or add companies individually</div><button class="btn btn-primary" onclick="openCompanyModal()">+ New Company</button></div></td></tr>`:
+      ${d.length===0?`<tr><td colspan="12"><div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">No companies yet</div><div class="empty-sub">Import a CSV or add companies individually</div><button class="btn btn-primary" onclick="openCompanyModal()">+ New Company</button></div></td></tr>`:
       d.map(c=>`<tr onclick="openCompanyProfile('${c.id}')">
         <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
         <td><div class="col-name-cell">
@@ -2128,6 +2175,16 @@ function renderCompaniesTable(companies){
         <td class="cell-dim">${c.supported_by||'—'}</td>
         <td class="cell-dim">${c.last_contact_date?fmtAgo(c.last_contact_date):'No contact'}</td>
         <td class="cell-dim">${fmtDate(c.created_at)}</td>
+        <td class="cell-dim" style="max-width:120px">${
+          c._app_count!=null
+            ? (c._app_count>0 ? `<span style="background:var(--blue-bg);color:var(--blue-t);padding:2px 7px;border-radius:10px;font-size:10.5px;font-weight:600">${c._app_count}</span>` : '<span class="cell-dim">—</span>')
+            : '<span class="cell-dim">—</span>'
+        }</td>
+        <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${
+          c._locations?.length
+            ? c._locations.slice(0,2).map(l=>`<span style="display:inline-flex;align-items:center;gap:3px;font-size:10.5px;margin-right:4px">⚙️ ${l}</span>`).join('')+(c._locations.length>2?` <span style="color:var(--text3);font-size:10px">+${c._locations.length-2}</span>`:'')
+            : '<span class="cell-dim">—</span>'
+        }</td>
         <td><div style="display:flex;align-items:center;gap:4px">
           <span style="width:18px;height:18px;border-radius:50%;background:var(--orange-bg);color:var(--orange-t);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">C</span>
           <span class="cell-dim">Claude</span>
@@ -3454,6 +3511,17 @@ async function pageLocations(){
     {id:'by_filtered',icon:'⊞',label:'Locations by Filtered Operator'},
   ],'all',[],'Name')
   renderLocationsTable(window._locations)
+  // Async enrichment: add application/funding status per location
+  Promise.all([
+    api('/api/funding?limit=1000').catch(()=>({data:[]})),
+  ]).then(([fundData])=>{
+    const funds = fundData.data||[]
+    window._locations.forEach(l=>{
+      const linked = funds.filter(f=>f.location_ids?.includes(l.id)||f.id===l.funding_opportunity_id)
+      l._app_status = linked[0]?.status||null
+    })
+    renderLocationsTable(window._locations)
+  }).catch(()=>{})
 }
 
 function renderLocationsTable(locs){
@@ -3490,7 +3558,7 @@ function renderLocationsTable(locs){
         <th><div class="th-i">⊞ »Funding Opportunities</div></th>
       </tr></thead>
       <tbody>
-      ${d.length===0?`<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">📍</div><div class="empty-text">No locations yet</div><div class="empty-sub">Import a CSV or add locations individually</div><button class="btn btn-primary" onclick="openLocationModal()">+ New Location</button></div></td></tr>`:
+      ${d.length===0?`<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📍</div><div class="empty-text">No locations yet</div><div class="empty-sub">Import a CSV or add locations individually</div><button class="btn btn-primary" onclick="openLocationModal()">+ New Location</button></div></td></tr>`:
       d.map(l=>`<tr onclick="openLocationModal(${JSON.stringify(l).replace(/"/g,"'")})">
         <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
         <td><div class="col-name-cell"><span>📍</span><span style="font-weight:500">${l.location_name}</span>${l.city?`<span class="cell-dim" style="margin-left:6px;font-size:10px">${l.city}, ${l.state}</span>`:''}</div></td>
@@ -3498,6 +3566,11 @@ function renderLocationsTable(locs){
         <td>${locStatusPill(l.status)}</td>
         <td><b style="font-size:11px">${l.state||'—'}</b></td>
         <td class="cell-dim">${l.wib?.wib_name?.split(' - ').slice(1,2).join(' - ')||l.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
+        <td class="cell-dim">${
+          l._app_status
+            ? `<span style="display:inline-flex;align-items:center;gap:3px;font-size:10.5px">⚙️ <span class="pill ${l._app_status==='open'?'p-green':l._app_status==='stop_applications'?'p-red':'p-amber'}" style="font-size:9px;padding:1px 5px">${l._app_status.replace(/_/g,' ')}</span></span>`
+            : '<span style="color:var(--text3);font-size:10.5px">Not applicable</span>'
+        }</td>
       </tr>`).join('')}
       </tbody>
     </table>
@@ -3566,7 +3639,8 @@ function renderFundingTableInner(data){
         <th onclick="sortFundingBy('max_award_per_employee')"><div class="th-i">$ Max per employee <span class="sort-arrow">↕</span></div></th>
         <th><div class="th-i">Locations</div></th>
         <th onclick="sortFundingBy('promotion_for_participants')"><div class="th-i">Promotion <span class="sort-arrow">↕</span></div></th>
-        <th onclick="sortFundingBy('wage_increase_for_participants')"><div class="th-i">Wage increase <span class="sort-arrow">↕</span></div></th>
+        <th onclick="sortFundingBy('wage_increase_for_participants')"><div class="th-i">Wage increase fo... <span class="sort-arrow">↕</span></div></th>
+        <th onclick="sortFundingBy('promotion_for_participants')"><div class="th-i">☰ Promotion for Pa... <span class="sort-arrow">↕</span></div></th>
       </tr></thead>
       <tbody id="funding-tbody">
       ${data.map(f=>`<tr onclick="openFundingModal(${JSON.stringify(f).replace(/"/g,"'")})">
@@ -3583,6 +3657,7 @@ function renderFundingTableInner(data){
         <td class="cell-dim">—</td>
         <td>${f.promotion_for_participants?`<span class="pill p-amber" style="font-size:9px">${f.promotion_for_participants}</span>`:'<span class="cell-dim">—</span>'}</td>
         <td>${f.wage_increase_for_participants?`<span class="pill p-blue" style="font-size:9px">${f.wage_increase_for_participants}</span>`:'<span class="cell-dim">—</span>'}</td>
+        <td>${f.promotion_for_participants?`<span class="pill p-amber" style="font-size:9px">${f.promotion_for_participants}</span>`:(f.wage_increase_for_participants?'<span class="pill p-blue" style="font-size:9px;">Suggested</span>':'<span class="cell-dim">—</span>')}</td>
       </tr>`).join('')}
       </tbody>
     </table>
@@ -3624,6 +3699,7 @@ function filterFundingTable(q){
     <td class="cell-dim">—</td>
     <td>${f.promotion_for_participants?`<span class="pill p-amber" style="font-size:9px">${f.promotion_for_participants}</span>`:'<span class="cell-dim">—</span>'}</td>
     <td>${f.wage_increase_for_participants?`<span class="pill p-blue" style="font-size:9px">${f.wage_increase_for_participants}</span>`:'<span class="cell-dim">—</span>'}</td>
+    <td>${f.promotion_for_participants?`<span class="pill p-amber" style="font-size:9px">${f.promotion_for_participants}</span>`:(f.wage_increase_for_participants?'<span class="pill p-blue" style="font-size:9px;">Suggested</span>':'<span class="cell-dim">—</span>')}</td>
   </tr>`).join('')
 }
 
@@ -3741,6 +3817,10 @@ async function pageApplications(){
         <th onclick="sortAppBy('notes')"><div class="th-i">☰ Lastest Update ${sa('notes',_appSort)}</div></th>
         <th onclick="sortAppBy('status')"><div class="th-i">⊟ Status ${sa('status',_appSort)}</div></th>
         <th onclick="sortAppBy('award_amount_approved')"><div class="th-i">$ Award ${sa('award_amount_approved',_appSort)}</div></th>
+        <th onclick="sortAppBy('location_owner')"><div class="th-i">👤 Location › Pa... Owner ${sa('location_owner',_appSort)}</div></th>
+        <th onclick="sortAppBy('location_state')"><div class="th-i">🗺 Location › State ${sa('location_state',_appSort)}</div></th>
+        <th><div class="th-i">🏛️ Associated WIB</div></th>
+        <th><div class="th-i">📍 Location</div></th>
       </tr></thead>
       <tbody id="apps-tbody">
       ${renderAppsRows(window._applications||[])}
@@ -3751,7 +3831,7 @@ async function pageApplications(){
 }
 
 function renderAppsRows(apps){
-  if(!apps.length)return`<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><button class="btn btn-primary" onclick="openNewApplicationModal()">+ New Application</button></div></td></tr>`
+  if(!apps.length)return`<tr><td colspan="12"><div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><button class="btn btn-primary" onclick="openNewApplicationModal()">+ New Application</button></div></td></tr>`
   return apps.map(a=>`<tr onclick="openEditApplicationModal(${JSON.stringify(a).replace(/"/g,"'")})">
     <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
     <td><div class="col-name-cell"><span>📋</span><span style="font-weight:500">${a.company?.company_name||'Unknown'}</span></div></td>
@@ -3761,6 +3841,10 @@ function renderAppsRows(apps){
     <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.notes?.split('\n')[0]||'—'}</td>
     <td>${appStatusPill(a.status)}</td>
     <td style="color:var(--green-t);font-weight:600">${a.award_amount_approved?fmtMoney(a.award_amount_approved):'—'}</td>
+    <td class="cell-dim">${a.location?.company?.company_name||a.company?.supported_by||'—'}</td>
+    <td class="cell-dim">${a.location?.state||'—'}</td>
+    <td class="cell-dim" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.wib?.wib_name||a.funding?.wib?.wib_name||'—'}</td>
+    <td class="cell-dim">${a.location?.location_name?`<span style="display:inline-flex;align-items:center;gap:2px;font-size:10.5px">⚙️ ${a.location.location_name}</span>`:'—'}</td>
   </tr>`).join('')
 }
 
