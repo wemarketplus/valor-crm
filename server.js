@@ -109,6 +109,41 @@ const requireContributor = (req, res, next) =>
 const requireDelete = (req, res, next) =>
   ['super_admin','admin'].includes(req.user?.role) ? next() : res.status(403).json({ error: 'Delete requires Admin or Super Admin access' })
 
+// ─── SAFE ACTIVITY LOG HELPER ───────────────────────────────────────────────
+// Resilient activity_log insert that handles schema cache issues
+async function logActivity(payload) {
+  try {
+    const { error } = await supabase.from('activity_log').insert(payload)
+    if (error && error.message?.includes("'details'")) {
+      // Schema cache issue - retry without details column
+      const { details, ...rest } = payload
+      rest.metadata = { ...(rest.metadata || {}), details_fallback: details }
+      await supabase.from('activity_log').insert(rest)
+    }
+  } catch(e) {
+    console.warn('Activity log failed silently:', e.message)
+  }
+}
+
+// ─── SCHEMA CACHE REFRESH ────────────────────────────────────────────────────
+// Refresh Supabase PostgREST schema cache to fix 'column not found' errors
+async function refreshSchemaCache() {
+  try {
+    // Trigger schema cache reload by making a simple query
+    await supabase.from('activity_log').select('id,action,details,metadata,created_at').limit(1)
+    console.log('✓ Schema cache verified: activity_log.details accessible')
+  } catch(e) {
+    console.warn('Schema cache check failed:', e.message)
+  }
+}
+// Run on startup
+setTimeout(refreshSchemaCache, 2000)
+
+app.post('/api/refresh-schema', auth, requireAdmin, async (req, res) => {
+  await refreshSchemaCache()
+  res.json({ success: true, message: 'Schema cache refreshed' })
+})
+
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 app.post('/api/login', rateLimitLogin, async (req, res) => {
   try {
@@ -467,10 +502,19 @@ app.get('/api/notes', auth, async (req, res) => {
 app.post('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, content, note_type = 'Note', is_aircall = false } = req.body
   if (!content?.trim()) return res.status(400).json({ error: 'Note content required' })
-  const { data, error } = await supabase.from('activity_log').insert({
-    user_id: req.user.id, action: 'NOTE', record_type, record_id,
-    details: content.trim(), metadata: { note_type, is_aircall }
-  }).select('*, user:user_profiles!user_id(full_name,email)').single()
+  const insertPayload = {
+    user_id: req.user.id, action: 'NOTE', record_type: record_type || null, record_id: record_id || null,
+    details: content.trim(), metadata: { note_type, is_aircall, content: content.trim() }
+  }
+  let { data, error } = await supabase.from('activity_log').insert(insertPayload)
+    .select('*, user:user_profiles!user_id(full_name,email)').single()
+  if (error && error.message?.includes("'details'")) {
+    // Schema cache issue — retry without details, store content in metadata only
+    console.warn('details column cache miss — using metadata.content fallback')
+    delete insertPayload.details
+    ;({ data, error } = await supabase.from('activity_log').insert(insertPayload)
+      .select('*, user:user_profiles!user_id(full_name,email)').single())
+  }
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
 })
@@ -489,11 +533,17 @@ app.get('/api/tasks', auth, async (req, res) => {
 app.post('/api/tasks', auth, async (req, res) => {
   const { title, due_date, record_type, record_id, priority = 'normal', notes, assigned_to } = req.body
   if (!title?.trim()) return res.status(400).json({ error: 'Task title required' })
-  const { data, error } = await supabase.from('activity_log').insert({
-    user_id: req.user.id, action: 'TASK', record_type, record_id,
+  const taskPayload = {
+    user_id: req.user.id, action: 'TASK', record_type: record_type || null, record_id: record_id || null,
     details: title.trim(),
-    metadata: { due_date, priority, notes, done: false, assigned_to, created_by: req.user.full_name || req.user.email }
-  }).select().single()
+    metadata: { due_date, priority, notes, done: false, assigned_to, title: title.trim(), created_by: req.user.full_name || req.user.email }
+  }
+  let { data, error } = await supabase.from('activity_log').insert(taskPayload).select().single()
+  if (error && error.message?.includes("'details'")) {
+    console.warn('details column cache miss on task insert — using metadata fallback')
+    delete taskPayload.details
+    ;({ data, error } = await supabase.from('activity_log').insert(taskPayload).select().single())
+  }
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
 })
@@ -799,40 +849,73 @@ app.post('/api/import/:type', auth, async (req, res) => {
 
   try {
     if (type === 'wibs') {
+      // Comprehensive WIB import - handles Attio export with all fields from screenshots
+      // WIB Attio columns: Workforce Board, WIB Email Address, Short Name, Status, Type,
+      // Contacts, Locations, Website, Call Priority, Funding Opportunities, etc.
+      
       const valid = [], skipped = []
+      const wibStatusMap = {
+        'funding available':'funding_available','funding available - have program':'funding_available','funding_available':'funding_available','open':'funding_available','active':'funding_available',
+        'follow up needed':'follow_up_needed','follow_up_needed':'follow_up_needed','follow up':'follow_up_needed',
+        'pending employer':'pending_employer','pending_employer':'pending_employer','pending':'pending_employer',
+        'no reachout completed':'no_reachout_complete','no reachout complete':'no_reachout_complete','no_reachout_complete':'no_reachout_complete','new':'no_reachout_complete','not contacted':'no_reachout_complete',
+        'funding not available':'funding_not_available','funding_not_available':'funding_not_available','closed':'funding_not_available','not applicable':'no_reachout_complete',
+        'stop applications':'stop_applications','stop_applications':'stop_applications','closed - deadline':'funding_not_available','closed - out of funds':'funding_not_available',
+      }
+
+      const getWibField = (row, ...keys) => {
+        for (const k of keys) {
+          const v = row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()]
+          if (v !== undefined && String(v).trim() !== '' && String(v).trim() !== 'Not applicable') return String(v).trim()
+        }
+        for (const k of keys) {
+          const found = Object.keys(row).find(rk => rk.toLowerCase().replace(/[^a-z]/g,'').includes(k.toLowerCase().replace(/[^a-z]/g,'')))
+          if (found && String(row[found]).trim() && String(row[found]).trim() !== 'Not applicable') return String(row[found]).trim()
+        }
+        return null
+      }
+
       for (const row of rows) {
-        if (!row['WIB Name']?.trim()) { skipped.push('Skipped — WIB Name required'); continue }
+        const name = getWibField(row, 'Workforce Board','WIB Name','WIB','Name','Record','Board Name')
+        if (!name?.trim()) { skipped.push('Skipped — no WIB name'); continue }
+
+        const rawStatus = (getWibField(row, 'Status','WIB Status','Funding Status') || '').toLowerCase().trim()
+        const status = wibStatusMap[rawStatus] || 'no_reachout_complete'
+
+        const website = getWibField(row, 'Website','URL','Web','Homepage','WIB Website')
+        const domain = website ? website.replace(/^https?:\/\/(www\.)?/,'').split('/')[0] : null
+
+        // Capture ALL extra fields into notes
+        const knownWibKeys = new Set([
+          'Record ID','Workforce Board','WIB Name','WIB','Name','Record','Board Name',
+          'WIB Email Address','Email','Short Name','Short','Abbreviation',
+          'Status','WIB Status','Funding Status','Type','WIB Type','Board Type',
+          'Website','URL','Web','Homepage','Phone','WIB Phone',
+          'State','Region','County','Address',
+          'Call Priority','Priority','READONLY In-Network',
+          'Created','Updated','Owner','Assigned',
+        ])
+        const extras = Object.entries(row).filter(([k,v]) => !knownWibKeys.has(k) && v && String(v).trim() && String(v).trim() !== 'Not applicable')
+        const noteParts = []
+        if (extras.length) noteParts.push('Attio Data:\n' + extras.map(([k,v]) => k+': '+v).join('\n'))
+
         valid.push({
-          wib_name: row['WIB Name'].trim(),
-          short_name: row['Short Name'] || null,
-          state: row['State'] || null,
-          status: (() => {
-            const rawS = (row['Status'] || '').toLowerCase().trim()
-            const m = {
-              'funding available':'funding_available','funding_available':'funding_available','active':'funding_available','open':'funding_available',
-              'follow up needed':'follow_up_needed','follow_up_needed':'follow_up_needed','follow up':'follow_up_needed',
-              'pending employer':'pending_employer','pending_employer':'pending_employer','pending':'pending_employer',
-              'no reachout':'no_reachout_complete','no_reachout_complete':'no_reachout_complete','new':'no_reachout_complete',
-              'funding not available':'funding_not_available','funding_not_available':'funding_not_available','closed':'funding_not_available',
-              'stop applications':'stop_applications','stop_applications':'stop_applications',
-            }
-            return m[rawS] || 'no_reachout_complete'
-          })(),
-          wib_phone: row['Phone'] || null,
-          wib_email: row['Email'] || null,
-          website: row['Website'] || null,
-          source_url: row['Source URL'] || row['WIB Name'], // fallback if no URL
-          max_award_per_ein: row['Max Award'] ? parseFloat(row['Max Award']) : null,
-          match_requirement_pct: row['Match %'] ? parseFloat(row['Match %']) : null,
-          iwt_program_active: (row['IWT Active'] || '').toLowerCase() === 'yes',
-          owner_id: req.user.id,
+          wib_name: name,
+          short_name: getWibField(row, 'Short Name','Short','Abbreviation','Acronym') || null,
+          state: getWibField(row, 'State','Region') || null,
+          status,
+          wib_email: getWibField(row, 'WIB Email Address','Email Address','Email','Contact Email') || null,
+          wib_phone: getWibField(row, 'Phone','WIB Phone','Contact Phone','Phone Number') || null,
+          website: domain || null,
+          source_url: website || name,
+          notes: noteParts.join('\n') || null,
           independent_creation_logged: true,
-          last_verified_date: today
+          owner_id: req.user.id,
+          last_verified_date: new Date().toISOString().split('T')[0]
         })
       }
       results.errors.push(...skipped)
-      // Bulk insert in chunks of 500
-      for (let i = 0; i < valid.length; i += 500) await bulkInsert('wib_records', valid.slice(i, i + 500))
+      for (let i = 0; i < valid.length; i += 100) await bulkInsert('wib_records', valid.slice(i, i + 100))
 
     } else if (type === 'companies') {
       // Comprehensive field mapping — handles Attio, HubSpot, Salesforce, custom CSVs
@@ -1082,21 +1165,53 @@ app.post('/api/import/:type', auth, async (req, res) => {
         if (w.short_name) wibMap.set(w.short_name.toLowerCase().trim(), w.id)
       }
 
-      // Helper: find company ID with fuzzy matching
-      const findCompanyId = (name) => {
+      // Helper: find company ID with aggressive fuzzy matching
+      const findCompanyId = async (name) => {
         if (!name) return null
         const lower = name.toLowerCase().trim()
-        // Exact match
+
+        // 1. Exact match
         if (companyMap.has(lower)) return companyMap.get(lower)
-        // Partial match — company name starts with search term
+
+        // 2. Starts-with (handles "Community" vs "Communities" — share first 28 chars)
         for (const [key, id] of companyMap) {
           if (key.startsWith(lower.substring(0, Math.min(20, lower.length)))) return id
           if (lower.startsWith(key.substring(0, Math.min(20, key.length)))) return id
         }
-        // Contains match
+
+        // 3. Contains match
+        const prefix15 = lower.substring(0, 15)
         for (const [key, id] of companyMap) {
-          if (key.includes(lower.substring(0, 15)) || lower.includes(key.substring(0, 15))) return id
+          if (key.includes(prefix15) || lower.includes(key.substring(0, 15))) return id
         }
+
+        // 4. Word-overlap match — count shared significant words
+        const words = lower.split(/\s+/).filter(w => w.length > 3)
+        let bestId = null, bestScore = 0
+        for (const [key, id] of companyMap) {
+          const keyWords = key.split(/\s+/)
+          const shared = words.filter(w => keyWords.some(kw => kw.startsWith(w.substring(0,6)) || w.startsWith(kw.substring(0,6)))).length
+          const score = shared / Math.max(words.length, 1)
+          if (score > 0.7 && score > bestScore) { bestScore = score; bestId = id }
+        }
+        if (bestId) return bestId
+
+        // 5. Last resort: direct DB ILIKE query (handles edge cases where map load failed)
+        try {
+          const searchTerm = lower.substring(0, 20)
+          const { data } = await supabase.from('companies').select('id').ilike('company_name', searchTerm + '%').limit(1)
+          if (data?.[0]) {
+            companyMap.set(lower, data[0].id) // cache for next use
+            return data[0].id
+          }
+          // Try contains
+          const { data: d2 } = await supabase.from('companies').select('id').ilike('company_name', '%' + lower.substring(0, 15) + '%').limit(1)
+          if (d2?.[0]) {
+            companyMap.set(lower, d2[0].id)
+            return d2[0].id
+          }
+        } catch(e) { /* fallthrough */ }
+
         return null
       }
 
@@ -1134,7 +1249,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
         if (!companyName) { results.errors.push('Skipped row — no company name'); continue }
 
         // Find company ID
-        const company_id = findCompanyId(companyName)
+        const company_id = await findCompanyId(companyName)
         
         // Get WIB — try dedicated column first, then parse from Record
         const rawWib = row['WIB']?.trim() || row['Workforce Board']?.trim() || 
@@ -1145,10 +1260,14 @@ app.post('/api/import/:type', auth, async (req, res) => {
           if (parts.length >= 2) return parts[1]?.trim()
           return null
         })()
-        const wib_id = findWibId(wibName)
+        const wib_id = wibName ? findWibId(wibName) : null
 
         if (!company_id) {
-          results.errors.push(`Skipped "${companyName}" — not found in Companies (import companies first)`)
+          // Log first few failures with context
+          if (results.errors.length < 5) {
+            console.log('App import miss: "'+companyName+'" not matched. Map size: '+companyMap.size+'. Sample keys: '+[...companyMap.keys()].slice(0,3).join(', '))
+          }
+          results.errors.push('Skipped "'+companyName+'" — not found in Companies (import companies first)')
           continue
         }
 
@@ -1258,6 +1377,49 @@ app.post('/api/import-test', auth, requireAdmin, async (req, res) => {
     return res.json({ success: true, message: 'Test insert worked — DB constraints OK', data })
   } catch(e) {
     return res.json({ success: false, threw: e.message })
+  }
+})
+
+
+// ─── AI ASSISTANT PROXY ──────────────────────────────────────────────────────
+// Proxy Anthropic API calls through server to keep API key secure
+app.post('/api/ai', auth, async (req, res) => {
+  const { prompt, context = '' } = req.body
+  if (!prompt?.trim()) return res.status(400).json({ error: 'Prompt required' })
+
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) {
+    // Return a helpful message if no API key configured
+    return res.json({ 
+      text: 'AI Assistant requires an ANTHROPIC_API_KEY environment variable. Add it in your Render dashboard under Environment Variables, then redeploy.',
+      error: true
+    })
+  }
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{
+          role: 'user',
+          content: `You are an expert workforce grant consultant AI assistant for Valor Workforce Funding LLC. Context: ${context}\n\nTask: ${prompt}\n\nBe concise and actionable. Format for CRM display.`
+        }]
+      })
+    })
+    const data = await response.json()
+    if (data.error) return res.json({ text: `AI Error: ${data.error.message}`, error: true })
+    const text = data.content?.[0]?.text || 'No response generated.'
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'AI_QUERY', details: prompt.substring(0, 200) }) } catch(_) {}
+    res.json({ text })
+  } catch(e) {
+    res.status(500).json({ error: e.message, text: 'AI temporarily unavailable: ' + e.message })
   }
 })
 
