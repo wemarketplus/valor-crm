@@ -56,11 +56,24 @@ setInterval(() => {
 }, 30 * 60 * 1000)
 
 // ─── SUPABASE ──────────────────────────────────────────────────────────────────
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
-  console.error('FATAL: Missing SUPABASE_URL or SUPABASE_SERVICE_KEY env vars')
-  process.exit(1)
-}
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
+const SUPABASE_URL = process.env.SUPABASE_URL
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY
+
+if (!SUPABASE_URL) { console.error('FATAL: Missing SUPABASE_URL'); process.exit(1) }
+if (!SUPABASE_SERVICE_KEY) { console.error('FATAL: Missing SUPABASE_SERVICE_KEY'); process.exit(1) }
+if (!SUPABASE_ANON_KEY) { console.warn('WARNING: No SUPABASE_ANON_KEY — using service key for auth (set this!)') }
+
+// authClient: ANON KEY for signInWithPassword — correct for user-facing auth
+const authClient = createClient(
+  SUPABASE_URL, SUPABASE_ANON_KEY || SUPABASE_SERVICE_KEY,
+  { auth: { autoRefreshToken: false, persistSession: false } }
+)
+// supabase: SERVICE KEY for all DB queries — server-side only, bypasses RLS
+const supabase = createClient(
+  SUPABASE_URL, SUPABASE_SERVICE_KEY,
+  { auth: { autoRefreshToken: false, persistSession: false } }
+)
 
 // ─── BLOCK SOURCE FILE EXPOSURE ────────────────────────────────────────────────
 // Prevents serving server.js, package.json, .env, etc.
@@ -97,7 +110,8 @@ async function auth(req, res, next) {
     return res.status(401).json({ error: 'Invalid token format' })
   }
   try {
-    const { data: { user }, error } = await supabase.auth.getUser(token)
+    // Use authClient (anon key) to validate user tokens — service key getUser behaves differently
+    const { data: { user }, error } = await authClient.auth.getUser(token)
     if (error || !user) return res.status(401).json({ error: 'Session expired. Please sign in again.' })
     const { data: profile, error: profileErr } = await supabase
       .from('user_profiles')
@@ -127,31 +141,121 @@ const requireSuper = (req, res, next) =>
 
 // ─── AUTH ROUTES ───────────────────────────────────────────────────────────────
 app.post('/api/login', rateLimitLogin, async (req, res) => {
-  const { email, password } = req.body
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' })
-  if (typeof email !== 'string' || typeof password !== 'string') {
-    return res.status(400).json({ error: 'Invalid input' })
+  // Always return JSON — never crash silently
+  try {
+    const { email, password } = req.body || {}
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' })
+    }
+    if (typeof email !== 'string' || typeof password !== 'string') {
+      return res.status(400).json({ error: 'Invalid input format' })
+    }
+    const cleanEmail = email.trim().toLowerCase()
+
+    // Use authClient (anon key) for signInWithPassword — correct Supabase pattern
+    const { data, error } = await authClient.auth.signInWithPassword({
+      email: cleanEmail, password
+    })
+
+    if (error || !data?.session) {
+      console.log('Login failed for:', cleanEmail, error?.message)
+      return res.status(401).json({ error: 'Invalid email or password' })
+    }
+
+    // Fetch user profile from DB using service key
+    const { data: profile, error: profileErr } = await supabase
+      .from('user_profiles').select('*').eq('id', data.user.id).single()
+
+    if (profileErr || !profile) {
+      console.error('Profile fetch failed:', profileErr?.message)
+      return res.status(401).json({ error: 'User profile not found. Contact administrator.' })
+    }
+
+    if (profile.is_active === false) {
+      return res.status(403).json({ error: 'Account disabled. Contact your administrator.' })
+    }
+
+    // Update last login timestamp
+    await supabase.from('user_profiles')
+      .update({ last_login_at: new Date().toISOString() })
+      .eq('id', data.user.id).catch(() => {})
+
+    // Log activity
+    await supabase.from('activity_log').insert({
+      user_id: data.user.id, action: 'USER_LOGIN',
+      details: `Login from ${req.headers['x-forwarded-for']?.split(',')[0] || 'unknown'}`
+    }).catch(() => {})
+
+    return res.json({ token: data.session.access_token, user: profile })
+  } catch (err) {
+    console.error('Login route error:', err)
+    return res.status(500).json({ error: 'Login service error. Please try again.' })
   }
-  const { data, error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
-  if (error) return res.status(401).json({ error: 'Invalid email or password' })
-  const { data: profile } = await supabase.from('user_profiles').select('*').eq('id', data.user.id).single()
-  if (profile?.is_active === false) {
-    return res.status(403).json({ error: 'Account disabled. Contact your administrator.' })
-  }
-  // Log login
-  await supabase.from('activity_log').insert({
-    user_id: data.user.id, action: 'USER_LOGIN',
-    details: `Login · ${req.headers['x-forwarded-for']?.split(',')[0] || 'unknown IP'}`
-  }).catch(() => {})
-  res.json({ token: data.session.access_token, user: profile })
 })
 
 app.post('/api/logout', auth, async (req, res) => {
-  await supabase.auth.signOut().catch(() => {})
+  await authClient.auth.signOut().catch(() => {})
   await supabase.from('activity_log').insert({
     user_id: req.user.id, action: 'USER_LOGOUT', details: 'User signed out'
   }).catch(() => {})
   res.json({ success: true })
+})
+
+// ─── CHANGE OWN PASSWORD ───────────────────────────────────────────────────────
+app.post('/api/change-password', auth, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body
+    if (!new_password || new_password.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters' })
+    }
+    // Re-authenticate with current password to verify identity
+    const { error: authErr } = await authClient.auth.signInWithPassword({
+      email: req.user.email, password: current_password
+    })
+    if (authErr) {
+      return res.status(401).json({ error: 'Current password is incorrect' })
+    }
+    // Update password using admin (service) client
+    const { error } = await supabase.auth.admin.updateUserById(req.user.id, {
+      password: new_password
+    })
+    if (error) return res.status(400).json({ error: error.message })
+    await supabase.from('activity_log').insert({
+      user_id: req.user.id, action: 'CHANGE_PASSWORD', details: 'User changed their own password'
+    }).catch(() => {})
+    res.json({ success: true, message: 'Password changed successfully' })
+  } catch (err) {
+    console.error('Change password error:', err)
+    res.status(500).json({ error: 'Password change failed. Please try again.' })
+  }
+})
+
+// ─── ADMIN RESET USER PASSWORD ─────────────────────────────────────────────────
+app.post('/api/users/:id/reset-password', auth, requireAdmin, async (req, res) => {
+  try {
+    const { new_password } = req.body
+    if (!new_password || new_password.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters' })
+    }
+    const { data: target } = await supabase.from('user_profiles')
+      .select('email,full_name').eq('id', req.params.id).single()
+    if (!target) return res.status(404).json({ error: 'User not found' })
+
+    const { error } = await supabase.auth.admin.updateUserById(req.params.id, {
+      password: new_password
+    })
+    if (error) return res.status(400).json({ error: error.message })
+
+    await supabase.from('activity_log').insert({
+      user_id: req.user.id, action: 'RESET_PASSWORD',
+      record_type: 'user_profiles', record_id: req.params.id,
+      details: `Admin reset password for: ${target.email}`
+    }).catch(() => {})
+    res.json({ success: true, message: `Password reset for ${target.email}` })
+  } catch (err) {
+    console.error('Reset password error:', err)
+    res.status(500).json({ error: 'Password reset failed. Please try again.' })
+  }
 })
 
 app.get('/api/me', auth, (req, res) => res.json(req.user))
