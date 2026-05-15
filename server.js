@@ -110,47 +110,76 @@ const requireDelete = (req, res, next) =>
   ['super_admin','admin'].includes(req.user?.role) ? next() : res.status(403).json({ error: 'Delete requires Admin or Super Admin access' })
 
 // ─── SAFE ACTIVITY LOG HELPER ───────────────────────────────────────────────
-// Resilient activity_log insert that handles schema cache issues
+// Resilient activity_log insert
 async function logActivity(payload) {
   try {
-    const { error } = await supabase.from('activity_log').insert(payload)
-    if (error && error.message?.includes("'details'")) {
-      // Schema cache issue - retry without details column
-      const { details, ...rest } = payload
-      rest.metadata = { ...(rest.metadata || {}), details_fallback: details }
-      await supabase.from('activity_log').insert(rest)
-    }
+    const { error } = await safeInsertLog(payload)
+    if (error) console.warn('logActivity error:', error.message)
   } catch(e) {
-    console.warn('Activity log failed silently:', e.message)
+    console.warn('logActivity failed:', e.message)
   }
 }
 
 // ─── SCHEMA CACHE REFRESH ────────────────────────────────────────────────────
 // Refresh Supabase PostgREST schema cache to fix 'column not found' errors
+// Schema detection - run once on startup
+global._hasMetadata = false  // assume NO metadata column until confirmed
+global._detailsColumnMissing = false
+
 async function refreshSchemaCache() {
   try {
-    // Try to access 'details' column to test schema cache
-    const { data, error } = await supabase.from('activity_log').select('id,action,details,metadata,created_at').limit(1)
-    if (error && error.message?.includes("'details'")) {
-      console.warn('PostgREST schema cache missing details column — triggering reload via RPC')
-      // Use Supabase service key to call pg_notify to reload PostgREST schema
-      try {
-        await supabase.rpc('reload_pgrst_schema').catch(() => null)
-      } catch(e2) { /* rpc may not exist, that's ok */ }
+    // Test with just details (no metadata) - safest query
+    const { data, error } = await supabase.from('activity_log').select('id,action,details,created_at').limit(1)
+    if (error?.message?.includes("'details'")) {
       global._detailsColumnMissing = true
-      console.warn('Will use metadata-only inserts until schema cache refreshes')
+      console.warn('activity_log.details column missing')
     } else {
       global._detailsColumnMissing = false
-      console.log('✓ Schema cache OK: activity_log.details accessible')
+    }
+    // Test if metadata column exists
+    const { error: metaErr } = await supabase.from('activity_log').select('metadata').limit(1)
+    if (!metaErr) {
+      global._hasMetadata = true
+      console.log('✓ activity_log.metadata column exists')
+    } else {
+      global._hasMetadata = false
+      console.warn('activity_log.metadata column NOT in DB — storing all data in details as JSON')
     }
   } catch(e) {
-    console.warn('Schema cache check failed:', e.message)
-    global._detailsColumnMissing = true
+    console.warn('Schema check failed:', e.message)
   }
 }
-// Run on startup and every 5 minutes
-setTimeout(refreshSchemaCache, 1000)
-setInterval(refreshSchemaCache, 5 * 60 * 1000)
+setTimeout(refreshSchemaCache, 500)
+
+// Helper: safe insert to activity_log regardless of metadata column existence
+async function safeInsertLog(payload) {
+  const { metadata, details, ...base } = payload
+  let detailsStr = details
+  // If no metadata column, encode metadata INTO details as JSON
+  if (!global._hasMetadata && metadata) {
+    detailsStr = JSON.stringify({ text: details, ...metadata })
+  } else if (global._hasMetadata && metadata) {
+    base.metadata = metadata
+    detailsStr = details
+  }
+  if (detailsStr !== undefined) base.details = detailsStr
+  const { data, error } = await supabase.from('activity_log').insert(base).select().single()
+  return { data, error }
+}
+
+// Helper: parse activity_log row - extract metadata from details JSON if needed
+function parseLogRow(row) {
+  if (!row) return row
+  if (row.metadata) return row  // has real metadata column
+  // Try to parse details as JSON
+  try {
+    const parsed = JSON.parse(row.details || '{}')
+    if (typeof parsed === 'object' && parsed !== null) {
+      return { ...row, metadata: parsed, details: parsed.text || row.details }
+    }
+  } catch(e) {}
+  return row
+}
 
 app.post('/api/refresh-schema', auth, requireAdmin, async (req, res) => {
   try {
@@ -521,83 +550,78 @@ app.put('/api/revenue/:id', auth, async (req, res) => {
 // ─── NOTES ────────────────────────────────────────────────────────────────────
 app.get('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, limit = 50 } = req.query
-  let q = supabase.from('activity_log').select('id,action,metadata,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)').eq('action', 'NOTE')
+  const cols = global._hasMetadata
+    ? 'id,action,details,metadata,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)'
+    : 'id,action,details,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)'
+  let q = supabase.from('activity_log').select(cols).eq('action', 'NOTE')
   if (record_type) q = q.eq('record_type', record_type)
   if (record_id) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 200))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
-  // Normalize: add details from metadata.content for compatibility
-  const normalized = (data || []).map(n => ({
-    ...n, details: n.metadata?.content || n.metadata?.note_type || 'Note'
-  }))
+  const normalized = (data || []).map(n => parseLogRow(n))
   res.json({ data: normalized })
 })
 
 app.post('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, content, note_type = 'Note', is_aircall = false } = req.body
   if (!content?.trim()) return res.status(400).json({ error: 'Note content required' })
-  const insertPayload = {
+  const { data, error } = await safeInsertLog({
     user_id: req.user.id, action: 'NOTE',
     record_type: record_type || null, record_id: record_id || null,
+    details: content.trim(),
     metadata: { note_type, is_aircall, content: content.trim() }
-  }
-  // Only include 'details' if schema cache confirms it exists
-  if (!global._detailsColumnMissing) insertPayload.details = content.trim()
-  let { data, error } = await supabase.from('activity_log').insert(insertPayload)
-    .select('*, user:user_profiles!user_id(full_name,email)').single()
-  if (error && error.message?.includes("'details'")) {
-    global._detailsColumnMissing = true
-    delete insertPayload.details
-    ;({ data, error } = await supabase.from('activity_log').insert(insertPayload)
-      .select('*, user:user_profiles!user_id(full_name,email)').single())
-  }
+  })
   if (error) return res.status(400).json({ error: error.message })
-  // Normalize: ensure details field exists in response from metadata fallback
-  if (data && !data.details && data.metadata?.content) data.details = data.metadata.content
-  res.json(data)
+  // Fetch with user join
+  const { data: full } = await supabase.from('activity_log')
+    .select('id,action,details,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)')
+    .eq('id', data.id).single()
+  res.json(parseLogRow(full || data))
 })
 
 // ─── TASKS ────────────────────────────────────────────────────────────────────
 app.get('/api/tasks', auth, async (req, res) => {
   const { record_id, limit = 100 } = req.query
-  let q = supabase.from('activity_log').select('id,action,metadata,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name)').eq('action', 'TASK')
+  const cols = global._hasMetadata
+    ? 'id,action,details,metadata,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name)'
+    : 'id,action,details,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name)'
+  let q = supabase.from('activity_log').select(cols).eq('action', 'TASK')
   if (record_id) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 100))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
-  // Normalize: add details from metadata.title for compatibility
-  const normalized = (data || []).map(t => ({
-    ...t, details: t.metadata?.title || t.metadata?.content || 'Task'
-  }))
+  const normalized = (data || []).map(t => parseLogRow(t))
   res.json({ data: normalized })
 })
 
 app.post('/api/tasks', auth, async (req, res) => {
   const { title, due_date, record_type, record_id, priority = 'normal', notes, assigned_to } = req.body
   if (!title?.trim()) return res.status(400).json({ error: 'Task title required' })
-  const taskPayload = {
-    user_id: req.user.id, action: 'TASK', record_type: record_type || null, record_id: record_id || null,
-    metadata: { due_date, priority, notes, done: false, assigned_to, title: title.trim(), created_by: req.user.full_name || req.user.email }
-  }
-  if (!global._detailsColumnMissing) taskPayload.details = title.trim()
-  let { data, error } = await supabase.from('activity_log').insert(taskPayload).select().single()
-  if (error && error.message?.includes("'details'")) {
-    global._detailsColumnMissing = true
-    delete taskPayload.details
-    ;({ data, error } = await supabase.from('activity_log').insert(taskPayload).select().single())
-  }
+  const { data, error } = await safeInsertLog({
+    user_id: req.user.id, action: 'TASK',
+    record_type: record_type || null, record_id: record_id || null,
+    details: title.trim(),
+    metadata: { due_date, priority, notes, done: false, assigned_to, title: title.trim(), created_by: req.user.email }
+  })
   if (error) return res.status(400).json({ error: error.message })
-  // Normalize: ensure title is accessible for frontend
-  if (data && !data.details) data.details = data.metadata?.title || 'Task'
-  res.json(data)
+  res.json(parseLogRow(data))
 })
 
 app.put('/api/tasks/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select('metadata').eq('id', req.params.id).single()
-  const { data, error } = await supabase.from('activity_log').update({ metadata: { ...(existing?.metadata || {}), ...req.body } }).eq('id', req.params.id).select().single()
+  // Fetch existing to merge state
+  const { data: existing } = await supabase.from('activity_log')
+    .select('id,details,created_at').eq('id', req.params.id).single()
+  const existingParsed = parseLogRow(existing)
+  const currentMeta = existingParsed?.metadata || {}
+  const newMeta = { ...currentMeta, ...req.body }
+  // Save merged state back
+  const updatePayload = global._hasMetadata
+    ? { metadata: newMeta }
+    : { details: JSON.stringify({ text: currentMeta.title || currentMeta.text, ...newMeta }) }
+  const { data, error } = await supabase.from('activity_log').update(updatePayload).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
+  res.json(parseLogRow(data))
 })
 
 // ─── ACTIVITY / AUDIT ─────────────────────────────────────────────────────────
@@ -1155,38 +1179,88 @@ app.post('/api/import/:type', auth, async (req, res) => {
           insertRow.notes = insertRow.notes.substring(0, 9997) + '...'
         }
 
-        const { error: insertErr } = await supabase.from('companies').insert(insertRow)
-        if (insertErr) {
-          results.errors.push(`"${name}": ${insertErr.message}`)
-          if (results.errors.length === 1) {
-            console.error('First company import error:', insertErr.code, insertErr.message)
-            console.error('Hint:', insertErr.hint, '| Details:', insertErr.details)
-            console.error('Row attempted:', JSON.stringify(insertRow))
+        // UPSERT: update if company_name already exists, insert if not
+        const { data: existingCo } = await supabase.from('companies')
+          .select('id').ilike('company_name', insertRow.company_name).limit(1)
+        let insertErr
+        if (existingCo?.[0]) {
+          // Update existing record - only fill in missing fields
+          const updateFields = {}
+          for (const [k,v] of Object.entries(insertRow)) {
+            if (v !== null && v !== '' && k !== 'company_name') updateFields[k] = v
           }
+          if (Object.keys(updateFields).length) {
+            const { error } = await supabase.from('companies').update(updateFields).eq('id', existingCo[0].id)
+            insertErr = error
+          }
+          results.created++  // count as processed
         } else {
-          results.created++
+          const { error } = await supabase.from('companies').insert(insertRow)
+          insertErr = error
+          if (!insertErr) results.created++
+        }
+        if (insertErr) {
+          results.errors.push('"' + name + '": ' + insertErr.message)
+          if (results.errors.length === 1) console.error('First company import error:', insertErr.message)
         }
       }
 
     } else if (type === 'locations') {
-      const valid = []
-      for (const row of rows) {
-        const name = row['Location Name']?.trim()
-        if (!name) { results.errors.push('Skipped row — Location Name required'); continue }
-        valid.push({
-          location_name: name,
-          state: row['State'] || null,
-          county: row['County'] || null,
-          city: row['City'] || null,
-          status: (() => {
-            const rawS = (row['Status'] || '').toLowerCase().trim()
-            // Locations valid: prospect, active, inactive (text field, less strict)
-            return rawS || 'prospect'
-          })(),
-          employee_count: row['Employee Count'] ? parseInt(row['Employee Count']) : null
-        })
+      // Pre-load companies for parent linking (Attio: "Parent Operator" column)
+      const { data: allCos } = await supabase.from('companies').select('id,company_name')
+      const coMap = new Map()
+      for (const co of (allCos || [])) {
+        coMap.set(co.company_name.toLowerCase().trim(), co.id)
+        coMap.set(co.company_name.toLowerCase().trim().substring(0,25), co.id)
       }
-      for (let i = 0; i < valid.length; i += 500) await bulkInsert('locations', valid.slice(i, i + 500))
+      const findCo = (name) => {
+        if (!name) return null
+        const lower = name.toLowerCase().trim()
+        if (coMap.has(lower)) return coMap.get(lower)
+        for (const [k,id] of coMap) {
+          if (k.startsWith(lower.substring(0,15)) || lower.startsWith(k.substring(0,15))) return id
+        }
+        return null
+      }
+
+      for (const row of rows) {
+        const name = row['Record']?.trim() || row['Location Name']?.trim() || row['Location']?.trim() || row['Name']?.trim()
+        if (!name) { results.errors.push('Skipped — no location name'); continue }
+
+        const parentName = row['Parent Operator']?.trim() || row['Parent Company']?.trim() || row['Company']?.trim() || row['Operator']?.trim()
+        const company_id = findCo(parentName)
+
+        const rawState = row['State']?.trim() || row['Province']?.trim()
+        const rawStatus = (row['Status'] || 'prospect').toLowerCase()
+        const statusMap = { 'not contacted': 'prospect', 'network member': 'prospect', 'active': 'active', 'prospect': 'prospect', 'inactive': 'inactive' }
+        
+        // UPSERT: check if location already exists
+        const { data: existingLoc } = await supabase.from('locations')
+          .select('id').ilike('location_name', name).limit(1)
+        
+        const locRow = {
+          location_name: name,
+          state: rawState || null,
+          city: row['City']?.trim() || null,
+          county: row['County']?.trim() || null,
+          status: statusMap[rawStatus] || 'prospect',
+          employee_count: row['Employee Count'] ? parseInt(row['Employee Count']) : null,
+          notes: row['Notes'] || null,
+        }
+        if (company_id) locRow.company_id = company_id
+
+        let locErr
+        if (existingLoc?.[0]) {
+          const { error } = await supabase.from('locations').update(locRow).eq('id', existingLoc[0].id)
+          locErr = error
+          results.created++
+        } else {
+          const { error } = await supabase.from('locations').insert(locRow)
+          locErr = error
+          if (!locErr) results.created++
+        }
+        if (locErr) results.errors.push('"' + name + '": ' + locErr.message)
+      }
 
     } else if (type === 'funding') {
       const valid = []
@@ -1589,7 +1663,7 @@ app.put('/api/permissions', auth, requireSuper, async (req, res) => {
     if (!perms[permission]) return res.status(400).json({ error: 'Unknown permission key' })
     perms[permission][role] = !!value
     await savePermissions(perms)
-    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_PERMISSIONS', details: `Set ${permission}/${role} = ${value}` }) } catch(_) {}
+    try { await logActivity({ user_id: req.user.id, action: 'UPDATE_PERMISSIONS', details: 'Set ' + permission + '/' + role + ' = ' + value }) } catch(_) {}
     res.json({ success: true, permissions: perms })
   } catch(e) {
     res.status(500).json({ error: e.message })
