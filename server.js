@@ -1219,13 +1219,17 @@ app.post('/api/import/:type', auth, async (req, res) => {
       }
 
     } else if (type === 'locations') {
-      // Pre-load companies for parent linking (Attio: "Parent Operator" column)
-      const { data: allCos } = await supabase.from('companies').select('id,company_name')
-      const coMap = new Map()
-      for (const co of (allCos || [])) {
-        coMap.set(co.company_name.toLowerCase().trim(), co.id)
-        coMap.set(co.company_name.toLowerCase().trim().substring(0,25), co.id)
+      // Pre-load companies ONCE and cache across batches
+      if (!global._importCoCache || global._importCoCache.size === 0) {
+        const { data: allCos } = await supabase.from('companies').select('id,company_name')
+        global._importCoCache = new Map()
+        for (const co of (allCos || [])) {
+          global._importCoCache.set(co.company_name.toLowerCase().trim(), co.id)
+          global._importCoCache.set(co.company_name.toLowerCase().trim().substring(0, 25), co.id)
+        }
+        console.log('Company cache loaded:', global._importCoCache.size, 'entries for locations import')
       }
+      const coMap = global._importCoCache
       const findCo = (name) => {
         if (!name) return null
         const lower = name.toLowerCase().trim()
@@ -1236,6 +1240,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
         return null
       }
 
+      const locBatch = []
       for (const row of rows) {
         const name = row['Record']?.trim() || row['Location Name']?.trim() || row['Location']?.trim() || row['Name']?.trim()
         if (!name) { results.errors.push('Skipped — no location name'); continue }
@@ -1262,17 +1267,32 @@ app.post('/api/import/:type', auth, async (req, res) => {
         }
         if (company_id) locRow.company_id = company_id
 
-        let locErr
+        // Collect for bulk insert
         if (existingLoc?.[0]) {
+          // Update existing
           const { error } = await supabase.from('locations').update(locRow).eq('id', existingLoc[0].id)
-          locErr = error
-          results.created++
+          if (error) results.errors.push('"' + name + '": ' + error.message)
+          else results.created++
         } else {
-          const { error } = await supabase.from('locations').insert(locRow)
-          locErr = error
-          if (!locErr) results.created++
+          locBatch.push(locRow)
         }
-        if (locErr) results.errors.push('"' + name + '": ' + locErr.message)
+      }
+      // Bulk insert new locations
+      if (locBatch.length) {
+        for (let i = 0; i < locBatch.length; i += 200) {
+          const chunk = locBatch.slice(i, i + 200)
+          const { data: ins, error } = await supabase.from('locations').insert(chunk).select('id')
+          if (error) {
+            // On bulk error, retry individually
+            for (const row of chunk) {
+              const { error: e2 } = await supabase.from('locations').insert(row)
+              if (e2) results.errors.push('"' + (row.location_name||'?') + '": ' + e2.message)
+              else results.created++
+            }
+          } else {
+            results.created += (ins || chunk).length
+          }
+        }
       }
 
     } else if (type === 'funding') {
@@ -1308,26 +1328,40 @@ app.post('/api/import/:type', auth, async (req, res) => {
       // Attio formats application names as "Company Name - Grant Type" or "Company Name - WIB Name - IWT"
       const extractCompanyFromRecord = (record) => {
         if (!record) return null
-        // Try splitting on common Attio separators
-        const separators = [' - CO ', ' - IW', ' - Tri', ' - TX', ' - FL', ' - NY', ' - CA', ' - AL', ' - TN']
-        for (const sep of separators) {
+        // State abbreviations that appear in Attio application record names
+        // Format: "Company Name - [State]- [WIB Name] - IWT [Year]"
+        const stateCodes = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC']
+        // Check for " - XX" pattern where XX is a 2-letter state code
+        for (const code of stateCodes) {
+          const patterns = [' - ' + code + '-', ' - ' + code + ' ', ' - ' + code + ',']
+          for (const pat of patterns) {
+            const idx = record.indexOf(pat)
+            if (idx > 3) return record.substring(0, idx).trim()
+          }
+        }
+        // Check for known WIB name prefixes
+        const wibPrefixes = [' - CO ', ' - IW', ' - Tri', ' - North', ' - South', ' - East', ' - West', ' - Greater', ' - Central', ' - Capital', ' - Area ', ' - Work', ' - NOVA', ' - Hampton', ' - Permian', ' - Gulf', ' - Career']
+        for (const sep of wibPrefixes) {
           const idx = record.indexOf(sep)
           if (idx > 3) return record.substring(0, idx).trim()
         }
-        // Fall back: split on ' - ' (first occurrence, must leave at least 5 chars on each side)
+        // Fall back: split on ' - ' (first occurrence)
         const dashIdx = record.indexOf(' - ')
         if (dashIdx > 4 && dashIdx < record.length - 4) return record.substring(0, dashIdx).trim()
         return record.trim()
       }
 
-      // Pre-load ALL companies into memory to avoid 50+ DB lookups per batch
-      const { data: allCompanies } = await supabase.from('companies').select('id,company_name')
-      const companyMap = new Map()
-      for (const co of (allCompanies || [])) {
-        companyMap.set(co.company_name.toLowerCase().trim(), co.id)
-        // Also index by first 30 chars for partial matching
-        companyMap.set(co.company_name.toLowerCase().trim().substring(0, 30), co.id)
+      // Pre-load ALL companies into memory (cached across batches for performance)
+      if (!global._importCoCache || global._importCoCache.size === 0) {
+        const { data: allCompanies } = await supabase.from('companies').select('id,company_name')
+        global._importCoCache = new Map()
+        for (const co of (allCompanies || [])) {
+          global._importCoCache.set(co.company_name.toLowerCase().trim(), co.id)
+          global._importCoCache.set(co.company_name.toLowerCase().trim().substring(0, 30), co.id)
+        }
+        console.log('App import: company cache loaded with', global._importCoCache.size, 'entries')
       }
+      const companyMap = global._importCoCache
 
       // Pre-load ALL WIBs
       const { data: allWibs } = await supabase.from('wib_records').select('id,wib_name,short_name,state')
