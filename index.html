@@ -729,6 +729,10 @@ async function loadPage(page){
     else if(page==='training')await pageTraining()
     else if(page==='reports')await pageReports()
     else if(page==='notifications')pageNotifications()
+    else if(page==='emails')pageEmails()
+    else if(page==='calls')pageCalls()
+    else if(page==='sequences')pageSequences()
+    else if(page==='workflows')pageWorkflows()
     else document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🚧</div><div class="empty-text">Coming soon</div></div>`
   }catch(e){
     document.getElementById('page-area').innerHTML=`<div class="alert alert-error" style="margin:20px">⚠️ ${e.message}</div>`
@@ -797,14 +801,33 @@ async function pageDashboard(){
         </tbody></table><div class="tbl-footer">${wibs.count||0} boards</div>`}
       </div>
       <div class="tbl-wrap">
-        <div class="tbl-head"><div class="tbl-title">✅ Today's Tasks</div><button class="btn btn-sm" onclick="openTaskModal()">+ Task</button></div>
-        <div style="padding:0 14px">
-          ${getDemoTasks().map(t=>renderTaskRow(t)).join('')}
-        </div>
+        <div class="tbl-head"><div class="tbl-title">✅ Today's Tasks</div><button class="btn btn-sm btn-primary" onclick="openTaskModal()">+ Task</button></div>
+        <div style="padding:0 14px" id="dash-tasks-widget"><div style="color:var(--text3);font-size:12px;padding:12px">⏳ Loading tasks...</div></div>
       </div>
     </div>
   </div>`
+  // Load tasks into dashboard widget from DB
+  api('/api/tasks?limit=10&done=false').then(r=>{
+    const widget=document.getElementById('dash-tasks-widget')
+    if(!widget)return
+    const tasks=(r.data||[]).slice(0,5)
+    if(!tasks.length){widget.innerHTML='<div style="color:var(--text3);font-size:12px;padding:12px;text-align:center">No open tasks — <button class="btn btn-sm" onclick="openTaskModal()">create one</button></div>';return}
+    const now=new Date()
+    widget.innerHTML=tasks.map(t=>{
+      const m=t.metadata||{}
+      const due=m.due_date?new Date(m.due_date):null
+      const overdue=due&&!m.done&&due<now
+      return`<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:.5px solid var(--gray2)">
+        <div class="task-check${m.done?' done':''}" onclick="toggleTaskDB('${t.id}',${!!m.done})" style="cursor:pointer;flex-shrink:0">✓</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:500;${m.done?'text-decoration:line-through;opacity:.5':''}">${t.details||'Untitled'}</div>
+          ${due?`<div style="font-size:10px;color:${overdue?'var(--red-t)':'var(--text3)'}">${overdue?'⚠️ Overdue: ':''} ${due.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>`:''}
+        </div>
+      </div>`
+    }).join('')
+  }).catch(()=>{})
 }
+
 
 // ═══════════════════════════════════════════════════════
 // WIB PROFILE PAGE
@@ -1644,6 +1667,117 @@ async function pageUsers(){
   loadPermissionsMatrix()
 }
 
+// ─── EMAILS PAGE ──────────────────────────────────────────────────────────────
+function pageEmails(){
+  setTopbar('Emails','Outreach & Communication',
+    '<button class="btn btn-primary" onclick="showToast(\'Email integration connects via your provider (Gmail/Outlook). Configure in Settings.\',\'info\')">+ Compose</button>')
+  document.getElementById('page-area').innerHTML=`
+  <div class="alert alert-info" style="margin-bottom:16px">
+    📧 <strong>Email Integration</strong> — Connect Gmail or Outlook in Settings to send and track emails directly from the CRM. All emails will be linked to company and contact records automatically.
+  </div>
+  <div class="g2">
+    <div class="card">
+      <div class="card-header"><div class="card-title">📤 Outreach Sequences</div></div>
+      <div class="card-body">
+        <div class="empty-state" style="padding:30px">
+          <div class="empty-icon">📧</div>
+          <div class="empty-text">No emails yet</div>
+          <div class="empty-sub">Connect your email provider in Settings to start sending outreach</div>
+          <button class="btn btn-primary" style="margin-top:12px" onclick="showToast('Go to Settings → Integrations to connect Gmail or Outlook','info')">Connect Email</button>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">📊 Email Stats</div></div>
+        <div class="card-body">
+          ${[['Emails Sent','0'],['Open Rate','—'],['Reply Rate','—'],['Bounced','0']].map(([l,v])=>`<div class="stat-row"><span class="stat-label">${l}</span><span class="stat-value">${v}</span></div>`).join('')}
+        </div>
+      </div>
+      <div class="card" style="margin-top:10px">
+        <div class="card-header"><div class="card-title">🔗 Quick Actions</div></div>
+        <div class="card-body">
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <button class="btn" onclick="loadPage('wibs')" style="justify-content:flex-start">📋 View WIBs to outreach</button>
+            <button class="btn" onclick="loadPage('companies')" style="justify-content:flex-start">🏢 View Companies</button>
+            <button class="btn" onclick="showToast('Configure email in Settings → Integrations','info')" style="justify-content:flex-start">⚙️ Connect Email Provider</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`
+}
+
+// ─── CALLS PAGE ────────────────────────────────────────────────────────────────
+function pageCalls(){
+  setTopbar('Calls','Call Logs & Aircall Integration',
+    '<button class="btn btn-primary" onclick="addAircallNote()">+ Log Call</button>')
+  document.getElementById('page-area').innerHTML=`
+  <div class="alert alert-info" style="margin-bottom:16px">
+    📞 <strong>Aircall Integration</strong> — All logged calls appear here. Use the "Log Call" button to manually log any call. Connect Aircall in Settings to auto-sync inbound/outbound calls.
+  </div>
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-title">📞 Call History</div>
+      <div style="display:flex;gap:8px">
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All directions</option><option>Inbound</option><option>Outbound</option></select>
+      </div>
+    </div>
+    <div id="calls-list" style="padding:16px">
+      <div class="empty-state">
+        <div class="empty-icon">📞</div>
+        <div class="empty-text">No calls logged yet</div>
+        <div class="empty-sub">Log a call manually or connect Aircall to auto-sync. Logged calls also appear in the Notes tab of each record.</div>
+        <button class="btn btn-primary" style="margin-top:12px" onclick="addAircallNote()">📱 Log Your First Call</button>
+      </div>
+    </div>
+  </div>`
+  // Load calls from notes (is_aircall=true)
+  api('/api/notes?note_type=Aircall&limit=100').then(r=>{
+    const calls = (r.data||[]).filter(n=>n.metadata?.is_aircall||n.metadata?.note_type==='Aircall')
+    if(!calls.length)return
+    const list=document.getElementById('calls-list')
+    if(!list)return
+    list.innerHTML=calls.map(c=>{
+      const ts=new Date(c.created_at)
+      const author=c.user?.full_name||c.user?.email||'Unknown'
+      return`<div class="note-card" style="margin-bottom:8px">
+        <div class="note-meta">
+          <div class="note-av" style="background:var(--green-bg);color:var(--green-t)">📞</div>
+          <div class="note-author">${author}</div>
+          <div class="note-time">${ts.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})} at ${ts.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</div>
+          <span class="pill p-green">Aircall</span>
+        </div>
+        <div class="note-content" style="white-space:pre-wrap">${c.details||''}</div>
+      </div>`
+    }).join('')
+  }).catch(()=>{})
+}
+
+// ─── SEQUENCES PAGE ────────────────────────────────────────────────────────────
+function pageSequences(){
+  setTopbar('Sequences','Automated Outreach Sequences','')
+  document.getElementById('page-area').innerHTML=`
+  <div class="alert alert-info">⚡ <strong>Sequences</strong> — Automated multi-step outreach campaigns are coming in Phase 5. Build sequences of emails, calls, and tasks that run automatically.</div>
+  <div class="empty-state" style="padding:60px">
+    <div class="empty-icon">⚡</div>
+    <div class="empty-text">Sequences coming in Phase 5</div>
+    <div class="empty-sub">Automate your outreach with multi-step email, call, and task sequences</div>
+  </div>`
+}
+
+// ─── WORKFLOWS PAGE ────────────────────────────────────────────────────────────
+function pageWorkflows(){
+  setTopbar('Workflows','Automation Rules','')
+  document.getElementById('page-area').innerHTML=`
+  <div class="alert alert-info">🔄 <strong>Workflows</strong> — Rule-based automation (if/then triggers) are coming in Phase 5. Auto-assign tasks, send notifications, and update statuses based on triggers.</div>
+  <div class="empty-state" style="padding:60px">
+    <div class="empty-icon">🔄</div>
+    <div class="empty-text">Workflows coming in Phase 5</div>
+    <div class="empty-sub">Create automation rules: when a WIB is updated → create a task, notify the team, etc.</div>
+  </div>`
+}
+
 // ─── PERMISSIONS MATRIX ──────────────────────────────────────────────────────
 
 const PERM_LABELS = {
@@ -2405,48 +2539,60 @@ function toggleNotif(){
   }
 }
 
-function pageNotifications(){
-  setTopbar('Notifications','','')
+async function pageNotifications(){
+  setTopbar('Notifications','','<button class="btn btn-sm" onclick="markAllNotifsRead()">✓ Mark all read</button>')
   document.getElementById('page-area').innerHTML=`
   <div class="g2">
     <div class="tbl-wrap">
-      <div class="tbl-head"><div class="tbl-title">🔔 All Notifications</div><button class="btn btn-sm">Mark all read</button></div>
-      <div>
-        ${getDemoNotifications().map(n=>`<div class="notif-item${n.unread?' unread':''}" style="border-bottom:.5px solid var(--gray)">
-          <div class="notif-av" style="background:${n.color}22;color:${n.color}">${n.initials}</div>
-          <div style="flex:1">
-            <div class="notif-text">${n.text}</div>
-            <div class="notif-time">${n.time}</div>
-            ${n.actions?`<div style="display:flex;gap:5px;margin-top:6px">${n.actions.map(a=>`<button class="btn btn-xs ${a.primary?'btn-primary':''}">${a.label}</button>`).join('')}</div>`:''}
-          </div>
-        </div>`).join('')}
-      </div>
+      <div class="tbl-head"><div class="tbl-title">🔔 Recent Activity & Notifications</div></div>
+      <div id="notif-list" style="padding:12px"><div style="color:var(--text3);text-align:center;padding:20px">⏳ Loading...</div></div>
     </div>
-    <div class="card">
-      <div class="card-header"><div class="card-title">⚙️ Notification Settings</div></div>
-      <div class="card-body">
-        ${[
-          ['New grant opportunity matched','Email + In-app',true],
-          ['Application status change','In-app',true],
-          ['Compliance deadline 14 days out','Email + In-app',true],
-          ['Invoice overdue','Email',true],
-          ['New team message','In-app',false],
-          ['AI action completed','In-app',true],
-          ['User access request','Email + In-app',true],
-        ].map(([label,type,active])=>`<div class="stat-row">
-          <div><div class="stat-label" style="color:var(--text);font-size:12px">${label}</div><div style="font-size:10px;color:var(--text3)">${type}</div></div>
-          <div style="width:36px;height:20px;border-radius:10px;background:${active?'var(--nv)':'var(--gray2)'};cursor:pointer;position:relative" onclick="this.style.background=this.style.background==='var(--nv)'?'var(--gray2)':'var(--nv)'">
-            <div style="width:16px;height:16px;border-radius:50%;background:#fff;position:absolute;top:2px;transition:left .15s;${active?'right:2px':'left:2px'}"></div>
-          </div>
-        </div>`).join('')}
+    <div>
+      <div class="card">
+        <div class="card-header"><div class="card-title">📊 Activity Summary</div></div>
+        <div class="card-body" id="notif-stats"></div>
       </div>
     </div>
   </div>`
+  try{
+    const r=await api('/api/activity?limit=50')
+    const items=r.data||[]
+    const list=document.getElementById('notif-list')
+    if(!list)return
+    if(!items.length){list.innerHTML='<div class="empty-state"><div class="empty-icon">🔔</div><div class="empty-text">No activity yet</div></div>';return}
+    const icons={CREATE_WIB:'🏛️',UPDATE_WIB:'🏛️',CREATE_COMPANY:'🏢',UPDATE_COMPANY:'🏢',CREATE_APPLICATION:'📋',UPDATE_APPLICATION:'📋',
+      CREATE_INVOICE:'🧾',UPDATE_INVOICE:'🧾',CREATE_CONTRACT:'📄',IMPORT:'📥',UPDATE_PERMISSIONS:'🔐',
+      RESET_PASSWORD:'🔑',CREATE_USER:'👤',CONTACT:'👤',NOTE:'📝',TASK:'✅',LOGIN:'🔐',default:'📌'}
+    list.innerHTML=items.map(item=>{
+      const icon=icons[item.action]||icons.default
+      const ts=new Date(item.created_at)
+      const timeAgo=formatTimeAgo(ts)
+      return`<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border-bottom:.5px solid var(--gray2)">
+        <div style="font-size:18px;width:28px;flex-shrink:0">${icon}</div>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:500;color:var(--text)">${item.details||item.action}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px">${item.user?.full_name||item.user?.email||'System'} · ${timeAgo}</div>
+        </div>
+      </div>`
+    }).join('')
+  }catch(e){
+    const list=document.getElementById('notif-list')
+    if(list)list.innerHTML=`<div class="alert alert-error">Failed to load: ${e.message}</div>`
+  }
 }
 
-// ═══════════════════════════════════════════════════════
-// COMPANIES
-// ═══════════════════════════════════════════════════════
+function formatTimeAgo(date){
+  const diff=Date.now()-date.getTime()
+  const mins=Math.floor(diff/60000),hrs=Math.floor(diff/3600000),days=Math.floor(diff/86400000)
+  if(mins<1)return'just now'
+  if(mins<60)return mins+'m ago'
+  if(hrs<24)return hrs+'h ago'
+  return days+'d ago'
+}
+
+function markAllNotifsRead(){showToast('All notifications marked as read','success')}
+
+
 async function pageCompanies(){
   const data=await api('/api/companies?limit=500')
   window._companies=data.data||[]
@@ -2481,14 +2627,17 @@ async function pageCompanies(){
 
 function renderCompaniesTable(data){
   if(!data.length)return`<div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">No companies yet</div></div>`
-  return`<table><thead><tr><th>Company</th><th>Status</th><th>Rating</th><th>Employees</th><th>Domain</th><th>Revenue</th><th></th></tr></thead><tbody>
+  return`<table><thead><tr>
+    <th>Company</th><th>Status</th><th>Contact</th><th>Phone</th><th>Email</th><th>Employees</th><th>Domain</th><th></th>
+  </tr></thead><tbody>
   ${data.map(c=>`<tr>
-    <td><div style="font-weight:500">${c.company_name}</div><div style="font-size:10px;color:var(--text3)">${c.company_type}</div></td>
+    <td><div style="font-weight:500">${c.company_name}</div><div style="font-size:10px;color:var(--text3)">${c.company_type||''}</div></td>
     <td>${companyStatusPill(c.status)}</td>
-    <td>${c.rating?'⭐'.repeat(c.rating):'—'}</td>
-    <td>${c.employee_count_total||'—'}</td>
-    <td><a href="https://${c.domain}" target="_blank" class="field-link" onclick="event.stopPropagation()">${c.domain||'—'}</a></td>
-    <td style="color:var(--green);font-weight:500">${c.lifetime_revenue?'$'+Number(c.lifetime_revenue).toLocaleString():'$0'}</td>
+    <td style="font-size:11px;color:var(--text2)">${c.primary_contact_name||'—'}</td>
+    <td style="font-size:11px">${c.primary_contact_phone?`<a href="tel:${c.primary_contact_phone}" class="field-link" onclick="event.stopPropagation()">${c.primary_contact_phone}</a>`:'—'}</td>
+    <td style="font-size:11px">${c.primary_contact_email?`<a href="mailto:${c.primary_contact_email}" class="field-link" onclick="event.stopPropagation()">${c.primary_contact_email}</a>`:'—'}</td>
+    <td style="font-size:11px;color:var(--text2)">${c.employee_count_total||'—'}</td>
+    <td style="font-size:11px">${c.domain?`<a href="https://${c.domain}" target="_blank" class="field-link" onclick="event.stopPropagation()">${c.domain}</a>`:'—'}</td>
     <td onclick="event.stopPropagation()"><div class="action-btns">
       <button class="action-btn" onclick="openCompanyModal(${JSON.stringify(c).replace(/"/g,"'")})">Edit</button>
       ${['super_admin','admin'].includes(currentUser?.role)?`<button class="action-btn del" onclick="deleteCompany('${c.id}','${c.company_name.replace(/'/g,'')}')">Delete</button>`:''}
