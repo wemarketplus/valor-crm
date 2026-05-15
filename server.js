@@ -892,6 +892,59 @@ app.post('/api/import/:type', auth, async (req, res) => {
       }
       for (let i = 0; i < valid.length; i += 500) await bulkInsert('funding_opportunities', valid.slice(i, i + 500))
 
+    } else if (type === 'applications') {
+      const valid = []
+      for (const row of rows) {
+        // Look up company and WIB by name to get their IDs
+        const companyName = row['Company']?.trim() || row['Company Name']?.trim() || row['Employer']?.trim() || row['Record']?.trim()
+        const wibName = row['WIB']?.trim() || row['Workforce Board']?.trim() || row['WIB Name']?.trim()
+        if (!companyName) { results.errors.push('Skipped row — Company name required'); continue }
+
+        // Find company ID
+        let company_id = null
+        if (companyName) {
+          const { data: cos } = await supabase.from('companies').select('id').ilike('company_name', `%${companyName}%`).limit(1)
+          company_id = cos?.[0]?.id || null
+        }
+        // Find WIB ID
+        let wib_id = null
+        if (wibName) {
+          const { data: wibs } = await supabase.from('wib_records').select('id').ilike('wib_name', `%${wibName}%`).limit(1)
+          wib_id = wibs?.[0]?.id || null
+        }
+
+        if (!company_id) { results.errors.push(`Skipped "${companyName}" — company not found in system (add it first)`); continue }
+
+        const rawStatus = (row['Status'] || row['Stage'] || 'intake').toLowerCase()
+        const statusMap = {
+          'intake': 'intake', 'in progress': 'in_progress', 'in_progress': 'in_progress',
+          'submitted': 'submitted', 'under review': 'under_review', 'under_review': 'under_review',
+          'awarded': 'awarded', 'denied': 'denied', 'withdrawn': 'withdrawn', 'active': 'active',
+        }
+        const status = statusMap[rawStatus] || 'intake'
+
+        valid.push({
+          company_id,
+          wib_id,
+          status,
+          award_amount_requested: (() => { const v = row['Award Requested'] || row['Amount Requested'] || row['Requested']; return v ? parseFloat(String(v).replace(/[$,]/g,'')) : null })(),
+          award_amount_approved: (() => { const v = row['Award Approved'] || row['Amount Approved'] || row['Approved']; return v ? parseFloat(String(v).replace(/[$,]/g,'')) : null })(),
+          submission_date: row['Submission Date'] || row['Submitted'] || null,
+          decision_date: row['Decision Date'] || row['Decision'] || null,
+          notes: row['Notes'] || row['Description'] || null,
+          owner_id: req.user.id,
+        })
+      }
+      // Applications must be inserted one at a time (triggers auto-number generation)
+      for (const app of valid) {
+        const { error } = await supabase.from('applications').insert(app)
+        if (error) results.errors.push(`Insert error: ${error.message}`)
+        else results.created++
+      }
+
+    } else if (type === 'wibs') {
+      // Already handled above — fallthrough safety
+      results.errors.push('WIBs import called on wrong branch')
     } else {
       return res.status(400).json({ error: `Import not supported for type: ${type}` })
     }
