@@ -169,38 +169,51 @@ async function refreshSchemaCache() {
 }
 setTimeout(refreshSchemaCache, 500)
 
-// Helper: safe insert to activity_log regardless of column availability
+// Helper: safe insert to activity_log — strips columns that PostgREST says don't exist
 async function safeInsertLog(payload) {
-  const { metadata, details, ...base } = payload
-  
+  const { metadata, details, record_type, record_id, user_id, ...base } = payload
+
+  // Only include columns confirmed to exist by refreshSchemaCache()
+  if (global._hasUserId   !== false && user_id)    base.user_id    = user_id
+  if (global._hasRecordType           && record_type) base.record_type = record_type
+  if (global._hasRecordId             && record_id)   base.record_id   = record_id
+
   if (global._hasMetadata) {
-    // Has metadata column - store content there
-    base.metadata = { ...(metadata||{}), content: details, text: details }
-    // Only add details if the column exists
-    if (!global._detailsColumnMissing && details !== undefined) {
-      base.details = details
-    }
-  } else {
-    // No metadata column - store everything in details as JSON string
-    if (!global._detailsColumnMissing) {
-      base.details = metadata ? JSON.stringify({ text: details, ...metadata }) : (details || '')
-    }
-    // If both columns missing, we still try - PostgREST schema cache may have refreshed
+    base.metadata = { ...(metadata||{}), content: details, text: details,
+      record_type: record_type||null, record_id: record_id||null }
+    if (!global._detailsColumnMissing && details !== undefined) base.details = details
+  } else if (!global._detailsColumnMissing) {
+    base.details = metadata
+      ? JSON.stringify({ text: details, record_type, record_id, ...metadata })
+      : (details || '')
   }
-  
-  const { data, error } = await supabase.from('activity_log').insert(base).select().single()
-  
-  // If insert failed due to column error, update our cache and retry without that column
-  if (error && error.message && error.message.includes('details')) {
-    global._detailsColumnMissing = true
-    delete base.details
-    if (global._hasMetadata) {
-      const { data: data2, error: error2 } = await supabase.from('activity_log').insert(base).select().single()
-      return { data: data2, error: error2 }
+
+  let { data, error } = await supabase.from('activity_log').insert(base).select().single()
+
+  // Self-heal: if a column still fails, strip it and retry once
+  if (error && error.message) {
+    const msg = error.message
+    let changed = false
+    if (msg.includes('record_type')) { global._hasRecordType = false; delete base.record_type; changed = true }
+    if (msg.includes('record_id'))   { global._hasRecordId   = false; delete base.record_id;   changed = true }
+    if (msg.includes('details'))     { global._detailsColumnMissing = true; delete base.details; changed = true }
+    if (msg.includes('metadata'))    { global._hasMetadata = false; delete base.metadata; changed = true }
+    if (msg.includes('user_id'))     { global._hasUserId   = false; delete base.user_id;   changed = true }
+    if (changed) {
+      // Rebuild _safeActivityCols after stripping
+      const safeCols = ['id','action','created_at']
+      if (!global._detailsColumnMissing) safeCols.push('details')
+      if (global._hasMetadata)  safeCols.push('metadata')
+      if (global._hasRecordType)safeCols.push('record_type')
+      if (global._hasRecordId)  safeCols.push('record_id')
+      if (global._hasUserId !== false) safeCols.push('user_id')
+      global._safeActivityCols = safeCols.join(',')
+      console.warn('safeInsertLog self-healed, retrying without failed column. New safe cols:', global._safeActivityCols)
+      const retry = await supabase.from('activity_log').insert(base).select().single()
+      return { data: retry.data, error: retry.error }
     }
-    return { data: null, error }
   }
-  
+
   return { data, error }
 }
 
@@ -371,7 +384,7 @@ app.post('/api/wibs', auth, async (req, res) => {
   if (!body.source_url?.trim()) return res.status(400).json({ error: 'Source URL required (public government page)' })
   const { data, error } = await supabase.from('wib_records').insert({ ...body, owner_id: req.user.id }).select('*, owner:user_profiles!owner_id(full_name,email)').single()
   if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_WIB', record_type: 'wib_records', record_id: data.id, details: `Created: ${data.wib_name}` }) } catch(_) {}
+  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_WIB', record_type: 'wib_records', record_id: data.id, details: `Created: ${data.wib_name}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -380,7 +393,7 @@ app.put('/api/wibs/:id', auth, async (req, res) => {
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   const { data, error } = await supabase.from('wib_records').update(body).eq('id', req.params.id).select('*, owner:user_profiles!owner_id(full_name,email)').single()
   if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_WIB', record_type: 'wib_records', record_id: req.params.id, details: `Updated: ${data.wib_name}` }) } catch(_) {}
+  try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_WIB', record_type: 'wib_records', record_id: req.params.id, details: `Updated: ${data.wib_name}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -393,6 +406,49 @@ app.delete('/api/wibs/:id', auth, requireAdmin, async (req, res) => {
 })
 
 // ─── COMPANIES ────────────────────────────────────────────────────────────────
+// ─── COMPANY DEDUPLICATION ────────────────────────────────────────────────────
+app.post('/api/companies/dedup', auth, requireAdmin, async (req, res) => {
+  // Find and merge duplicate companies (same name normalized)
+  const { data: all, error } = await supabase.from('companies').select('*').order('created_at')
+  if (error) return res.status(400).json({ error: error.message })
+
+  const groups = {}  // normalized name → [records]
+  for (const c of (all || [])) {
+    const key = c.company_name.trim().toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,30)
+    if (!groups[key]) groups[key] = []
+    groups[key].push(c)
+  }
+
+  let merged = 0, deleted = 0, errors = []
+  for (const [key, group] of Object.entries(groups)) {
+    if (group.length < 2) continue
+    // Keep oldest (first created), merge others into it
+    const keeper = group[0]
+    const dupes  = group.slice(1)
+    // Merge all non-null fields from dupes into keeper
+    const patch = {}
+    for (const d of dupes) {
+      for (const [k, v] of Object.entries(d)) {
+        if (v && !keeper[k] && !['id','created_at','updated_at'].includes(k)) patch[k] = v
+      }
+    }
+    if (Object.keys(patch).length) {
+      const { error: pErr } = await supabase.from('companies').update(patch).eq('id', keeper.id)
+      if (pErr) errors.push(pErr.message)
+      else merged++
+    }
+    // Delete duplicates (re-link their locations/applications first)
+    for (const d of dupes) {
+      await supabase.from('locations').update({ company_id: keeper.id }).eq('company_id', d.id)
+      await supabase.from('applications').update({ company_id: keeper.id }).eq('company_id', d.id)
+      const { error: dErr } = await supabase.from('companies').delete().eq('id', d.id)
+      if (!dErr) deleted++
+    }
+  }
+  res.json({ merged, deleted, errors, total_groups: Object.values(groups).filter(g=>g.length>1).length })
+})
+
+
 app.get('/api/companies', auth, async (req, res) => {
   const { search, status, limit = 200, offset = 0 } = req.query
   let q = supabase.from('companies').select('*', { count: 'exact' })
@@ -405,12 +461,67 @@ app.get('/api/companies', auth, async (req, res) => {
 })
 
 app.post('/api/companies', auth, async (req, res) => {
-  const allowed = ['company_name','company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes','rating']
+  const allowed = ['company_name','company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes','rating','is_25_pct_operator','supported_by']
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   if (!body.company_name?.trim()) return res.status(400).json({ error: 'Company name required' })
+
+  // ── Duplicate detection ──────────────────────────────────────────────────
+  // Check by name (fuzzy), domain, or email
+  const nameClean = body.company_name.trim().toLowerCase()
+  let dupQ = supabase.from('companies').select('id,company_name,domain,primary_contact_email,status,notes')
+  // ilike for name similarity
+  const { data: byName } = await dupQ.ilike('company_name', `%${nameClean.substring(0,20)}%`).limit(5)
+  const { data: byDomain } = body.domain
+    ? await supabase.from('companies').select('id,company_name,domain').ilike('domain', `%${body.domain.replace(/^https?:\/\//,'').split('/')[0]}%`).limit(3)
+    : { data: [] }
+  const { data: byEmail } = body.primary_contact_email
+    ? await supabase.from('companies').select('id,company_name,primary_contact_email').eq('primary_contact_email', body.primary_contact_email).limit(3)
+    : { data: [] }
+
+  // Find best duplicate match
+  const allDups = [...(byName||[]), ...(byDomain||[]), ...(byEmail||[])]
+  const deduped = [...new Map(allDups.map(d => [d.id, d])).values()]
+  const match = deduped.find(d => {
+    const existName = d.company_name.trim().toLowerCase()
+    const newName   = nameClean
+    // Exact match or very close (first 25 chars match)
+    if (existName === newName) return true
+    if (existName.substring(0,25) === newName.substring(0,25)) return true
+    if (body.domain && d.domain && d.domain.toLowerCase().includes(body.domain.replace(/^https?:\/\//,'').split('/')[0].toLowerCase())) return true
+    if (body.primary_contact_email && d.primary_contact_email === body.primary_contact_email) return true
+    return false
+  })
+
+  // If merge=true flag is set, merge into existing record
+  if (req.body.merge === true && req.body.merge_into_id) {
+    const mergeId = req.body.merge_into_id
+    const { data: existing } = await supabase.from('companies').select('*').eq('id', mergeId).single()
+    if (!existing) return res.status(404).json({ error: 'Target company not found' })
+    // Only fill in blank fields — never overwrite existing values
+    const mergePayload = {}
+    for (const [k, v] of Object.entries(body)) {
+      if (v && !existing[k]) mergePayload[k] = v
+    }
+    mergePayload.last_contact_date = new Date().toISOString()
+    const { data: merged, error: mergeErr } = await supabase.from('companies').update(mergePayload).eq('id', mergeId).select().single()
+    if (mergeErr) return res.status(400).json({ error: mergeErr.message })
+    try { await safeInsertLog({ user_id: req.user.id, action: 'MERGE_COMPANY', record_type: 'companies', record_id: mergeId, details: `Merged: ${body.company_name} into ${existing.company_name}` }) } catch(_) {}
+    return res.json({ merged: true, data: merged })
+  }
+
+  // If duplicate found and no merge flag — return duplicate info for user decision
+  if (match && req.body.force !== true) {
+    return res.status(409).json({
+      duplicate: true,
+      message: `A company named "${match.company_name}" already exists`,
+      existing: { id: match.id, company_name: match.company_name, domain: match.domain, status: match.status },
+    })
+  }
+
+  // Create new (forced or no dup)
   const { data, error } = await supabase.from('companies').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_COMPANY', record_type: 'companies', record_id: data.id, details: `Created: ${data.company_name}` }) } catch(_) {}
+  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_COMPANY', record_type: 'companies', record_id: data.id, details: `Created: ${data.company_name}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -485,7 +596,7 @@ app.post('/api/funding', auth, async (req, res) => {
   if (!body.source_url?.trim()) return res.status(400).json({ error: 'Source URL required' })
   const { data, error } = await supabase.from('funding_opportunities').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_FUNDING', record_type: 'funding_opportunities', record_id: data.id, details: `Created: ${data.opportunity_name}` }) } catch(_) {}
+  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_FUNDING', record_type: 'funding_opportunities', record_id: data.id, details: `Created: ${data.opportunity_name}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -521,7 +632,7 @@ app.post('/api/applications', auth, async (req, res) => {
   if (!body.wib_id) return res.status(400).json({ error: 'WIB required' })
   const { data, error } = await supabase.from('applications').insert({ ...body, owner_id: req.user.id }).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_APPLICATION', record_type: 'applications', record_id: data.id, details: `Created: ${data.application_number}` }) } catch(_) {}
+  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_APPLICATION', record_type: 'applications', record_id: data.id, details: `Created: ${data.application_number}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -530,7 +641,7 @@ app.put('/api/applications/:id', auth, async (req, res) => {
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   const { data, error } = await supabase.from('applications').update(body).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_APPLICATION', record_type: 'applications', record_id: req.params.id, details: `Status: ${body.status || 'updated'}` }) } catch(_) {}
+  try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_APPLICATION', record_type: 'applications', record_id: req.params.id, details: `Status: ${body.status || 'updated'}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -573,7 +684,7 @@ app.put('/api/revenue/:id', auth, async (req, res) => {
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   const { data, error } = await supabase.from('revenue_records').update(body).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_REVENUE', record_type: 'revenue_records', record_id: req.params.id, details: `Invoice: ${body.invoice_status || 'updated'}` }) } catch(_) {}
+  try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_REVENUE', record_type: 'revenue_records', record_id: req.params.id, details: `Invoice: ${body.invoice_status || 'updated'}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -584,8 +695,8 @@ app.get('/api/notes', auth, async (req, res) => {
   const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
   const cols = baseCols + userJoin
   let q = supabase.from('activity_log').select(cols).eq('action', 'NOTE')
-  if (record_type) q = q.eq('record_type', record_type)
-  if (record_id) q = q.eq('record_id', record_id)
+  if (record_type && global._hasRecordType !== false) q = q.eq('record_type', record_type)
+  if (record_id   && global._hasRecordId   !== false) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
@@ -621,7 +732,7 @@ app.get('/api/tasks', auth, async (req, res) => {
   const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name)' : ''
   const cols = baseCols + userJoin
   let q = supabase.from('activity_log').select(cols).eq('action', 'TASK')
-  if (record_id) q = q.eq('record_id', record_id)
+  if (record_id && global._hasRecordId !== false) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
@@ -665,8 +776,8 @@ app.get('/api/activity', auth, async (req, res) => {
   const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
   const cols = baseCols + userJoin
   let q = supabase.from('activity_log').select(cols).neq('action', 'NOTE').neq('action', 'TASK')
-  if (record_type) q = q.eq('record_type', record_type)
-  if (record_id) q = q.eq('record_id', record_id)
+  if (record_type && global._hasRecordType !== false) q = q.eq('record_type', record_type)
+  if (record_id   && global._hasRecordId   !== false) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 200))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
@@ -1279,8 +1390,22 @@ app.post('/api/import/:type', auth, async (req, res) => {
 
       const locBatch = []
       for (const row of rows) {
-        // Support both mapped CRM keys (from new wizard) and raw Attio header names
-        const name = (row['location_name'] || row['Record'] || row['Location Name'] || row['Location'] || row['Name'] || '').trim()
+        // Support CRM keys, Attio export headers, and any unrecognized column that looks like a name
+        let name = (
+          row['location_name'] || row['Record'] || row['Location Name'] ||
+          row['Location'] || row['Name'] || row['Facility'] ||
+          row['Facility Name'] || row['Nursing Home'] || row['Site Name'] ||
+          row['record'] || row['name'] || row['location']
+        )
+        name = name ? String(name).trim() : ''
+        // Last resort: grab the first non-empty value from any column if nothing matched
+        if (!name) {
+          const firstKey = Object.keys(row).find(k => row[k] && String(row[k]).trim().length > 1)
+          if (firstKey && results.errors.length < 3) {
+            // Log what headers we actually see (only first time)
+            if (results.errors.length === 0) results.errors.push(`DEBUG — CSV headers: ${Object.keys(row).slice(0,8).join(', ')}`)
+          }
+        }
         if (!name) { results.errors.push('Skipped — no location name'); continue }
 
         const parentName = (row['parent_operator'] || row['Parent Operator'] || row['Parent Company'] || row['Company'] || row['Operator'] || '').trim()
@@ -1337,8 +1462,21 @@ app.post('/api/import/:type', auth, async (req, res) => {
     } else if (type === 'funding') {
       const valid = []
       for (const row of rows) {
-        const name = (row['opportunity_name'] || row['Opportunity Name'] || row['Name'] || row['Funding Opportunity'] || '').trim()
-        if (!name) { results.errors.push('Skipped row — Opportunity Name required'); continue }
+        // Try all possible column names — Attio may export as 'Record', 'Name', 'Funding Opportunity', etc.
+        const name = (
+          row['opportunity_name'] || row['Opportunity Name'] || row['Funding Opportunity'] ||
+          row['Name'] || row['Record'] || row['Title'] || row['Program Name'] ||
+          row['opportunity name'] || row['funding opportunity'] || row['name'] || row['record']
+        )?.trim() || ''
+        if (!name) {
+          if (results.errors.length < 2) {
+            const headers = Object.keys(row).slice(0, 10).join(', ')
+            results.errors.push(`Skipped row — Opportunity Name required. CSV headers found: ${headers}`)
+          } else {
+            results.errors.push('Skipped row — Opportunity Name required')
+          }
+          continue
+        }
         valid.push({
           opportunity_name: name,
           status: (() => {
@@ -1488,11 +1626,11 @@ app.post('/api/import/:type', auth, async (req, res) => {
 
       for (const row of rows) {
         // Get the record/application name (e.g. "Pine Valley - CO Tri-County - IWT")
-        const recordName = row['Record']?.trim() || row['Application']?.trim() || row['Name']?.trim() || ''
+        const recordName = (row['application_number'] || row['Record'] || row['Application'] || row['Name'] || '').trim()
         
-        // Get company — try dedicated column first, then parse from Record
-        const rawCompany = row['Company']?.trim() || row['Company Name']?.trim() || 
-          row['Employer']?.trim() || row['Account']?.trim() || row['Account Name']?.trim()
+        // Get company — CRM mapped keys first, then Attio header names, then parse from Record
+        const rawCompany = (row['company_name'] || row['Company'] || row['Company Name'] || 
+          row['Employer'] || row['Account'] || row['Account Name'] || '').trim() || null
         const companyName = rawCompany || extractCompanyFromRecord(recordName)
         
         if (!companyName) { results.errors.push('Skipped row — no company name'); continue }
@@ -1520,7 +1658,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
           continue
         }
 
-        const rawStatus = (row['Status'] || row['Stage'] || row['Application Stage'] || 'intake').toLowerCase().trim()
+        const rawStatus = (row['status'] || row['Status'] || row['Stage'] || row['Application Stage'] || 'intake').toLowerCase().trim()
         const status = appStatusMap[rawStatus] || 'intake'
 
         const getAmt = (...keys) => {
@@ -1542,7 +1680,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
         // Build notes from all captured fields
         const noteParts = []
         if (recordName) noteParts.push(`Application: ${recordName}`)
-        if (row['Notes'] || row['Description'] || row['Comments']) noteParts.push(row['Notes'] || row['Description'] || row['Comments'])
+        if (row['notes'] || row['Notes'] || row['Description'] || row['Comments']) noteParts.push(row['notes'] || row['Notes'] || row['Description'] || row['Comments'])
         // Capture any extra Attio fields
         const knownKeys = new Set(['Record ID','Record','Status','Stage','Company','Company Name','Employer','Account','Account Name',
           'WIB','Workforce Board','WIB Name','Board','Notes','Description','Comments',
@@ -1558,12 +1696,12 @@ app.post('/api/import/:type', auth, async (req, res) => {
           owner_id: req.user.id,
         }
         if (wib_id) insertRow.wib_id = wib_id
-        const awarded = getAmt('Application Approved Amount','Award Approved','Amount Approved','Approved Amount','Awarded Amount')
-        const requested = getAmt('Award Requested','Amount Requested','Requested Amount','Application Amount')
+        const awarded = getAmt('award_amount_approved','Application Approved Amount','Award Approved','Amount Approved','Approved Amount','Awarded Amount')
+        const requested = getAmt('award_amount_requested','Award Requested','Amount Requested','Requested Amount','Application Amount')
         if (awarded) insertRow.award_amount_approved = awarded
         if (requested) insertRow.award_amount_requested = requested
-        const subDate = getDate('Submission Date','Submitted','Submit Date','Date Submitted')
-        const decDate = getDate('Decision Date','Decision','Approved Date','Award Date')
+        const subDate = getDate('submission_date','Submission Date','Submitted','Submit Date','Date Submitted')
+        const decDate = getDate('decision_date','Decision Date','Decision','Approved Date','Award Date')
         if (subDate) insertRow.submission_date = subDate
         if (decDate) insertRow.decision_date = decDate
 
@@ -1790,9 +1928,28 @@ app.get('/api/export/:type', auth, async (req, res) => {
       headers = ['Company Name','Type','Status','FEIN','Domain','Employees','Avg Hourly Wage','Contact Name','Contact Email','Contact Phone','Training Needs','Notes','Rating','Created']
       rows = (data || []).map(r => [r.company_name,r.company_type||'',r.status,r.fein||'',r.domain||'',r.employee_count_total||'',r.avg_hourly_wage||'',r.primary_contact_name||'',r.primary_contact_email||'',r.primary_contact_phone||'',r.training_needs||'',r.notes||'',r.rating||'',r.created_at?.split('T')[0]||''])
     } else if (type === 'applications') {
-      const { data } = await supabase.from('applications').select('application_number,status,award_amount_requested,award_amount_approved,submission_date,created_at').order('created_at', { ascending: false })
-      headers = ['App Number','Status','Requested','Approved','Submitted','Created']
-      rows = (data || []).map(r => [r.application_number,r.status,r.award_amount_requested||'',r.award_amount_approved||'',r.submission_date||'',r.created_at?.split('T')[0]||''])
+      const { data } = await supabase.from('applications')
+        .select('application_number,status,notes,award_amount_requested,award_amount_approved,submission_date,decision_date,created_at,company:companies!company_id(company_name,domain,primary_contact_email),funding:funding_opportunities!funding_opportunity_id(opportunity_name,status,source_url),location:locations!location_id(location_name,state),wib:wib_records!wib_id(wib_name,state)')
+        .order('created_at', { ascending: false })
+      headers = ['Application','Company','Company Domain','Company Email','Funding Opportunity','Funding Status','Location','State','WIB','Status','Award Requested','Award Approved','Submission Date','Decision Date','Latest Update','Created']
+      rows = (data || []).map(r => [
+        r.application_number || (r.company?.company_name ? r.company.company_name + ' — ' + (r.funding?.opportunity_name||'') : ''),
+        r.company?.company_name||'',
+        r.company?.domain||'',
+        r.company?.primary_contact_email||'',
+        r.funding?.opportunity_name||'',
+        r.funding?.status||'',
+        r.location?.location_name||'',
+        r.location?.state||r.wib?.state||'',
+        r.wib?.wib_name||'',
+        r.status,
+        r.award_amount_requested||'',
+        r.award_amount_approved||'',
+        r.submission_date||'',
+        r.decision_date||'',
+        (r.notes||'').split('\n')[0].substring(0,100),
+        r.created_at?.split('T')[0]||''
+      ])
     } else if (type === 'funding') {
       const { data } = await supabase.from('funding_opportunities').select('opportunity_name,status,program_type,max_award_per_ein,application_deadline,source_url,created_at')
       headers = ['Opportunity','Status','Program','Max Award','Deadline','Source URL','Created']
@@ -1816,7 +1973,9 @@ app.get('/api/export/:type', auth, async (req, res) => {
       rows = (data || []).map(r => [r.application_number||'',r.company_name||'',r.wib_name||'',r.status||'',r.award_amount_approved||'',r.training_end_date||'',r.final_report_due_date||'',r.days_until_final_due??'',r.final_report_submitted?'Yes':'No',r.attendance_sheets_collected?'Yes':'No',r.compliance_notes||''])
     } else if (type === 'audit') {
       if (!['super_admin','admin'].includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
-      const { data } = await supabase.from('activity_log').select('action,details,record_type,created_at,user:user_profiles!user_id(email)').order('created_at', { ascending: false }).limit(1000)
+      const safeCols2 = (global._safeActivityCols || 'id,action,created_at').replace('id,action,created_at','action,created_at')
+      const auditSelect = 'action,created_at' + (global._hasRecordType?',record_type':'') + (global._detailsColumnMissing?'':(global._hasMetadata?',metadata':',details')) + ',user:user_profiles!user_id(email)'
+      const { data } = await supabase.from('activity_log').select(auditSelect).order('created_at', { ascending: false }).limit(1000)
       headers = ['Action','User','Details','Record Type','Timestamp']
       rows = (data || []).map(r => [r.action,r.user?.email||'',r.details||'',r.record_type||'',r.created_at||''])
     } else {
@@ -1838,6 +1997,7 @@ app.get('/api/template/:type', auth, (req, res) => {
     companies: 'Company Name,Type,Status,FEIN,Domain,Employee Count,Avg Wage,Contact Name,Contact Email',
     locations: 'Location Name,State,County,City,Status,Employee Count',
     funding: 'Opportunity Name,Status,Program Type,Max Award/EIN,Deadline,Source URL',
+    applications: 'Company Name,Funding Opportunity,Status,Award Requested,Award Approved,Submission Date,Decision Date,Notes',
   }
   const csv = templates[req.params.type]
   if (!csv) return res.status(400).json({ error: 'Unknown template' })
