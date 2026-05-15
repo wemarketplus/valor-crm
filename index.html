@@ -1133,34 +1133,102 @@ function openWibModal(wib=null){
 // TASKS PAGE
 // ═══════════════════════════════════════════════════════
 async function pageTasks(){
-  setTopbar('Tasks','77 today',`
-    <button class="btn filter-btn">📅 Sort by due date</button>
-    <button class="btn filter-btn">🔽 Filter</button>
+  setTopbar('Tasks','',`
+    <select class="filter-btn" style="border-radius:6px;padding:5px 9px" onchange="filterTasksBy(this.value)" id="task-filter">
+      <option value="">All tasks</option><option value="mine">My tasks</option><option value="overdue">Overdue</option><option value="done">Completed</option>
+    </select>
     <button class="btn btn-primary" onclick="openTaskModal()">+ New Task</button>`)
   document.getElementById('page-area').innerHTML=`
   <div class="tbl-wrap">
     <div class="tbl-head">
       <div class="tbl-head-left">
-        <div class="search-inp">🔍<input type="text" placeholder="Search tasks..."></div>
-        <select class="filter-btn" style="border-radius:6px;padding:5px 9px">
-          <option>All tasks</option><option>My tasks</option><option>Overdue</option><option>Completed</option>
-        </select>
+        <div class="tbl-title">✅ Tasks</div>
+        <div class="search-inp">🔍<input type="text" placeholder="Search tasks..." oninput="filterTaskSearch(this.value)"></div>
       </div>
     </div>
-    <table><thead><tr><th style="width:40px"></th><th>Task</th><th>Due Date</th><th>Record</th><th>Assigned To</th><th></th></tr></thead>
-    <tbody>
-      <tr><td colspan="6" style="padding:6px 12px;font-size:10px;font-weight:600;color:var(--text3);background:var(--gray)">TODAY · 7</td></tr>
-      ${getDemoTasks().map(t=>`<tr>
-        <td><div class="task-check${t.done?' done':''}" onclick="toggleTask(this)">✓</div></td>
-        <td><span class="${t.done?'task-title done':'task-title'}">${t.title}</span></td>
-        <td><span class="task-due${t.overdue?' overdue':''}">${t.due}</span></td>
-        <td><span class="pill p-gray">${t.record}</span></td>
-        <td><div style="display:flex;align-items:center;gap:5px"><div class="task-assignee">${t.assignee.slice(0,2).toUpperCase()}</div><span style="font-size:11px;color:var(--text2)">${t.assignee}</span></div></td>
-        <td><div class="action-btns"><button class="action-btn">Edit</button><button class="action-btn del">Del</button></div></td>
-      </tr>`).join('')}
-    </tbody></table>
-    <div class="tbl-footer">77 tasks · 7 due today · 3 overdue</div>
+    <table><thead><tr><th style="width:40px"></th><th>Task</th><th>Priority</th><th>Due Date</th><th>Assigned To</th><th>Actions</th></tr></thead>
+    <tbody id="tasks-tbody"><tr><td colspan="6" style="padding:20px;text-align:center;color:var(--text3)">⏳ Loading tasks...</td></tr></tbody></table>
+    <div class="tbl-footer" id="tasks-footer">Loading...</div>
   </div>`
+  await loadTasksFromDB()
+}
+
+async function loadTasksFromDB(){
+  try{
+    const r=await api('/api/tasks?limit=200')
+    window._tasks=r.data||[]
+    renderTasksTable(window._tasks)
+  }catch(e){
+    document.getElementById('tasks-tbody').innerHTML=`<tr><td colspan="6" style="padding:20px;text-align:center"><div class="alert alert-error">Failed to load tasks: ${e.message}</div></td></tr>`
+  }
+}
+
+function renderTasksTable(tasks){
+  const tbody=document.getElementById('tasks-tbody')
+  const footer=document.getElementById('tasks-footer')
+  if(!tbody)return
+  if(!tasks.length){
+    tbody.innerHTML='<tr><td colspan="6" style="padding:30px;text-align:center;color:var(--text3)"><div style="font-size:24px;margin-bottom:8px">✅</div>No tasks yet — create one above.</td></tr>'
+    if(footer)footer.textContent='0 tasks'
+    return
+  }
+  const now=new Date()
+  const prioColor={urgent:'p-red',high:'p-amber',normal:'p-blue',low:'p-gray'}
+  tbody.innerHTML=tasks.map(t=>{
+    const m=t.metadata||{}
+    const due=m.due_date?new Date(m.due_date):null
+    const overdue=due&&!m.done&&due<now
+    const dueStr=due?due.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'No due date'
+    const assignee=m.assigned_to||t.user?.full_name||'Unassigned'
+    return`<tr style="${m.done?'opacity:.5':''}">
+      <td><div class="task-check${m.done?' done':''}" onclick="toggleTaskDB('${t.id}',${!!m.done})" style="cursor:pointer">✓</div></td>
+      <td><span class="${m.done?'task-title done':'task-title'}">${t.details||'Untitled task'}</span></td>
+      <td><span class="pill ${prioColor[m.priority]||'p-gray'}">${m.priority||'normal'}</span></td>
+      <td><span class="task-due${overdue?' overdue':''}">${overdue?'⚠️ ':''} ${dueStr}</span></td>
+      <td><div style="display:flex;align-items:center;gap:5px"><div class="task-assignee">${assignee.slice(0,2).toUpperCase()}</div><span style="font-size:11px;color:var(--text2)">${assignee}</span></div></td>
+      <td><div class="action-btns">
+        <button class="action-btn" onclick="toggleTaskDB('${t.id}',${!!m.done})">${m.done?'Reopen':'Done'}</button>
+        <button class="action-btn del" onclick="deleteTask('${t.id}')">Delete</button>
+      </div></td>
+    </tr>`
+  }).join('')
+  const done=tasks.filter(t=>t.metadata?.done).length
+  const overdue=tasks.filter(t=>{const d=t.metadata?.due_date?new Date(t.metadata.due_date):null;return d&&!t.metadata?.done&&d<now}).length
+  if(footer)footer.textContent=`${tasks.length} tasks · ${done} completed · ${overdue} overdue`
+  const hdr=document.querySelector('.topbar-badge')||document.querySelector('.page-title')
+  setTopbar('Tasks',`${tasks.length} total`,document.querySelector('.topbar-right')?.innerHTML||'')
+}
+
+function filterTasksBy(filter){
+  if(!window._tasks)return
+  let d=window._tasks
+  const now=new Date()
+  if(filter==='mine')d=d.filter(t=>(t.metadata?.assigned_to||'').toLowerCase().includes((currentUser?.full_name||'').toLowerCase()))
+  else if(filter==='overdue')d=d.filter(t=>{const due=t.metadata?.due_date?new Date(t.metadata.due_date):null;return due&&!t.metadata?.done&&due<now})
+  else if(filter==='done')d=d.filter(t=>t.metadata?.done)
+  renderTasksTable(d)
+}
+
+function filterTaskSearch(q){
+  if(!window._tasks)return
+  const d=q?window._tasks.filter(t=>(t.details||'').toLowerCase().includes(q.toLowerCase())):window._tasks
+  renderTasksTable(d)
+}
+
+async function toggleTaskDB(id,isDone){
+  try{
+    await api('/api/tasks/'+id,'PUT',{done:!isDone})
+    await loadTasksFromDB()
+  }catch(e){showToast('Failed to update task: '+e.message,'error')}
+}
+
+async function deleteTask(id){
+  if(!confirm('Delete this task?'))return
+  try{
+    await api('/api/tasks/'+id,'PUT',{deleted:true})
+    showToast('Task deleted','success')
+    await loadTasksFromDB()
+  }catch(e){showToast('Delete failed: '+e.message,'error')}
 }
 
 function toggleTask(el){el.classList.toggle('done')}
@@ -1924,11 +1992,22 @@ function importCSV(type){
       <input type="file" accept=".csv" id="import-file-input" onchange="processCSVImport(this,'${type}')"></div></div>
     <div id="import-preview" style="margin-top:10px"></div>`,
   async()=>{
-    const fileInput=document.getElementById('import-file-input')
-    if(!fileInput||!fileInput.files||!fileInput.files[0]){
-      showToast('Please select a CSV file first','warn');return false
+    if(!window._importRows||!window._importRows.length){
+      showToast('Please select and preview a CSV file first','warn');return false
     }
-    showToast('CSV file received. Full import processing is coming in Phase 3 — use the preview to verify your data format.','info')
+    const btn=document.getElementById('modal-ok-btn')
+    if(btn){btn.textContent='Importing...';btn.disabled=true}
+    try{
+      const r=await api('/api/import/'+window._importType,'POST',{rows:window._importRows})
+      showToast(`✅ Imported ${r.created} records${r.errors?.length?' ('+r.errors.length+' skipped)':''}`, r.errors?.length?'warn':'success')
+      window._importRows=null
+      // Reload the relevant page
+      if(currentPage===window._importType||currentPage===window._importType.replace('-',''))loadPage(currentPage)
+    }catch(e){
+      showToast('Import failed: '+e.message,'error')
+      if(btn){btn.textContent='Save';btn.disabled=false}
+      return false
+    }
   })
 }
 
@@ -1973,19 +2052,35 @@ async function processCSVImport(input,type){
   const preview=document.getElementById('import-preview')
   preview.innerHTML='<div class="loading">📂 Reading file...</div>'
   const reader=new FileReader()
-  reader.onload=e=>{
-    const text=e.target.result
-    const lines=text.split('\n').filter(l=>l.trim())
-    const headers=lines[0]?.split(',').map(h=>h.replace(/"/g,'').trim())
-    const rows=lines.slice(1,6).map(l=>l.split(',').map(c=>c.replace(/"/g,'').trim()))
-    preview.innerHTML=`
-      <div class="alert alert-success">✅ File loaded: ${lines.length-1} rows found</div>
-      <div style="font-size:11px;font-weight:500;margin-bottom:5px">Preview (first 5 rows):</div>
-      <div style="overflow-x:auto"><table style="font-size:10px;width:100%;border-collapse:collapse">
-        <thead><tr>${(headers||[]).map(h=>`<th style="padding:3px 6px;border:.5px solid var(--border);background:var(--gray);text-align:left">${h}</th>`).join('')}</tr></thead>
-        <tbody>${rows.map(r=>`<tr>${r.map(c=>`<td style="padding:3px 6px;border:.5px solid var(--border)">${c}</td>`).join('')}</tr>`).join('')}</tbody>
-      </table></div>
-      <div class="alert alert-warn" style="margin-top:8px">⚠️ CSV import auto-parsing is in development. For now, use this data to manually add records or contact support.</div>`
+  reader.onload=async e=>{
+    try{
+      const text=e.target.result
+      const lines=text.split('\n').filter(l=>l.trim())
+      if(lines.length<2){preview.innerHTML='<div class="alert alert-error">File is empty or has no data rows</div>';return}
+      const headers=lines[0].split(',').map(h=>h.replace(/^"|"$/g,'').trim())
+      const dataRows=lines.slice(1).map(l=>{
+        // Handle quoted CSV values
+        const vals=[]
+        let cur='',inQ=false
+        for(let c of l){if(c==='"'){inQ=!inQ}else if(c===','&&!inQ){vals.push(cur.trim());cur=''}else{cur+=c}}
+        vals.push(cur.trim())
+        return Object.fromEntries(headers.map((h,i)=>[h,vals[i]||'']))
+      }).filter(r=>Object.values(r).some(v=>v))
+      const previewRows=dataRows.slice(0,5)
+      preview.innerHTML=`
+        <div class="alert alert-success">✅ File loaded: ${dataRows.length} data rows ready to import</div>
+        <div style="font-size:11px;font-weight:500;margin-bottom:5px">Preview (first ${previewRows.length} rows):</div>
+        <div style="overflow-x:auto;margin-bottom:10px"><table style="font-size:10px;width:100%;border-collapse:collapse">
+          <thead><tr>${headers.map(h=>`<th style="padding:3px 6px;border:.5px solid var(--border);background:var(--gray);text-align:left;white-space:nowrap">${h}</th>`).join('')}</tr></thead>
+          <tbody>${previewRows.map(r=>`<tr>${headers.map(h=>`<td style="padding:3px 6px;border:.5px solid var(--border);white-space:nowrap">${r[h]||''}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table></div>
+        <div style="font-size:11px;color:var(--text2);margin-bottom:8px">Click <strong>Save</strong> to import all ${dataRows.length} rows into ${type}.</div>`
+      // Store parsed rows for the confirm handler
+      window._importRows=dataRows
+      window._importType=type
+    }catch(err){
+      preview.innerHTML=`<div class="alert alert-error">Failed to parse CSV: ${err.message}</div>`
+    }
   }
   reader.readAsText(file)
 }
@@ -2410,58 +2505,485 @@ async function pageInvoices(){
   setTopbar('Invoices','Billing & Payments',`
     <div class="ie-dropdown"><button class="btn" onclick="toggleIEMenu('inv-ie')">⬇️ Export</button>
     <div class="ie-menu" id="inv-ie" style="display:none">
-      <div class="ie-item" onclick="exportCSV('invoices')"><span class="ie-icon">📤</span>Export CSV</div>
-      <div class="ie-item" onclick="exportPDF('invoices')"><span class="ie-icon">📄</span>Export PDF</div>
+      <div class="ie-item" onclick="exportInvoicesCSV()"><span class="ie-icon">📤</span>Export CSV</div>
     </div></div>
-    <button class="btn btn-primary" onclick="showToast('Invoices auto-generate when applications are marked Awarded. Check Revenue Tracker.','info')">+ New Invoice</button>`)
+    <button class="btn btn-primary" onclick="openInvoiceModal()">+ New Invoice</button>`)
   document.getElementById('page-area').innerHTML=`
-  <div class="g4" style="margin-bottom:12px">
-    ${[{l:'Outstanding',v:'$0',c:'p-amber'},{l:'Paid YTD',v:'$0',c:'p-green'},{l:'Overdue',v:'$0',c:'p-red'},{l:'Avg Days to Pay',v:'—',c:'p-blue'}].map(k=>`<div class="metric"><div class="metric-label">${k.l}</div><div class="metric-value">${k.v}</div></div>`).join('')}
+  <div class="g4" style="margin-bottom:12px" id="invoice-metrics">
+    ${[{l:'Outstanding',v:'$0',c:'p-amber'},{l:'Paid YTD',v:'$0',c:'p-green'},{l:'Overdue',v:'$0',c:'p-red'},{l:'Total Invoiced',v:'$0',c:'p-blue'}].map(k=>`<div class="metric"><div class="metric-label">${k.l}</div><div class="metric-value" id="inv-${k.l.toLowerCase().replace(/ /g,'-')}">${k.v}</div></div>`).join('')}
   </div>
   <div class="tbl-wrap">
-    <div class="tbl-head"><div class="tbl-title">🧾 Invoice History</div></div>
-    <div class="empty-state"><div class="empty-icon">🧾</div><div class="empty-text">No invoices yet</div><div class="empty-sub">Invoices are auto-created when grant applications are marked "Awarded"</div></div>
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="tbl-title">🧾 Invoices</div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px" onchange="filterInvoices(this.value)">
+          <option value="">All statuses</option><option value="draft">Draft</option><option value="sent">Sent</option><option value="paid">Paid</option><option value="overdue">Overdue</option>
+        </select>
+      </div>
+    </div>
+    <table><thead><tr><th>Invoice #</th><th>Company</th><th>Amount</th><th>Fee Model</th><th>Status</th><th>Due Date</th><th>Actions</th></tr></thead>
+    <tbody id="inv-tbody"><tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text3)">⏳ Loading...</td></tr></tbody></table>
+    <div class="tbl-footer" id="inv-footer"></div>
   </div>`
+  await loadInvoices()
+}
+
+async function loadInvoices(){
+  try{
+    const r=await api('/api/invoices')
+    window._invoices=r.data||[]
+    renderInvoicesTable(window._invoices)
+    updateInvoiceMetrics(window._invoices)
+  }catch(e){
+    document.getElementById('inv-tbody').innerHTML=`<tr><td colspan="7" style="padding:20px;text-align:center"><div class="alert alert-error">Failed to load: ${e.message}</div></td></tr>`
+  }
+}
+
+function updateInvoiceMetrics(invoices){
+  const fmt=n=>'$'+(Number(n)||0).toLocaleString()
+  const now=new Date()
+  const outstanding=invoices.filter(i=>!['paid'].includes(i.metadata?.status)).reduce((s,i)=>s+(+i.metadata?.amount||0),0)
+  const paid=invoices.filter(i=>i.metadata?.status==='paid').reduce((s,i)=>s+(+i.metadata?.amount||0),0)
+  const overdue=invoices.filter(i=>i.metadata?.status!=='paid'&&i.metadata?.due_date&&new Date(i.metadata.due_date)<now).reduce((s,i)=>s+(+i.metadata?.amount||0),0)
+  const total=invoices.reduce((s,i)=>s+(+i.metadata?.amount||0),0)
+  const m={'outstanding':fmt(outstanding),'paid-ytd':fmt(paid),'overdue':fmt(overdue),'total-invoiced':fmt(total)}
+  Object.entries(m).forEach(([k,v])=>{const el=document.getElementById('inv-'+k);if(el)el.textContent=v})
+}
+
+function renderInvoicesTable(invoices){
+  const tbody=document.getElementById('inv-tbody')
+  const footer=document.getElementById('inv-footer')
+  if(!tbody)return
+  if(!invoices.length){
+    tbody.innerHTML='<tr><td colspan="7" style="padding:30px;text-align:center;color:var(--text3)"><div style="font-size:24px;margin-bottom:8px">🧾</div>No invoices yet. Create one above.</td></tr>'
+    if(footer)footer.textContent='0 invoices'
+    return
+  }
+  const statusClass={draft:'p-gray',sent:'p-blue',paid:'p-green',overdue:'p-red',cancelled:'p-red'}
+  tbody.innerHTML=invoices.map(inv=>{
+    const m=inv.metadata||{}
+    const dueStr=m.due_date?new Date(m.due_date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'
+    const now=new Date()
+    const isOverdue=m.status!=='paid'&&m.due_date&&new Date(m.due_date)<now
+    return`<tr>
+      <td style="font-weight:500;font-family:monospace;font-size:11px">${m.invoice_number||inv.details}</td>
+      <td>${m.company_name||'—'}</td>
+      <td style="font-weight:600">$${Number(m.amount||0).toLocaleString()}</td>
+      <td style="font-size:11px;color:var(--text2)">${m.fee_model||'—'}</td>
+      <td><span class="pill ${statusClass[isOverdue?'overdue':m.status]||'p-gray'}">${isOverdue?'Overdue':m.status||'draft'}</span></td>
+      <td style="font-size:11px;color:${isOverdue?'var(--red)':'var(--text2)'}">${dueStr}</td>
+      <td><div class="action-btns">
+        <button class="action-btn" onclick="updateInvoiceStatus('${inv.id}','${m.status||'draft'}')">Update Status</button>
+        <button class="action-btn" onclick="openEditInvoiceModal(${JSON.stringify(inv).replace(/"/g,"'")})">Edit</button>
+      </div></td>
+    </tr>`
+  }).join('')
+  if(footer)footer.textContent=`${invoices.length} invoices`
+}
+
+function filterInvoices(status){
+  if(!window._invoices)return
+  const now=new Date()
+  let d=window._invoices
+  if(status==='overdue')d=d.filter(i=>i.metadata?.status!=='paid'&&i.metadata?.due_date&&new Date(i.metadata.due_date)<now)
+  else if(status)d=d.filter(i=>i.metadata?.status===status)
+  renderInvoicesTable(d)
+}
+
+async function updateInvoiceStatus(id,currentStatus){
+  const statuses=['draft','sent','paid','overdue','cancelled']
+  const next=statuses[(statuses.indexOf(currentStatus)+1)%statuses.length]
+  try{await api('/api/invoices/'+id,'PUT',{status:next});showToast(`Invoice → ${next}`,'success');loadInvoices()}catch(e){showToast(e.message,'error')}
+}
+
+function openInvoiceModal(){
+  showModal('🧾 New Invoice',`
+    <div id="inv-err"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Company / Employer <span class="form-req">*</span></div><input id="inv-co" placeholder="Heritage Senior Living" list="inv-co-list"><datalist id="inv-co-list"></datalist></div>
+    <div class="form-group"><div class="form-label">Amount ($) <span class="form-req">*</span></div><input id="inv-amount" type="number" placeholder="15000"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Fee Model</div><select id="inv-model"><option value="success_fee">Success Fee (8-15%)</option><option value="flat_fee">Flat Fee</option><option value="retainer">Monthly Retainer</option></select></div>
+    <div class="form-group"><div class="form-label">Due Date</div><input id="inv-due" type="date"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="inv-status"><option value="draft">Draft</option><option value="sent">Sent</option></select></div>
+    <div class="form-group"><div class="form-label">Invoice #</div><input id="inv-num" placeholder="Auto-generated if blank"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="inv-notes" rows="2"></textarea></div></div>`,
+  async()=>{
+    const err=document.getElementById('inv-err')
+    const company_name=document.getElementById('inv-co').value.trim()
+    const amount=document.getElementById('inv-amount').value
+    if(!company_name||!amount){err.innerHTML='<div class="alert alert-error">Company and amount required</div>';return false}
+    try{
+      await api('/api/invoices','POST',{company_name,amount:parseFloat(amount),fee_model:document.getElementById('inv-model').value,due_date:document.getElementById('inv-due').value||null,status:document.getElementById('inv-status').value,invoice_number:document.getElementById('inv-num').value||null,notes:document.getElementById('inv-notes').value||null})
+      showToast('Invoice created','success');loadInvoices()
+    }catch(e){err.innerHTML=`<div class="alert alert-error">${e.message}</div>`;return false}
+  })
+  // Pre-populate company datalist
+  api('/api/companies?limit=200').then(r=>{const dl=document.getElementById('inv-co-list');if(dl)(r.data||[]).forEach(c=>{const o=document.createElement('option');o.value=c.company_name;dl.appendChild(o)})}).catch(()=>{})
+}
+
+function openEditInvoiceModal(inv){
+  const m=inv.metadata||{}
+  showModal(`🧾 Edit Invoice ${m.invoice_number||''}`,`
+    <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="einv-status">
+      ${['draft','sent','paid','overdue','cancelled'].map(s=>`<option value="${s}"${m.status===s?' selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}
+    </select></div>
+    <div class="form-group"><div class="form-label">Due Date</div><input id="einv-due" type="date" value="${m.due_date||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="einv-notes" rows="2">${m.notes||''}</textarea></div></div>`,
+  async()=>{
+    try{await api('/api/invoices/'+inv.id,'PUT',{status:document.getElementById('einv-status').value,due_date:document.getElementById('einv-due').value||null,notes:document.getElementById('einv-notes').value||null});showToast('Invoice updated','success');loadInvoices()}catch(e){showToast(e.message,'error');return false}
+  })
+}
+
+function exportInvoicesCSV(){
+  if(!window._invoices?.length){showToast('No invoices to export','warn');return}
+  const headers=['Invoice #','Company','Amount','Fee Model','Status','Due Date','Notes']
+  const rows=window._invoices.map(i=>{const m=i.metadata||{};return[m.invoice_number||'',m.company_name||'',m.amount||'',m.fee_model||'',m.status||'',m.due_date||'',m.notes||'']})
+  const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
+  const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download='valor-invoices.csv';a.click()
+  showToast('Invoices exported','success')
 }
 
 async function pageContracts(){
-  setTopbar('Contracts','Employer Agreements',`<button class="btn btn-primary" onclick="openContractInfoModal()">+ New Contract</button>`)
+  setTopbar('Contracts','Employer Agreements',`
+    <div class="ie-dropdown"><button class="btn" onclick="toggleIEMenu('ctr-ie')">⬇️ Export</button>
+    <div class="ie-menu" id="ctr-ie" style="display:none">
+      <div class="ie-item" onclick="exportContractsCSV()"><span class="ie-icon">📤</span>Export CSV</div>
+    </div></div>
+    <button class="btn btn-primary" onclick="openContractInfoModal()">+ New Contract</button>`)
   document.getElementById('page-area').innerHTML=`
-  <div class="alert alert-info">📄 Connect PandaDoc or DocuSign in Settings to send and track contracts with e-signature.</div>
   <div class="tbl-wrap">
-    <div class="tbl-head"><div class="tbl-title">📄 Contracts</div></div>
-    <div class="empty-state"><div class="empty-icon">📄</div><div class="empty-text">No contracts yet</div><div class="empty-sub">Contracts are created when employers sign on as clients</div></div>
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="tbl-title">📄 Contracts</div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px" onchange="filterContracts(this.value)">
+          <option value="">All statuses</option><option value="draft">Draft</option><option value="sent">Sent for Signature</option><option value="signed">Signed</option><option value="active">Active</option><option value="expired">Expired</option>
+        </select>
+      </div>
+    </div>
+    <table><thead><tr><th>Contract #</th><th>Company</th><th>Type</th><th>Value</th><th>Status</th><th>Signed Date</th><th>Expiry</th><th>Actions</th></tr></thead>
+    <tbody id="ctr-tbody"><tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text3)">⏳ Loading...</td></tr></tbody></table>
+    <div class="tbl-footer" id="ctr-footer"></div>
   </div>`
+  await loadContracts()
+}
+
+async function loadContracts(){
+  try{
+    const r=await api('/api/contracts')
+    window._contracts=r.data||[]
+    renderContractsTable(window._contracts)
+  }catch(e){
+    document.getElementById('ctr-tbody').innerHTML=`<tr><td colspan="8" style="padding:20px;text-align:center"><div class="alert alert-error">Failed to load: ${e.message}</div></td></tr>`
+  }
+}
+
+function renderContractsTable(contracts){
+  const tbody=document.getElementById('ctr-tbody')
+  const footer=document.getElementById('ctr-footer')
+  if(!tbody)return
+  if(!contracts.length){
+    tbody.innerHTML='<tr><td colspan="8" style="padding:30px;text-align:center;color:var(--text3)"><div style="font-size:24px;margin-bottom:8px">📄</div>No contracts yet. Create the first one above.</td></tr>'
+    if(footer)footer.textContent='0 contracts'
+    return
+  }
+  const statusClass={draft:'p-gray',sent:'p-blue',signed:'p-teal',active:'p-green',expired:'p-red',cancelled:'p-red'}
+  tbody.innerHTML=contracts.map(c=>{
+    const m=c.metadata||{}
+    return`<tr>
+      <td style="font-weight:500;font-family:monospace;font-size:11px">${m.contract_number||c.details}</td>
+      <td>${m.company_name||'—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${m.contract_type||'—'}</td>
+      <td style="font-weight:500">${m.value?'$'+Number(m.value).toLocaleString():'—'}</td>
+      <td><span class="pill ${statusClass[m.status]||'p-gray'}">${m.status||'draft'}</span></td>
+      <td style="font-size:11px;color:var(--text2)">${m.signed_date?new Date(m.signed_date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${m.expiry_date?new Date(m.expiry_date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}</td>
+      <td><div class="action-btns">
+        <button class="action-btn" onclick="openEditContractModal(${JSON.stringify(c).replace(/"/g,"'")})">Edit</button>
+        <button class="action-btn del" onclick="deleteContract('${c.id}')">Delete</button>
+      </div></td>
+    </tr>`
+  }).join('')
+  if(footer)footer.textContent=`${contracts.length} contracts`
+}
+
+function filterContracts(status){
+  if(!window._contracts)return
+  const d=status?window._contracts.filter(c=>c.metadata?.status===status):window._contracts
+  renderContractsTable(d)
+}
+
+async function deleteContract(id){
+  if(!confirm('Delete this contract?'))return
+  try{await api('/api/contracts/'+id,'DELETE');showToast('Contract deleted','success');loadContracts()}catch(e){showToast(e.message,'error')}
+}
+
+function openEditContractModal(c){
+  const m=c.metadata||{}
+  showModal(`📄 Edit Contract ${m.contract_number||''}`,`
+    <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="ec-status">
+      ${['draft','sent','signed','active','expired','cancelled'].map(s=>`<option value="${s}"${m.status===s?' selected':''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`).join('')}
+    </select></div>
+    <div class="form-group"><div class="form-label">Signed Date</div><input id="ec-signed" type="date" value="${m.signed_date||''}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Expiry Date</div><input id="ec-expiry" type="date" value="${m.expiry_date||''}"></div>
+    <div class="form-group"><div class="form-label">Value ($)</div><input id="ec-val" type="number" value="${m.value||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="ec-notes" rows="2">${m.notes||''}</textarea></div></div>`,
+  async()=>{
+    try{await api('/api/contracts/'+c.id,'PUT',{status:document.getElementById('ec-status').value,signed_date:document.getElementById('ec-signed').value||null,expiry_date:document.getElementById('ec-expiry').value||null,value:document.getElementById('ec-val').value||null,notes:document.getElementById('ec-notes').value||null});showToast('Contract updated','success');loadContracts()}catch(e){showToast(e.message,'error');return false}
+  })
+}
+
+function exportContractsCSV(){
+  if(!window._contracts?.length){showToast('No contracts to export','warn');return}
+  const headers=['Contract #','Company','Type','Value','Status','Signed Date','Expiry Date']
+  const rows=window._contracts.map(c=>{const m=c.metadata||{};return[m.contract_number||'',m.company_name||'',m.contract_type||'',m.value||'',m.status||'',m.signed_date||'',m.expiry_date||'']})
+  const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
+  const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download='valor-contracts.csv';a.click()
+  showToast('Contracts exported','success')
 }
 
 async function pageGrants(){
-  setTopbar('Grant Awards','All awarded grants','')
+  setTopbar('Grant Awards','All Awarded Grants',`
+    <div class="ie-dropdown"><button class="btn" onclick="toggleIEMenu('ga-ie')">⬇️ Export</button>
+    <div class="ie-menu" id="ga-ie" style="display:none">
+      <div class="ie-item" onclick="exportGrantsCSV()"><span class="ie-icon">📤</span>Export CSV</div>
+    </div></div>`)
   document.getElementById('page-area').innerHTML=`
   <div class="g4" style="margin-bottom:12px">
-    ${[{l:'Total Awarded',v:'$0'},{l:'Employers Funded',v:'0'},{l:'Avg Grant Size',v:'$0'},{l:'Renewals Due',v:'0'}].map(k=>`<div class="metric"><div class="metric-label">${k.l}</div><div class="metric-value">${k.v}</div></div>`).join('')}
+    <div class="metric"><div class="metric-label">Total Awarded</div><div class="metric-value" id="ga-total">$0</div></div>
+    <div class="metric"><div class="metric-label">Employers Funded</div><div class="metric-value" id="ga-count">0</div></div>
+    <div class="metric"><div class="metric-label">Avg Grant Size</div><div class="metric-value" id="ga-avg">$0</div></div>
+    <div class="metric"><div class="metric-label">Valor Fees Earned</div><div class="metric-value" id="ga-fees">$0</div></div>
   </div>
   <div class="tbl-wrap">
     <div class="tbl-head"><div class="tbl-title">🏆 Grant Awards</div></div>
-    <div class="empty-state"><div class="empty-icon">🏆</div><div class="empty-text">No grants awarded yet</div><div class="empty-sub">Awards appear here when application status changes to "Awarded"</div></div>
+    <table><thead><tr><th>Application #</th><th>Company</th><th>WIB</th><th>Award Amount</th><th>Valor Fee</th><th>Status</th><th>Decision Date</th><th>Invoice Status</th></tr></thead>
+    <tbody id="ga-tbody"><tr><td colspan="8" style="padding:20px;text-align:center;color:var(--text3)">⏳ Loading...</td></tr></tbody></table>
+    <div class="tbl-footer" id="ga-footer"></div>
   </div>`
+  await loadGrantAwards()
+}
+
+async function loadGrantAwards(){
+  try{
+    const r=await api('/api/grant-awards')
+    const awards=r.data||[]
+    window._grantAwards=awards
+    renderGrantsTable(awards)
+    // Update metrics
+    const fmt=n=>'$'+(Number(n)||0).toLocaleString()
+    const total=awards.reduce((s,a)=>s+(+a.award_amount_approved||0),0)
+    const fees=awards.reduce((s,a)=>s+(+a.revenue?.[0]?.calculated_success_fee||0),0)
+    const el=id=>document.getElementById(id)
+    if(el('ga-total'))el('ga-total').textContent=fmt(total)
+    if(el('ga-count'))el('ga-count').textContent=awards.length
+    if(el('ga-avg'))el('ga-avg').textContent=awards.length?fmt(total/awards.length):'$0'
+    if(el('ga-fees'))el('ga-fees').textContent=fmt(fees)
+  }catch(e){
+    document.getElementById('ga-tbody').innerHTML=`<tr><td colspan="8" style="padding:20px;text-align:center"><div class="alert alert-error">Failed to load: ${e.message}</div></td></tr>`
+  }
+}
+
+function renderGrantsTable(awards){
+  const tbody=document.getElementById('ga-tbody')
+  const footer=document.getElementById('ga-footer')
+  if(!tbody)return
+  if(!awards.length){
+    tbody.innerHTML='<tr><td colspan="8" style="padding:30px;text-align:center;color:var(--text3)"><div style="font-size:24px;margin-bottom:8px">🏆</div>No awards yet. Mark applications as "Awarded" to see them here.</td></tr>'
+    if(footer)footer.textContent='0 awards'
+    return
+  }
+  const statusClass={awarded:'p-green',active:'p-teal',completed:'p-blue',closed:'p-gray'}
+  tbody.innerHTML=awards.map(a=>{
+    const rev=a.revenue?.[0]||{}
+    const invClass={pending:'p-amber',invoiced:'p-blue',paid:'p-green'}
+    return`<tr>
+      <td style="font-weight:500;font-family:monospace;font-size:11px">${a.application_number||'—'}</td>
+      <td>${a.company?.company_name||'—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${a.wib?.wib_name||'—'} · ${a.wib?.state||''}</td>
+      <td style="font-weight:600">$${Number(a.award_amount_approved||0).toLocaleString()}</td>
+      <td style="color:var(--green-t);font-weight:500">${rev.calculated_success_fee?'$'+Number(rev.calculated_success_fee).toLocaleString():'—'}</td>
+      <td><span class="pill ${statusClass[a.status]||'p-gray'}">${a.status||'—'}</span></td>
+      <td style="font-size:11px;color:var(--text2)">${a.decision_date?new Date(a.decision_date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}</td>
+      <td>${rev.invoice_status?`<span class="pill ${invClass[rev.invoice_status]||'p-gray'}">${rev.invoice_status}</span>`:'—'}</td>
+    </tr>`
+  }).join('')
+  if(footer)footer.textContent=`${awards.length} awarded grants`
+}
+
+function exportGrantsCSV(){
+  if(!window._grantAwards?.length){showToast('No awards to export','warn');return}
+  const headers=['Application #','Company','WIB','State','Award Amount','Valor Fee','Status','Decision Date','Invoice Status']
+  const rows=window._grantAwards.map(a=>{const rev=a.revenue?.[0]||{};return[a.application_number||'',a.company?.company_name||'',a.wib?.wib_name||'',a.wib?.state||'',a.award_amount_approved||'',rev.calculated_success_fee||'',a.status||'',a.decision_date||'',rev.invoice_status||'']})
+  const csv=[headers,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
+  const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download='valor-grant-awards.csv';a.click()
+  showToast('Grant awards exported','success')
 }
 
 async function pagePayments(){
-  setTopbar('Payment Tracking','Reimbursement Pipeline','')
+  setTopbar('Payment Tracking','Reimbursement Pipeline',`
+    <div class="ie-dropdown"><button class="btn" onclick="toggleIEMenu('pay-ie')">⬇️ Export</button>
+    <div class="ie-menu" id="pay-ie" style="display:none">
+      <div class="ie-item" onclick="exportCSV('revenue')"><span class="ie-icon">📤</span>Export Revenue CSV</div>
+    </div></div>`)
   document.getElementById('page-area').innerHTML=`
+  <div class="alert alert-info" style="margin-bottom:12px">💳 Payment tracking shows the full reimbursement flow: WIB → Employer → Valor fee collection. Update invoice status in Revenue Tracker to mark payments received.</div>
   <div class="tbl-wrap">
-    <div class="tbl-head"><div class="tbl-title">💳 Reimbursement & Payment Tracking</div></div>
-    <div class="empty-state"><div class="empty-icon">💳</div><div class="empty-text">No payments tracked yet</div><div class="empty-sub">Payment records are created when WIBs reimburse employers</div></div>
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="tbl-title">💳 Revenue & Payment Records</div>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px" onchange="filterPayments(this.value)">
+          <option value="">All</option><option value="pending">Pending</option><option value="invoiced">Invoiced</option><option value="paid">Paid</option>
+        </select>
+      </div>
+    </div>
+    <table><thead><tr><th>Application</th><th>Company</th><th>WIB</th><th>Fee Model</th><th>Grant Award</th><th>Valor Fee</th><th>Invoice Status</th><th>Payment Received</th><th>Actions</th></tr></thead>
+    <tbody id="pay-tbody"><tr><td colspan="9" style="padding:20px;text-align:center;color:var(--text3)">⏳ Loading...</td></tr></tbody></table>
+    <div class="tbl-footer" id="pay-footer"></div>
   </div>`
+  await loadPayments()
+}
+
+async function loadPayments(){
+  try{
+    const r=await api('/api/revenue')
+    window._payments=r.data||[]
+    renderPaymentsTable(window._payments)
+  }catch(e){
+    document.getElementById('pay-tbody').innerHTML=`<tr><td colspan="9" style="padding:20px;text-align:center"><div class="alert alert-error">Failed to load: ${e.message}</div></td></tr>`
+  }
+}
+
+function renderPaymentsTable(records){
+  const tbody=document.getElementById('pay-tbody')
+  const footer=document.getElementById('pay-footer')
+  if(!tbody)return
+  if(!records.length){
+    tbody.innerHTML='<tr><td colspan="9" style="padding:30px;text-align:center;color:var(--text3)"><div style="font-size:24px;margin-bottom:8px">💳</div>No payment records yet. They appear when applications are awarded.</td></tr>'
+    if(footer)footer.textContent='0 records'
+    return
+  }
+  const statusClass={pending:'p-amber',invoiced:'p-blue',paid:'p-green',overdue:'p-red'}
+  tbody.innerHTML=records.map(r=>{
+    return`<tr>
+      <td style="font-size:11px;font-family:monospace">${r.application?.application_number||'—'}</td>
+      <td style="font-weight:500">${r.company?.company_name||'—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${r.wib?.wib_name||'—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${r.fee_model||'—'}</td>
+      <td style="font-weight:500">$${Number(r.grant_award_amount||0).toLocaleString()}</td>
+      <td style="color:var(--green-t);font-weight:600">$${Number(r.calculated_success_fee||0).toLocaleString()}</td>
+      <td><span class="pill ${statusClass[r.invoice_status]||'p-gray'}" style="cursor:pointer" onclick="cyclePaymentStatus('${r.id}','${r.invoice_status||'pending'}')">${r.invoice_status||'pending'}</span></td>
+      <td style="font-size:11px;color:var(--text2)">${r.payment_received_date?new Date(r.payment_received_date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):'—'}</td>
+      <td><button class="action-btn" onclick="markPaymentReceived('${r.id}')">Mark Paid</button></td>
+    </tr>`
+  }).join('')
+  const total=records.reduce((s,r)=>s+(+r.calculated_success_fee||0),0)
+  const paid=records.filter(r=>r.invoice_status==='paid').reduce((s,r)=>s+(+r.calculated_success_fee||0),0)
+  if(footer)footer.textContent=`${records.length} records · Total fees: $${total.toLocaleString()} · Collected: $${paid.toLocaleString()}`
+}
+
+function filterPayments(status){
+  if(!window._payments)return
+  const d=status?window._payments.filter(r=>r.invoice_status===status):window._payments
+  renderPaymentsTable(d)
+}
+
+async function cyclePaymentStatus(id,current){
+  const statuses=['pending','invoiced','paid']
+  const next=statuses[(statuses.indexOf(current)+1)%statuses.length]
+  try{
+    await api('/api/revenue/'+id,'PUT',{invoice_status:next,payment_received_date:next==='paid'?new Date().toISOString().split('T')[0]:null})
+    showToast(`Payment status → ${next}`,'success')
+    loadPayments()
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function markPaymentReceived(id){
+  try{
+    await api('/api/revenue/'+id,'PUT',{invoice_status:'paid',payment_received_date:new Date().toISOString().split('T')[0]})
+    showToast('Payment marked as received','success')
+    loadPayments()
+  }catch(e){showToast(e.message,'error')}
 }
 
 async function pageTraining(){
-  setTopbar('Training Providers','Approved Providers',`<button class="btn btn-primary" onclick="openTrainingModal()">+ Add Provider</button>`)
+  setTopbar('Training Providers','WIB-Approved Providers',`
+    <div class="ie-dropdown">
+      <button class="btn" onclick="toggleIEMenu('tp-ie')">⬇️ Export</button>
+      <div class="ie-menu" id="tp-ie" style="display:none">
+        <div class="ie-item" onclick="exportTrainingCSV()"><span class="ie-icon">📤</span>Export CSV</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="openTrainingModal()">+ Add Provider</button>`)
   document.getElementById('page-area').innerHTML=`
   <div class="tbl-wrap">
-    <div class="tbl-head"><div class="tbl-title">🎓 Training Providers</div></div>
-    <div class="empty-state"><div class="empty-icon">🎓</div><div class="empty-text">No training providers yet</div><div class="empty-sub">Add WIB-approved training providers to use in grant applications</div></div>
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="tbl-title">🎓 Training Providers</div>
+        <div class="search-inp">🔍<input placeholder="Search providers..." oninput="filterTraining(this.value)"></div>
+      </div>
+    </div>
+    <table><thead><tr><th>Provider</th><th>Type</th><th>State</th><th>Programs</th><th>Contact</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody id="tp-tbody"><tr><td colspan="7" style="padding:20px;text-align:center;color:var(--text3)">⏳ Loading...</td></tr></tbody></table>
+    <div class="tbl-footer" id="tp-footer"></div>
   </div>`
+  await loadTrainingProviders()
+}
+
+async function loadTrainingProviders(){
+  try{
+    const r=await api('/api/training-providers')
+    window._trainingProviders=r.data||[]
+    renderTrainingTable(window._trainingProviders)
+  }catch(e){
+    document.getElementById('tp-tbody').innerHTML=`<tr><td colspan="7" style="padding:20px;text-align:center"><div class="alert alert-error">Failed to load: ${e.message}</div></td></tr>`
+  }
+}
+
+function renderTrainingTable(providers){
+  const tbody=document.getElementById('tp-tbody')
+  const footer=document.getElementById('tp-footer')
+  if(!tbody)return
+  if(!providers.length){
+    tbody.innerHTML='<tr><td colspan="7" style="padding:30px;text-align:center;color:var(--text3)"><div style="font-size:24px;margin-bottom:8px">🎓</div>No training providers yet. Add one above.</td></tr>'
+    if(footer)footer.textContent='0 providers'
+    return
+  }
+  tbody.innerHTML=providers.map(p=>{
+    const m=p.metadata||{}
+    const statusClass=m.status==='active'?'p-green':m.status==='inactive'?'p-red':'p-gray'
+    return`<tr>
+      <td><div style="font-weight:500">${m.name||p.details}</div>${m.website?`<div style="font-size:10px"><a href="${m.website}" target="_blank" class="field-link">Website →</a></div>`:''}</td>
+      <td style="font-size:11px;color:var(--text2)">${m.provider_type||'—'}</td>
+      <td style="font-size:11px">${m.state||'—'}</td>
+      <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${m.programs||'—'}</td>
+      <td style="font-size:11px;color:var(--text2)">${m.contact_email?`<a href="mailto:${m.contact_email}" class="field-link">${m.contact_email}</a>`:'—'}</td>
+      <td><span class="pill ${statusClass}">${m.status||'active'}</span></td>
+      <td><div class="action-btns">
+        <button class="action-btn" onclick="openEditTrainingModal(${JSON.stringify(p).replace(/"/g,"'")})">Edit</button>
+        <button class="action-btn del" onclick="deleteTrainingProvider('${p.id}')">Delete</button>
+      </div></td>
+    </tr>`
+  }).join('')
+  if(footer)footer.textContent=`${providers.length} providers`
+}
+
+function filterTraining(q){
+  if(!window._trainingProviders)return
+  const d=q?window._trainingProviders.filter(p=>(p.details||'').toLowerCase().includes(q.toLowerCase())||(p.metadata?.programs||'').toLowerCase().includes(q.toLowerCase())):window._trainingProviders
+  renderTrainingTable(d)
+}
+
+async function deleteTrainingProvider(id){
+  if(!confirm('Delete this training provider?'))return
+  try{await api('/api/training-providers/'+id,'DELETE');showToast('Provider deleted','success');loadTrainingProviders()}catch(e){showToast(e.message,'error')}
+}
+
+function exportTrainingCSV(){
+  if(!window._trainingProviders?.length){showToast('No providers to export','warn');return}
+  const headers=['Name','Type','State','Programs','Website','Contact Email','Contact Phone','Status']
+  const rows=window._trainingProviders.map(p=>{const m=p.metadata||{};return[m.name||'',m.provider_type||'',m.state||'',m.programs||'',m.website||'',m.contact_email||'',m.contact_phone||'',m.status||'active']})
+  const csv=[headers,... rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n')
+  const a=document.createElement('a');a.href='data:text/csv,'+encodeURIComponent(csv);a.download='valor-training-providers.csv';a.click()
+  showToast('Training providers exported','success')
 }
 
 function openTrainingModal(){
@@ -2474,9 +2996,37 @@ function openTrainingModal(){
   async()=>{
     const name=document.getElementById('tp-name')?.value
     if(!name?.trim()){showToast('Provider name required','error');return false}
-    showToast('Training provider saved (database table coming in Phase 2)','success')
-  }
-  )
+    try{
+      await api('/api/training-providers','POST',{
+        name,provider_type:document.getElementById('tp-type')?.value,
+        website:document.getElementById('tp-web')?.value||null,
+        contact_email:document.getElementById('tp-email')?.value||null,
+        programs:document.getElementById('tp-programs')?.value||null,
+        status:'active'
+      })
+      showToast('Training provider saved','success')
+      if(currentPage==='training')loadPage('training')
+    }catch(e){showToast('Save failed: '+e.message,'error');return false}
+  })
+}
+
+function openEditTrainingModal(p){
+  const m=p.metadata||{}
+  showModal(`🎓 Edit: ${m.name||p.details}`,`
+    <div class="form-row"><div class="form-group"><div class="form-label">Provider Name</div><input id="etp-name" value="${m.name||''}"></div>
+    <div class="form-group"><div class="form-label">Type</div><select id="etp-type"><option${m.provider_type==='Vocational School'?' selected':''}>Vocational School</option><option${m.provider_type==='Community College'?' selected':''}>Community College</option><option${m.provider_type==='Online Provider'?' selected':''}>Online Provider</option><option${m.provider_type==='Healthcare Specific'?' selected':''}>Healthcare Specific</option></select></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Website</div><input id="etp-web" value="${m.website||''}"></div>
+    <div class="form-group"><div class="form-label">State</div><input id="etp-state" value="${m.state||''}" placeholder="TX"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Contact Email</div><input id="etp-email" type="email" value="${m.contact_email||''}"></div>
+    <div class="form-group"><div class="form-label">Status</div><select id="etp-status"><option value="active"${m.status==='active'?' selected':''}>Active</option><option value="inactive"${m.status==='inactive'?' selected':''}>Inactive</option></select></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Programs Offered</div><textarea id="etp-programs" rows="2">${m.programs||''}</textarea></div></div>`,
+  async()=>{
+    try{
+      await api('/api/training-providers/'+p.id,'PUT',{name:document.getElementById('etp-name').value,provider_type:document.getElementById('etp-type').value,website:document.getElementById('etp-web').value||null,state:document.getElementById('etp-state').value||null,contact_email:document.getElementById('etp-email').value||null,status:document.getElementById('etp-status').value,programs:document.getElementById('etp-programs').value||null})
+      showToast('Provider updated','success')
+      loadTrainingProviders()
+    }catch(e){showToast(e.message,'error');return false}
+  })
 }
 
 async function pageReports(){
