@@ -602,6 +602,250 @@ app.delete('/api/users/:id', auth, requireSuper, async (req, res) => {
 })
 
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PHASE 3 — CONTACTS, TRAINING PROVIDERS, INVOICES, CONTRACTS, GRANT AWARDS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── CONTACTS ────────────────────────────────────────────────────────────────
+app.get('/api/contacts', auth, async (req, res) => {
+  const { record_type, record_id, search, limit = 200 } = req.query
+  let q = supabase.from('activity_log')
+    .select('*, user:user_profiles!user_id(full_name)')
+    .eq('action', 'CONTACT')
+  if (record_type) q = q.eq('record_type', record_type)
+  if (record_id) q = q.eq('record_id', record_id)
+  q = q.order('created_at', { ascending: false }).limit(+limit)
+  const { data, error } = await q
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data })
+})
+
+app.post('/api/contacts', auth, async (req, res) => {
+  const { name, title, email, phone, record_type, record_id, notes } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: 'Contact name required' })
+  const content = JSON.stringify({ name, title, email, phone, notes })
+  const { data, error } = await supabase.from('activity_log').insert({
+    user_id: req.user.id, action: 'CONTACT',
+    record_type: record_type || null, record_id: record_id || null,
+    details: name, metadata: { name, title, email, phone, notes }
+  }).select('*, user:user_profiles!user_id(full_name)').single()
+  if (error) return res.status(400).json({ error: error.message })
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_CONTACT', record_type, record_id, details: `Added contact: ${name}` }) } catch(_) {}
+  res.json(data)
+})
+
+app.put('/api/contacts/:id', auth, async (req, res) => {
+  const { name, title, email, phone, notes } = req.body
+  const { data: existing } = await supabase.from('activity_log').select('metadata').eq('id', req.params.id).single()
+  const merged = { ...(existing?.metadata || {}), ...{ name, title, email, phone, notes } }
+  const { data, error } = await supabase.from('activity_log').update({ details: name || existing?.metadata?.name, metadata: merged }).eq('id', req.params.id).select().single()
+  if (error) return res.status(400).json({ error: error.message })
+  res.json(data)
+})
+
+app.delete('/api/contacts/:id', auth, requireAdmin, async (req, res) => {
+  const { error } = await supabase.from('activity_log').delete().eq('id', req.params.id).eq('action', 'CONTACT')
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true })
+})
+
+// ─── TRAINING PROVIDERS ───────────────────────────────────────────────────────
+app.get('/api/training-providers', auth, async (req, res) => {
+  const { search, limit = 200 } = req.query
+  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name)').eq('action', 'TRAINING_PROVIDER')
+  if (search) q = q.ilike('details', `%${search}%`)
+  q = q.order('created_at', { ascending: false }).limit(+limit)
+  const { data, error } = await q
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data })
+})
+
+app.post('/api/training-providers', auth, async (req, res) => {
+  const { name, provider_type, website, contact_email, contact_phone, programs, state, notes, status = 'active' } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: 'Provider name required' })
+  const { data, error } = await supabase.from('activity_log').insert({
+    user_id: req.user.id, action: 'TRAINING_PROVIDER',
+    details: name,
+    metadata: { name, provider_type, website, contact_email, contact_phone, programs, state, notes, status }
+  }).select('*, user:user_profiles!user_id(full_name)').single()
+  if (error) return res.status(400).json({ error: error.message })
+  res.json(data)
+})
+
+app.put('/api/training-providers/:id', auth, async (req, res) => {
+  const { data: existing } = await supabase.from('activity_log').select('metadata,details').eq('id', req.params.id).single()
+  const merged = { ...(existing?.metadata || {}), ...req.body }
+  const { data, error } = await supabase.from('activity_log').update({ details: req.body.name || existing?.details, metadata: merged }).eq('id', req.params.id).select().single()
+  if (error) return res.status(400).json({ error: error.message })
+  res.json(data)
+})
+
+app.delete('/api/training-providers/:id', auth, requireAdmin, async (req, res) => {
+  const { error } = await supabase.from('activity_log').delete().eq('id', req.params.id).eq('action', 'TRAINING_PROVIDER')
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true })
+})
+
+// ─── INVOICES ─────────────────────────────────────────────────────────────────
+app.get('/api/invoices', auth, async (req, res) => {
+  const { status, limit = 200 } = req.query
+  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name)').eq('action', 'INVOICE')
+  if (status) q = q.contains('metadata', { status })
+  q = q.order('created_at', { ascending: false }).limit(+limit)
+  const { data, error } = await q
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data })
+})
+
+app.post('/api/invoices', auth, async (req, res) => {
+  const { invoice_number, company_name, application_id, amount, fee_model, status = 'draft', due_date, notes } = req.body
+  if (!company_name?.trim() || !amount) return res.status(400).json({ error: 'Company and amount required' })
+  const inv_num = invoice_number || `INV-${Date.now().toString().slice(-6)}`
+  const { data, error } = await supabase.from('activity_log').insert({
+    user_id: req.user.id, action: 'INVOICE',
+    record_type: 'applications', record_id: application_id || null,
+    details: inv_num,
+    metadata: { invoice_number: inv_num, company_name, application_id, amount, fee_model, status, due_date, notes, created_at: new Date().toISOString() }
+  }).select('*, user:user_profiles!user_id(full_name)').single()
+  if (error) return res.status(400).json({ error: error.message })
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_INVOICE', details: `Invoice ${inv_num} — $${amount} — ${company_name}` }) } catch(_) {}
+  res.json(data)
+})
+
+app.put('/api/invoices/:id', auth, async (req, res) => {
+  const { data: existing } = await supabase.from('activity_log').select('metadata').eq('id', req.params.id).single()
+  const merged = { ...(existing?.metadata || {}), ...req.body }
+  const { data, error } = await supabase.from('activity_log').update({ metadata: merged }).eq('id', req.params.id).select().single()
+  if (error) return res.status(400).json({ error: error.message })
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_INVOICE', details: `Invoice ${merged.invoice_number} → ${req.body.status || 'updated'}` }) } catch(_) {}
+  res.json(data)
+})
+
+// ─── CONTRACTS ───────────────────────────────────────────────────────────────
+app.get('/api/contracts', auth, async (req, res) => {
+  const { status, limit = 200 } = req.query
+  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name)').eq('action', 'CONTRACT')
+  q = q.order('created_at', { ascending: false }).limit(+limit)
+  const { data, error } = await q
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data })
+})
+
+app.post('/api/contracts', auth, async (req, res) => {
+  const { company_name, contract_type, value, status = 'draft', signed_date, expiry_date, notes } = req.body
+  if (!company_name?.trim()) return res.status(400).json({ error: 'Company name required' })
+  const contract_number = `CTR-${Date.now().toString().slice(-6)}`
+  const { data, error } = await supabase.from('activity_log').insert({
+    user_id: req.user.id, action: 'CONTRACT',
+    details: contract_number,
+    metadata: { contract_number, company_name, contract_type, value, status, signed_date, expiry_date, notes, created_at: new Date().toISOString() }
+  }).select('*, user:user_profiles!user_id(full_name)').single()
+  if (error) return res.status(400).json({ error: error.message })
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_CONTRACT', details: `Contract ${contract_number} — ${company_name}` }) } catch(_) {}
+  res.json(data)
+})
+
+app.put('/api/contracts/:id', auth, async (req, res) => {
+  const { data: existing } = await supabase.from('activity_log').select('metadata').eq('id', req.params.id).single()
+  const merged = { ...(existing?.metadata || {}), ...req.body }
+  const { data, error } = await supabase.from('activity_log').update({ metadata: merged }).eq('id', req.params.id).select().single()
+  if (error) return res.status(400).json({ error: error.message })
+  res.json(data)
+})
+
+app.delete('/api/contracts/:id', auth, requireAdmin, async (req, res) => {
+  const { error } = await supabase.from('activity_log').delete().eq('id', req.params.id).eq('action', 'CONTRACT')
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true })
+})
+
+// ─── GRANT AWARDS ─────────────────────────────────────────────────────────────
+app.get('/api/grant-awards', auth, async (req, res) => {
+  // Pull from applications that have been awarded + their revenue records
+  const { data, error } = await supabase.from('applications')
+    .select('*, company:companies(company_name), wib:wib_records(wib_name,state), funding_opportunity:funding_opportunities(opportunity_name), revenue:revenue_records(fee_model,calculated_success_fee,invoice_status,payment_received_date)')
+    .in('status', ['awarded', 'active', 'completed', 'closed'])
+    .order('created_at', { ascending: false })
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data })
+})
+
+// ─── CSV IMPORT ───────────────────────────────────────────────────────────────
+app.post('/api/import/:type', auth, async (req, res) => {
+  const { type } = req.params
+  const { rows } = req.body // array of objects parsed from CSV
+  if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: 'No rows provided' })
+  if (rows.length > 500) return res.status(400).json({ error: 'Maximum 500 rows per import' })
+
+  const results = { created: 0, errors: [] }
+
+  try {
+    if (type === 'wibs') {
+      for (const row of rows) {
+        if (!row['WIB Name'] || !row['Source URL']) { results.errors.push(`Skipped row — WIB Name and Source URL required`); continue }
+        const { error } = await supabase.from('wib_records').insert({
+          wib_name: row['WIB Name'], short_name: row['Short Name'] || null,
+          state: row['State'] || null, status: row['Status'] || 'no_reachout_complete',
+          wib_phone: row['Phone'] || null, wib_email: row['Email'] || null,
+          website: row['Website'] || null, source_url: row['Source URL'],
+          max_award_per_ein: row['Max Award'] ? parseFloat(row['Max Award']) : null,
+          match_requirement_pct: row['Match %'] ? parseFloat(row['Match %']) : null,
+          iwt_program_active: row['IWT Active']?.toLowerCase() === 'yes',
+          owner_id: req.user.id, independent_creation_logged: true,
+          last_verified_date: new Date().toISOString().split('T')[0]
+        })
+        if (error) results.errors.push(`${row['WIB Name']}: ${error.message}`)
+        else results.created++
+      }
+    } else if (type === 'companies') {
+      for (const row of rows) {
+        if (!row['Company Name']) { results.errors.push('Skipped — Company Name required'); continue }
+        const { error } = await supabase.from('companies').insert({
+          company_name: row['Company Name'], company_type: row['Type'] || null,
+          status: row['Status'] || 'prospect', fein: row['FEIN'] || null,
+          domain: row['Domain'] || null, employee_count_total: row['Employee Count'] ? parseInt(row['Employee Count']) : null,
+          avg_hourly_wage: row['Avg Wage'] ? parseFloat(row['Avg Wage']) : null,
+          primary_contact_name: row['Contact Name'] || null, primary_contact_email: row['Contact Email'] || null,
+          primary_contact_phone: row['Contact Phone'] || null
+        })
+        if (error) results.errors.push(`${row['Company Name']}: ${error.message}`)
+        else results.created++
+      }
+    } else if (type === 'locations') {
+      for (const row of rows) {
+        if (!row['Location Name']) { results.errors.push('Skipped — Location Name required'); continue }
+        const { error } = await supabase.from('locations').insert({
+          location_name: row['Location Name'], state: row['State'] || null,
+          county: row['County'] || null, city: row['City'] || null,
+          status: row['Status'] || 'prospect', employee_count: row['Employee Count'] ? parseInt(row['Employee Count']) : null
+        })
+        if (error) results.errors.push(`${row['Location Name']}: ${error.message}`)
+        else results.created++
+      }
+    } else if (type === 'funding') {
+      for (const row of rows) {
+        if (!row['Opportunity Name'] || !row['Source URL']) { results.errors.push('Skipped — Opportunity Name and Source URL required'); continue }
+        const { error } = await supabase.from('funding_opportunities').insert({
+          opportunity_name: row['Opportunity Name'], status: row['Status'] || 'open',
+          program_type: row['Program Type'] || null, source_url: row['Source URL'],
+          max_award_per_ein: row['Max Award/EIN'] ? parseFloat(row['Max Award/EIN']) : null,
+          application_deadline: row['Deadline'] || null, independent_creation_logged: true
+        })
+        if (error) results.errors.push(`${row['Opportunity Name']}: ${error.message}`)
+        else results.created++
+      }
+    } else {
+      return res.status(400).json({ error: `Import not supported for type: ${type}` })
+    }
+
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'IMPORT', details: `Imported ${results.created} ${type} records (${results.errors.length} errors)` }) } catch(_) {}
+    res.json({ ...results, total: rows.length })
+  } catch(e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
 // ─── ROLE PERMISSIONS ────────────────────────────────────────────────────────
 // Default permissions matrix — used as fallback if DB table doesn't exist yet
 const DEFAULT_PERMISSIONS = {
