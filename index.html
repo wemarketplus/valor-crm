@@ -2004,7 +2004,7 @@ function importCSV(type){
 
     const allRows=window._importRows
     const type=window._importType
-    const CHUNK=500  // rows per API call
+    const CHUNK=50  // 50 rows per batch — small enough for any hosting limit
     const totalBatches=Math.ceil(allRows.length/CHUNK)
     let totalCreated=0, totalErrors=[]
 
@@ -2039,11 +2039,21 @@ function importCSV(type){
         if(detail)detail.textContent=`${totalCreated} imported so far${totalErrors.length?' · '+totalErrors.length+' skipped':''}`
         if(btn)btn.textContent=totalBatches>1?`Batch ${b+1}/${totalBatches}...`:'Importing...'
 
-        const r=await api('/api/import/'+type,'POST',{
-          rows:chunk,
-          batch:b+1,
-          totalBatches
-        })
+        // Retry up to 3 times on failure (handles transient network errors)
+        let r, lastErr
+        for(let attempt=0;attempt<3;attempt++){
+          try{
+            r=await api('/api/import/'+type,'POST',{rows:chunk,batch:b+1,totalBatches})
+            break
+          }catch(err){
+            lastErr=err
+            if(attempt<2){
+              if(detail)detail.textContent=`Retrying batch ${b+1} (attempt ${attempt+2}/3)...`
+              await new Promise(res=>setTimeout(res,1000*(attempt+1)))
+            }
+          }
+        }
+        if(!r)throw lastErr
         totalCreated+=r.created||0
         if(r.errors?.length)totalErrors.push(...r.errors)
       }
@@ -2073,10 +2083,16 @@ function importCSV(type){
       },1500)
 
     }catch(e){
-      showToast('Import failed: '+e.message,'error')
-      if(btn){btn.textContent='Save';btn.disabled=false}
+      const errMsg=e.message||'Unknown error'
+      // Show error clearly inside the modal (toast disappears too fast)
       const bar=document.getElementById('import-prog-bar')
+      const label=document.getElementById('import-prog-label')
+      const detail=document.getElementById('import-prog-detail')
       if(bar){bar.style.background='var(--red)';bar.style.width='100%'}
+      if(label)label.textContent='Import failed'
+      if(detail)detail.innerHTML=`<span style="color:var(--red-t);font-size:11px">⚠️ ${errMsg}</span>`
+      showToast('Import failed: '+errMsg,'error')
+      if(btn){btn.textContent='Retry';btn.disabled=false}
       return false
     }
   })
@@ -2232,7 +2248,7 @@ function renderImportPreview(dataRows,type,preview,filename){
   if(!dataRows.length){preview.innerHTML='<div class="alert alert-error">No data rows found</div>';return}
   const headers=Object.keys(dataRows[0])
   const previewRows=dataRows.slice(0,5)
-  const CHUNK=500
+  const CHUNK=50
   const batches=Math.ceil(dataRows.length/CHUNK)
   const batchNote=batches>1?` <span style="color:var(--text3)">(will send in ${batches} batches of up to ${CHUNK} rows each)</span>`:''
   preview.innerHTML=`
