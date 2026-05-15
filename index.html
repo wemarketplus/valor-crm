@@ -2657,20 +2657,39 @@ function applyCoFilters(){
 }
 
 function openCompanyModal(co=null){
-  const statusOpts=['prospect','contacted','qualified','active_client','churned','dnc'].map(s=>`<option value="${s}"${co?.status===s?' selected':''}>${s.replace('_',' ')}</option>`).join('')
-  showModal(co?`Edit: ${co.company_name}`:'Add Company',`
+  const statusOpts=['prospect','contacted','qualified','active_client','churned','dnc'].map(s=>`<option value="${s}"${co?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
+  showModal(co?`🏢 Edit: ${co.company_name}`:'🏢 Add Company',`
     <div class="form-row"><div class="form-group"><div class="form-label">Company Name <span class="form-req">*</span></div><input id="co-name" value="${co?.company_name||''}"></div>
     <div class="form-group"><div class="form-label">Status</div><select id="co-status">${statusOpts}</select></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">FEIN</div><input id="co-fein" value="${co?.fein||''}"></div>
-    <div class="form-group"><div class="form-label">Domain</div><input id="co-domain" value="${co?.domain||''}" placeholder="example.com"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Type / Industry</div><input id="co-type" value="${co?.company_type||''}" placeholder="Senior Living Operator"></div>
+    <div class="form-group"><div class="form-label">Domain / Website</div><input id="co-domain" value="${co?.domain||''}" placeholder="example.com"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">FEIN / Tax ID</div><input id="co-fein" value="${co?.fein||''}"></div>
+    <div class="form-group"><div class="form-label">Rating</div><select id="co-rating">
+      <option value="">No rating</option>${[1,2,3,4,5].map(n=>`<option value="${n}"${co?.rating==n?' selected':''}>${'⭐'.repeat(n)}</option>`).join('')}
+    </select></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Employee Count</div><input id="co-emp" type="number" value="${co?.employee_count_total||''}"></div>
     <div class="form-group"><div class="form-label">Avg Hourly Wage ($)</div><input id="co-wage" type="number" value="${co?.avg_hourly_wage||''}"></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Primary Contact</div><input id="co-contact" value="${co?.primary_contact_name||''}"></div>
-    <div class="form-group"><div class="form-label">Contact Email</div><input id="co-email" type="email" value="${co?.primary_contact_email||''}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Primary Contact Name</div><input id="co-contact" value="${co?.primary_contact_name||''}"></div>
+    <div class="form-group"><div class="form-label">Contact Phone</div><input id="co-phone" type="tel" value="${co?.primary_contact_phone||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Contact Email</div><input id="co-email" type="email" value="${co?.primary_contact_email||''}"></div></div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Training Needs</div><textarea id="co-training" rows="2">${co?.training_needs||''}</textarea></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="co-notes" rows="2">${co?.notes||''}</textarea></div></div>`,
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes / Address / Additional Info</div><textarea id="co-notes" rows="4">${co?.notes||''}</textarea></div></div>`,
   async()=>{
-    const payload={company_name:document.getElementById('co-name').value,status:document.getElementById('co-status').value,fein:document.getElementById('co-fein').value||null,domain:document.getElementById('co-domain').value||null,employee_count_total:document.getElementById('co-emp').value||null,avg_hourly_wage:document.getElementById('co-wage').value||null,primary_contact_name:document.getElementById('co-contact').value||null,primary_contact_email:document.getElementById('co-email').value||null,training_needs:document.getElementById('co-training').value||null,notes:document.getElementById('co-notes').value||null}
+    const payload={
+      company_name:document.getElementById('co-name').value,
+      company_type:document.getElementById('co-type')?.value||null,
+      status:document.getElementById('co-status').value,
+      fein:document.getElementById('co-fein')?.value||null,
+      domain:document.getElementById('co-domain')?.value||null,
+      rating:document.getElementById('co-rating')?.value||null,
+      employee_count_total:document.getElementById('co-emp')?.value||null,
+      avg_hourly_wage:document.getElementById('co-wage')?.value||null,
+      primary_contact_name:document.getElementById('co-contact')?.value||null,
+      primary_contact_phone:document.getElementById('co-phone')?.value||null,
+      primary_contact_email:document.getElementById('co-email')?.value||null,
+      training_needs:document.getElementById('co-training')?.value||null,
+      notes:document.getElementById('co-notes')?.value||null
+    }
     if(!payload.company_name){showToast('Company name is required','error');return false}
     try{if(co)await api('/api/companies/'+co.id,'PUT',payload);else await api('/api/companies','POST',payload);showToast(co?'Company updated':'Company created','success');loadPage('companies')}catch(e){showToast(e.message,'error');return false}
   })
