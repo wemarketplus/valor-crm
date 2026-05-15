@@ -62,17 +62,22 @@ console.log(`Auth client using: ${SUPABASE_ANON_KEY ? 'ANON KEY ✓' : 'SERVICE 
 
 // ─── BLOCK SOURCE FILE EXPOSURE ────────────────────────────────────────────────
 const BLOCKED = ['.js','.ts','.json','.env','.md','.lock','.sh','.sql']
+const BLOCKED_NAMES = ['server.js','server.ts','package.json','package-lock.json','.env']
 app.use((req, res, next) => {
   const p = req.path.toLowerCase()
+  const filename = p.split('/').pop()
   if (p.startsWith('/api/')) return next()
   if (p === '/' || p === '/index.html' || p === '/favicon.ico') return next()
+  // Block source files by name
+  if (BLOCKED_NAMES.includes(filename)) return res.status(404).send('Not found')
+  // Block source files by extension
   if (BLOCKED.some(ext => p.endsWith(ext))) return res.status(404).send('Not found')
   next()
 })
 
 // ─── STATIC FILES ─────────────────────────────────────────────────────────────
+// Only serve from public/ subdirectory - never serve root-level source files
 app.use(express.static(path.join(__dirname, 'public'), { index: false, dotfiles: 'deny' }))
-app.use(express.static(path.join(__dirname), { index: false, dotfiles: 'deny' }))
 
 // ─── AUTH MIDDLEWARE ───────────────────────────────────────────────────────────
 async function auth(req, res, next) {
@@ -1757,18 +1762,38 @@ app.get('/api/template/:type', auth, (req, res) => {
 })
 
 // ─── SERVE FRONTEND ───────────────────────────────────────────────────────────
-app.get('*', (req, res) => {
+// Cache the HTML path on startup for performance
+let _htmlPath = null
+function findHtmlPath() {
+  if (_htmlPath && fs.existsSync(_htmlPath)) return _htmlPath
   const candidates = [
     path.join(__dirname, 'public', 'index.html'),
     path.join(__dirname, 'index.html'),
   ]
-  for (const htmlPath of candidates) {
-    if (fs.existsSync(htmlPath)) {
-      res.setHeader('X-Content-Type-Options', 'nosniff')
-      return res.sendFile(htmlPath)
-    }
+  for (const p of candidates) {
+    if (fs.existsSync(p)) { _htmlPath = p; return p }
   }
-  res.status(503).send(`<html><body style="font-family:sans-serif;padding:40px;text-align:center"><h2>🛡️ Valor CRM</h2><p>Platform loading. Please try again in 60 seconds.</p><p style="color:#999;font-size:12px">If this persists, check deployment logs on Render.</p></body></html>`)
+  return null
+}
+
+app.get('*', (req, res) => {
+  // Only serve HTML for non-API, non-asset requests
+  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' })
+  
+  const htmlPath = findHtmlPath()
+  if (htmlPath) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Cache-Control', 'no-cache')
+    return res.sendFile(htmlPath)
+  }
+  
+  // index.html not found in deployment - show helpful error
+  console.error('ERROR: index.html not found. Searched:', [
+    path.join(__dirname, 'public', 'index.html'),
+    path.join(__dirname, 'index.html'),
+  ])
+  res.status(503).send('<!DOCTYPE html><html><head><title>Valor CRM</title></head><body style="font-family:sans-serif;background:#0B1E3C;color:#fff;padding:40px;text-align:center"><h2>🛡️ Valor CRM</h2><h3 style="color:#C9A84C">Deployment Issue</h3><p>The application interface (index.html) was not found on the server.</p><p style="font-size:13px;color:rgba(255,255,255,.6)">To fix: Upload both <strong>server.js</strong> AND <strong>index.html</strong> to the GitHub repository, then wait 60 seconds for Render to redeploy.</p><p style="margin-top:20px;font-size:11px;color:rgba(255,255,255,.4)">API is running. Only the frontend is missing.</p></body></html>')
 })
 
 const PORT = process.env.PORT || 3001
