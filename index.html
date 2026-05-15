@@ -495,20 +495,12 @@ async function apiDownload(url){
 
 async function apiAI(prompt,context=''){
   try{
-    const r=await fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        messages:[{role:'user',content:`You are an expert workforce grant consultant AI assistant for Valor Workforce Funding LLC. Context: ${context}\n\nTask: ${prompt}\n\nBe concise and actionable. Format for CRM display.`}]
-      })
-    })
-    const d=await r.json()
-    if(d.error)return`AI Error: ${d.error.message||'Unknown error'}`
-    return d.content?.[0]?.text||'No response generated.'
+    // Route through server to keep API key secure
+    const d=await api('/api/ai','POST',{prompt,context})
+    if(d.error&&!d.text)return'AI temporarily unavailable: '+(d.error||'unknown error')
+    return d.text||'No response generated.'
   }catch(e){
-    return'AI temporarily unavailable. Check network connection.'
+    return'AI temporarily unavailable: '+e.message
   }
 }
 
@@ -1063,17 +1055,18 @@ async function pageWibs(){
 function renderWibTable(data){
   if(!data.length)return`<div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">No WIB records yet</div><div class="empty-sub">Add from public sources: CareerOneStop.org, twc.texas.gov, etc.</div></div>`
   return`<table><thead><tr>
-    <th>Workforce Board</th><th>State</th><th>Status</th><th>IWT</th><th>Score</th><th>Max Award</th><th>Next Steps</th><th>Owner</th><th></th>
+    <th>Workforce Board</th><th>Short Name</th><th>State</th><th>Email</th><th>Website</th><th>Status</th><th>IWT</th><th>Score</th><th>Max Award</th><th></th>
   </tr></thead><tbody>
-  ${data.map(w=>`<tr onclick="openWibProfile('${w.id}')">
-    <td><div style="font-weight:500">${w.wib_name}</div>${w.short_name?`<div style="font-size:10px;color:var(--text3)">${w.short_name}</div>`:''}</td>
-    <td><b>${w.state}</b></td>
+  ${data.map(w=>`<tr onclick="openWibProfile('${w.id}')" style="cursor:pointer">
+    <td><div style="font-weight:500">${w.wib_name}</div></td>
+    <td style="font-size:11px;color:var(--text2)">${w.short_name||'—'}</td>
+    <td><b>${w.state||'—'}</b></td>
+    <td style="font-size:11px">${w.wib_email?`<a href="mailto:${w.wib_email}" class="field-link" onclick="event.stopPropagation()">${w.wib_email}</a>`:'—'}</td>
+    <td style="font-size:11px">${w.website?`<a href="https://${w.website}" target="_blank" class="field-link" onclick="event.stopPropagation()">${w.website}</a>`:'—'}</td>
     <td>${wibStatusPill(w.status)}</td>
     <td>${w.iwt_program_active?'<span class="pill p-green">Active</span>':'<span style="color:var(--text3)">—</span>'}</td>
     <td><div class="score-wrap"><div class="score-bar"><div class="score-fill" style="width:${w.call_priority_score}%"></div></div><span class="score-n">${w.call_priority_score}</span></div></td>
     <td>${w.max_award_per_ein?'<span style="color:var(--green);font-weight:500">$'+Number(w.max_award_per_ein).toLocaleString()+'</span>':'—'}</td>
-    <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)">${w.next_steps||'—'}</td>
-    <td style="font-size:10.5px;color:var(--text2)">${w.owner?.full_name||'—'}</td>
     <td onclick="event.stopPropagation()"><div class="action-btns">
       <button class="action-btn" onclick="openWibModal(${JSON.stringify(w).replace(/"/g,"'")})">Edit</button>
       <button class="action-btn" onclick="openWibProfile('${w.id}')">View</button>
@@ -1156,7 +1149,24 @@ function openWibModal(wib=null){
       else await api('/api/wibs','POST',payload)
       if(currentPage==='wibs')loadPage('wibs')
       else if(currentWib)openWibProfile(wib?.id||'refresh')
-    }catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
+    }catch(e){
+      if(e.message&&e.message.includes('details')){
+        err.innerHTML='<div class="alert alert-warn">⚠️ Database schema needs refresh. Refreshing...</div>'
+        try{
+          await api('/api/refresh-schema','POST',{})
+          // Retry once
+          await api('/api/tasks','POST',{title,due_date:document.getElementById('task-due').value||null,priority:document.getElementById('task-priority').value,assigned_to:document.getElementById('task-assign').value||null,notes:document.getElementById('task-notes').value||null})
+          showToast('Task created after schema refresh','success')
+          if(currentPage==='tasks')loadPage('tasks')
+          return true
+        }catch(e2){
+          err.innerHTML=`<div class="alert alert-error">⚠️ Schema refresh failed: ${e2.message}</div>`
+        }
+      } else {
+        err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`
+      }
+      return false
+    }
   })
 }
 
@@ -1288,7 +1298,24 @@ function openTaskModal(recordType='',recordId=''){
       })
       showToast('Task created','success')
       if(currentPage==='tasks')loadPage('tasks')
-    }catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
+    }catch(e){
+      if(e.message&&e.message.includes('details')){
+        err.innerHTML='<div class="alert alert-warn">⚠️ Database schema needs refresh. Refreshing...</div>'
+        try{
+          await api('/api/refresh-schema','POST',{})
+          // Retry once
+          await api('/api/tasks','POST',{title,due_date:document.getElementById('task-due').value||null,priority:document.getElementById('task-priority').value,assigned_to:document.getElementById('task-assign').value||null,notes:document.getElementById('task-notes').value||null})
+          showToast('Task created after schema refresh','success')
+          if(currentPage==='tasks')loadPage('tasks')
+          return true
+        }catch(e2){
+          err.innerHTML=`<div class="alert alert-error">⚠️ Schema refresh failed: ${e2.message}</div>`
+        }
+      } else {
+        err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`
+      }
+      return false
+    }
   })
 }
 
@@ -2007,7 +2034,24 @@ function openUserModal(){
         phone:document.getElementById('u-phone').value||null})
       showToast(`User ${email} created. Share the temporary password securely.`,'success')
       pageUsers()
-    }catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
+    }catch(e){
+      if(e.message&&e.message.includes('details')){
+        err.innerHTML='<div class="alert alert-warn">⚠️ Database schema needs refresh. Refreshing...</div>'
+        try{
+          await api('/api/refresh-schema','POST',{})
+          // Retry once
+          await api('/api/tasks','POST',{title,due_date:document.getElementById('task-due').value||null,priority:document.getElementById('task-priority').value,assigned_to:document.getElementById('task-assign').value||null,notes:document.getElementById('task-notes').value||null})
+          showToast('Task created after schema refresh','success')
+          if(currentPage==='tasks')loadPage('tasks')
+          return true
+        }catch(e2){
+          err.innerHTML=`<div class="alert alert-error">⚠️ Schema refresh failed: ${e2.message}</div>`
+        }
+      } else {
+        err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`
+      }
+      return false
+    }
   })
 }
 
@@ -4157,7 +4201,24 @@ function resetUserPassword(id,email){
     try{
       await api('/api/users/'+id+'/reset-password','POST',{new_password:newPw})
       showToast(`Password reset for ${email}. Share the new password securely.`,'success')
-    }catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
+    }catch(e){
+      if(e.message&&e.message.includes('details')){
+        err.innerHTML='<div class="alert alert-warn">⚠️ Database schema needs refresh. Refreshing...</div>'
+        try{
+          await api('/api/refresh-schema','POST',{})
+          // Retry once
+          await api('/api/tasks','POST',{title,due_date:document.getElementById('task-due').value||null,priority:document.getElementById('task-priority').value,assigned_to:document.getElementById('task-assign').value||null,notes:document.getElementById('task-notes').value||null})
+          showToast('Task created after schema refresh','success')
+          if(currentPage==='tasks')loadPage('tasks')
+          return true
+        }catch(e2){
+          err.innerHTML=`<div class="alert alert-error">⚠️ Schema refresh failed: ${e2.message}</div>`
+        }
+      } else {
+        err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`
+      }
+      return false
+    }
   })
 }
 
@@ -4188,7 +4249,24 @@ function openChangePasswordModal(){
     try{
       await api('/api/change-password','POST',{current_password:current,new_password:newPw})
       showToast('Password changed successfully','success')
-    }catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
+    }catch(e){
+      if(e.message&&e.message.includes('details')){
+        err.innerHTML='<div class="alert alert-warn">⚠️ Database schema needs refresh. Refreshing...</div>'
+        try{
+          await api('/api/refresh-schema','POST',{})
+          // Retry once
+          await api('/api/tasks','POST',{title,due_date:document.getElementById('task-due').value||null,priority:document.getElementById('task-priority').value,assigned_to:document.getElementById('task-assign').value||null,notes:document.getElementById('task-notes').value||null})
+          showToast('Task created after schema refresh','success')
+          if(currentPage==='tasks')loadPage('tasks')
+          return true
+        }catch(e2){
+          err.innerHTML=`<div class="alert alert-error">⚠️ Schema refresh failed: ${e2.message}</div>`
+        }
+      } else {
+        err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`
+      }
+      return false
+    }
   })
 }
 
