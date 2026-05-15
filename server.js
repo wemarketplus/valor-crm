@@ -139,8 +139,19 @@ app.post('/api/login', rateLimitLogin, async (req, res) => {
     console.log(`Login success: ${cleanEmail} (${profile.role})`)
     return res.json({ token: data.session.access_token, user: profile })
   } catch (err) {
-    console.error('Login error:', err)
-    return res.status(500).json({ error: 'Login service error. Please try again in a moment.' })
+    console.error('Login catch error:', err.message, err.constructor?.name)
+    // Return specific message for known errors
+    const msg = err.message || ''
+    if (msg.includes('email') || msg.includes('Email')) {
+      return res.status(401).json({ error: 'Email not confirmed. Contact your administrator to confirm your account in Supabase.' })
+    }
+    if (msg.includes('Invalid') || msg.includes('invalid')) {
+      return res.status(401).json({ error: 'Invalid email or password' })
+    }
+    if (msg.includes('fetch') || msg.includes('network') || msg.includes('Network')) {
+      return res.status(503).json({ error: 'Cannot connect to authentication service. Try again in a moment.' })
+    }
+    return res.status(500).json({ error: `Login error: ${msg || 'Unknown. Check Render logs.'}` })
   }
 })
 
@@ -153,7 +164,41 @@ app.post('/api/logout', auth, async (req, res) => {
 
 // ─── ME ───────────────────────────────────────────────────────────────────────
 app.get('/api/me', auth, (req, res) => res.json(req.user))
-app.get('/api/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString(), env: { url: !!SUPABASE_URL, anon: !!SUPABASE_ANON_KEY, service: !!SUPABASE_SERVICE_KEY } }))
+app.get('/api/health', (req, res) => res.json({ 
+  status: 'ok', 
+  ts: new Date().toISOString(), 
+  env: { 
+    url: !!SUPABASE_URL, 
+    anon: !!SUPABASE_ANON_KEY,
+    anon_prefix: SUPABASE_ANON_KEY ? SUPABASE_ANON_KEY.substring(0,15) + '...' : 'NOT SET',
+    service: !!SUPABASE_SERVICE_KEY 
+  } 
+}))
+
+// Debug login — helps diagnose Supabase auth issues without exposing full credentials  
+app.post('/api/debug-login', rateLimitLogin, async (req, res) => {
+  const { email, password } = req.body || {}
+  if (!email || !password) return res.status(400).json({ error: 'Email and password required' })
+  try {
+    console.log('Debug login attempt for:', email)
+    console.log('Auth client type:', SUPABASE_ANON_KEY ? 'anon key' : 'service key fallback')
+    
+    const result = await authClient.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
+    
+    return res.json({
+      has_data: !!result.data,
+      has_session: !!result.data?.session,
+      has_token: !!result.data?.session?.access_token,
+      has_user: !!result.data?.user,
+      error: result.error ? result.error.message : null,
+      error_code: result.error ? result.error.status : null
+    })
+  } catch (err) {
+    console.error('Debug login threw:', err.message, err.stack?.split('
+')[1])
+    return res.status(500).json({ threw: true, error: err.message, type: err.constructor.name })
+  }
+})
 
 // ─── CHANGE OWN PASSWORD ──────────────────────────────────────────────────────
 app.post('/api/change-password', auth, async (req, res) => {
