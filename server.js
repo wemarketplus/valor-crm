@@ -555,13 +555,13 @@ app.put('/api/revenue/:id', auth, async (req, res) => {
 // ─── NOTES ────────────────────────────────────────────────────────────────────
 app.get('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, limit = 50 } = req.query
-  const cols = global._hasMetadata
-    ? 'id,action,details,metadata,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)'
-    : 'id,action,details,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)'
+  const detailsPart = global._detailsColumnMissing ? '' : ',details'
+  const metaPart = global._hasMetadata ? ',metadata' : ''
+  const cols = `id,action${detailsPart}${metaPart},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)`
   let q = supabase.from('activity_log').select(cols).eq('action', 'NOTE')
   if (record_type) q = q.eq('record_type', record_type)
   if (record_id) q = q.eq('record_id', record_id)
-  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 200))
+  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
   const normalized = (data || []).map(n => parseLogRow(n))
@@ -569,8 +569,10 @@ app.get('/api/notes', auth, async (req, res) => {
 })
 
 app.post('/api/notes', auth, async (req, res) => {
-  const { record_type, record_id, content, note_type = 'Note', is_aircall = false } = req.body
-  if (!content?.trim()) return res.status(400).json({ error: 'Note content required' })
+  const { record_type, record_id, note_type = 'Note', is_aircall = false } = req.body
+  // Accept either 'content' or 'details' field name for backward compatibility
+  const content = (req.body.content || req.body.details || '').trim()
+  if (!content) return res.status(400).json({ error: 'Note content required' })
   const { data, error } = await safeInsertLog({
     user_id: req.user.id, action: 'NOTE',
     record_type: record_type || null, record_id: record_id || null,
@@ -578,22 +580,24 @@ app.post('/api/notes', auth, async (req, res) => {
     metadata: { note_type, is_aircall, content: content.trim() }
   })
   if (error) return res.status(400).json({ error: error.message })
-  // Fetch with user join
-  const { data: full } = await supabase.from('activity_log')
-    .select('id,action,details,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)')
-    .eq('id', data.id).single()
+  // Fetch with user join using safe column list
+  const detailsPart = global._detailsColumnMissing ? '' : ',details'
+  const metaPart2 = global._hasMetadata ? ',metadata' : ''
+  const cols2 = `id,action${detailsPart}${metaPart2},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)`
+  const { data: full } = await supabase.from('activity_log').select(cols2).eq('id', data.id).single()
   res.json(parseLogRow(full || data))
 })
 
 // ─── TASKS ────────────────────────────────────────────────────────────────────
 app.get('/api/tasks', auth, async (req, res) => {
   const { record_id, limit = 100 } = req.query
-  const cols = global._hasMetadata
-    ? 'id,action,details,metadata,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name)'
-    : 'id,action,details,created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name)'
+  // Build column list based on what actually exists in the DB
+  const detailsPart = global._detailsColumnMissing ? '' : ',details'
+  const metaPart = global._hasMetadata ? ',metadata' : ''
+  const cols = `id,action${detailsPart}${metaPart},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name)`
   let q = supabase.from('activity_log').select(cols).eq('action', 'TASK')
   if (record_id) q = q.eq('record_id', record_id)
-  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 100))
+  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
   const normalized = (data || []).map(t => parseLogRow(t))
@@ -616,7 +620,7 @@ app.post('/api/tasks', auth, async (req, res) => {
 app.put('/api/tasks/:id', auth, async (req, res) => {
   // Fetch existing to merge state
   const { data: existing } = await supabase.from('activity_log')
-    .select('id,details,created_at').eq('id', req.params.id).single()
+    .select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
   const existingParsed = parseLogRow(existing)
   const currentMeta = existingParsed?.metadata || {}
   const newMeta = { ...currentMeta, ...req.body }
@@ -632,20 +636,26 @@ app.put('/api/tasks/:id', auth, async (req, res) => {
 // ─── ACTIVITY / AUDIT ─────────────────────────────────────────────────────────
 app.get('/api/activity', auth, async (req, res) => {
   const { record_type, record_id, limit = 100 } = req.query
-  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name,email)').neq('action', 'NOTE').neq('action', 'TASK')
+  const detailsPart = global._detailsColumnMissing ? '' : ',details'
+  const metaPart = global._hasMetadata ? ',metadata' : ''
+  const cols = `id,action${detailsPart}${metaPart},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)`
+  let q = supabase.from('activity_log').select(cols).neq('action', 'NOTE').neq('action', 'TASK')
   if (record_type) q = q.eq('record_type', record_type)
   if (record_id) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 200))
   const { data, error } = await q
   if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
+  res.json({ data: (data||[]).map(r=>parseLogRow(r)) })
 })
 
 app.get('/api/audit', auth, requireAdmin, async (req, res) => {
   const { limit = 100, offset = 0 } = req.query
-  const { data, error, count } = await supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name,email)', { count: 'exact' }).order('created_at', { ascending: false }).range(+offset, +offset + Math.min(+limit, 200) - 1)
+  const detailsPart = global._detailsColumnMissing ? '' : ',details'
+  const metaPart = global._hasMetadata ? ',metadata' : ''
+  const cols = `id,action${detailsPart}${metaPart},created_at,user_id,record_type,record_id,user:user_profiles!user_id(full_name,email)`
+  const { data, error, count } = await supabase.from('activity_log').select(cols, { count: 'exact' }).order('created_at', { ascending: false }).range(+offset, +offset + Math.min(+limit, 200) - 1)
   if (error) return res.status(400).json({ error: error.message })
-  res.json({ data, count })
+  res.json({ data: (data||[]).map(r=>parseLogRow(r)), count })
 })
 
 // ─── USERS ────────────────────────────────────────────────────────────────────
@@ -761,7 +771,7 @@ app.post('/api/contacts', auth, async (req, res) => {
 
 app.put('/api/contacts/:id', auth, async (req, res) => {
   const { name, title, email, phone, notes } = req.body
-  const { data: existing } = await supabase.from('activity_log').select('id,details,created_at').eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
   const existingParsed = parseLogRow(existing)
   const merged = { ...(existingParsed?.metadata || {}), name, title, email, phone, notes }
   const updateVal = global._hasMetadata ? { metadata: merged, details: name || existingParsed?.metadata?.name } : { details: JSON.stringify({ text: name, ...merged }) }
@@ -800,7 +810,7 @@ app.post('/api/training-providers', auth, async (req, res) => {
 })
 
 app.put('/api/training-providers/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select('id,details,created_at').eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
   const existingParsed = parseLogRow(existing)
   const merged = { ...(existingParsed?.metadata || {}), ...req.body }
   const tpUpdateData = global._hasMetadata
@@ -844,7 +854,7 @@ app.post('/api/invoices', auth, async (req, res) => {
 })
 
 app.put('/api/invoices/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select('id,details,created_at').eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
   const merged = { ...(existing?.metadata || {}), ...req.body }
   const updateData = global._hasMetadata ? { metadata: merged } : { details: JSON.stringify(merged) }
   const { data, error } = await supabase.from('activity_log').update(updateData).eq('id', req.params.id).select().single()
@@ -878,7 +888,7 @@ app.post('/api/contracts', auth, async (req, res) => {
 })
 
 app.put('/api/contracts/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select('id,details,created_at').eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select(global._detailsColumnMissing ? (global._hasMetadata ? 'id,metadata,created_at' : 'id,created_at') : (global._hasMetadata ? 'id,details,metadata,created_at' : 'id,details,created_at')).eq('id', req.params.id).single()
   const merged = { ...(existing?.metadata || {}), ...req.body }
   const updateData = global._hasMetadata ? { metadata: merged } : { details: JSON.stringify(merged) }
   const { data, error } = await supabase.from('activity_log').update(updateData).eq('id', req.params.id).select().single()
