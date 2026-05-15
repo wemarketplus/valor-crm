@@ -995,10 +995,10 @@ async function pageWibs(){
     <div class="ie-dropdown">
       <button class="btn" onclick="toggleIEMenu('wibs-ie')">⬇️ Import / Export</button>
       <div class="ie-menu" id="wibs-ie" style="display:none">
-        <div class="ie-item" onclick="importCSV('wibs')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-item" onclick="importCSV('wibs')"><span class="ie-icon">📥</span>Import CSV / Excel</div>
         <div class="ie-sep"></div>
         <div class="ie-item" onclick="exportCSV('wibs')"><span class="ie-icon">📤</span>Export CSV</div>
-        <div class="ie-item" onclick="exportExcel('wibs')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportExcel('wibs')"><span class="ie-icon">📊</span>Export Excel (.xlsx)</div>
         <div class="ie-item" onclick="exportPDF('wibs')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>
@@ -1589,7 +1589,7 @@ async function pageUsers(){
       <button class="btn" onclick="toggleIEMenu('users-ie')">⬇️ Export</button>
       <div class="ie-menu" id="users-ie" style="display:none">
         <div class="ie-item" onclick="exportCSV('users')"><span class="ie-icon">📤</span>Export CSV</div>
-        <div class="ie-item" onclick="exportExcel('users')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportExcel('users')"><span class="ie-icon">📊</span>Export Excel (.xlsx)</div>
       </div>
     </div>
     <button class="btn btn-primary" onclick="openUserModal()">+ Add User</button>`)
@@ -2093,11 +2093,50 @@ async function exportCSV(type){
 
 async function exportExcel(type){
   closeIEMenu()
-  // Export CSV and inform user it opens in Excel
+  showToast('Preparing Excel export...','info')
   try{
-    showToast(`Preparing Excel-compatible export...`,'info')
-    await apiDownload(`/api/export/${type}`)
-    showToast(`Downloaded as CSV — open in Excel to view as spreadsheet`,'success')
+    // Load SheetJS if not already loaded
+    if(!window.XLSX){
+      await new Promise((res,rej)=>{
+        const s=document.createElement('script')
+        s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+        s.onload=res;s.onerror=()=>rej(new Error('Failed to load Excel library'))
+        document.head.appendChild(s)
+      })
+    }
+    // Fetch CSV data from server
+    const r=await fetch(`/api/export/${type}`,{headers:{'Authorization':`Bearer ${token}`}})
+    if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Export failed')}
+    const csvText=await r.text()
+    // Parse CSV into array of arrays
+    const lines=csvText.split(/\r?\n/).filter(l=>l.trim())
+    const rows=lines.map(l=>{
+      const vals=[];let cur='',inQ=false
+      for(let i=0;i<l.length;i++){
+        const c=l[i]
+        if(c==='"'){if(inQ&&l[i+1]==='"'){cur+='"';i++}else inQ=!inQ}
+        else if(c===','&&!inQ){vals.push(cur);cur=''}
+        else cur+=c
+      }
+      vals.push(cur)
+      return vals
+    })
+    // Build workbook
+    const ws=XLSX.utils.aoa_to_sheet(rows)
+    // Auto-width columns
+    const colWidths=rows[0]?.map((_,ci)=>({wch:Math.min(40,Math.max(10,...rows.map(r=>String(r[ci]||'').length)))}))
+    if(colWidths)ws['!cols']=colWidths
+    // Bold header row
+    const range=XLSX.utils.decode_range(ws['!ref']||'A1')
+    for(let c=range.s.c;c<=range.e.c;c++){
+      const cell=XLSX.utils.encode_cell({r:0,c})
+      if(ws[cell])ws[cell].s={font:{bold:true},fill:{fgColor:{rgb:'0B1E3C'}}}
+    }
+    const wb=XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb,ws,type.charAt(0).toUpperCase()+type.slice(1))
+    const filename=`valor-${type}-${new Date().toISOString().split('T')[0]}.xlsx`
+    XLSX.writeFile(wb,filename)
+    showToast(`✅ Exported as ${filename}`,'success')
   }catch(e){showToast(`Export failed: ${e.message}`,'error')}
 }
 
@@ -2320,10 +2359,10 @@ async function pageCompanies(){
     <div class="ie-dropdown">
       <button class="btn" onclick="toggleIEMenu('co-ie')">⬇️ Import / Export</button>
       <div class="ie-menu" id="co-ie" style="display:none">
-        <div class="ie-item" onclick="importCSV('companies')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-item" onclick="importCSV('companies')"><span class="ie-icon">📥</span>Import CSV / Excel</div>
         <div class="ie-sep"></div>
         <div class="ie-item" onclick="exportCSV('companies')"><span class="ie-icon">📤</span>Export CSV</div>
-        <div class="ie-item" onclick="exportExcel('companies')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportExcel('companies')"><span class="ie-icon">📊</span>Export Excel (.xlsx)</div>
         <div class="ie-item" onclick="exportPDF('companies')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>
@@ -2402,10 +2441,10 @@ async function pageLocations(){
     <div class="ie-dropdown">
       <button class="btn" onclick="toggleIEMenu('loc-ie')">⬇️ Import / Export</button>
       <div class="ie-menu" id="loc-ie" style="display:none">
-        <div class="ie-item" onclick="importCSV('locations')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-item" onclick="importCSV('locations')"><span class="ie-icon">📥</span>Import CSV / Excel</div>
         <div class="ie-sep"></div>
         <div class="ie-item" onclick="exportCSV('locations')"><span class="ie-icon">📤</span>Export CSV</div>
-        <div class="ie-item" onclick="exportExcel('locations')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportExcel('locations')"><span class="ie-icon">📊</span>Export Excel (.xlsx)</div>
         <div class="ie-item" onclick="exportPDF('locations')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>
@@ -2468,10 +2507,10 @@ async function pageFunding(){
     <div class="ie-dropdown">
       <button class="btn" onclick="toggleIEMenu('fund-ie')">⬇️ Import / Export</button>
       <div class="ie-menu" id="fund-ie" style="display:none">
-        <div class="ie-item" onclick="importCSV('funding')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-item" onclick="importCSV('funding')"><span class="ie-icon">📥</span>Import CSV / Excel</div>
         <div class="ie-sep"></div>
         <div class="ie-item" onclick="exportCSV('funding')"><span class="ie-icon">📤</span>Export CSV</div>
-        <div class="ie-item" onclick="exportExcel('funding')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportExcel('funding')"><span class="ie-icon">📊</span>Export Excel (.xlsx)</div>
         <div class="ie-item" onclick="exportPDF('funding')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>
@@ -2538,10 +2577,10 @@ async function pageApplications(){
     <div class="ie-dropdown">
       <button class="btn" onclick="toggleIEMenu('app-ie')">⬇️ Import / Export</button>
       <div class="ie-menu" id="app-ie" style="display:none">
-        <div class="ie-item" onclick="importCSV('applications')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-item" onclick="importCSV('applications')"><span class="ie-icon">📥</span>Import CSV / Excel</div>
         <div class="ie-sep"></div>
         <div class="ie-item" onclick="exportCSV('applications')"><span class="ie-icon">📤</span>Export CSV</div>
-        <div class="ie-item" onclick="exportExcel('applications')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportExcel('applications')"><span class="ie-icon">📊</span>Export Excel (.xlsx)</div>
         <div class="ie-item" onclick="exportPDF('applications')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>
@@ -2607,7 +2646,7 @@ async function pageRevenue(){
       <button class="btn" onclick="toggleIEMenu('rev-ie')">⬇️ Export</button>
       <div class="ie-menu" id="rev-ie" style="display:none">
         <div class="ie-item" onclick="exportCSV('revenue')"><span class="ie-icon">📤</span>Export CSV</div>
-        <div class="ie-item" onclick="exportExcel('revenue')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportExcel('revenue')"><span class="ie-icon">📊</span>Export Excel (.xlsx)</div>
         <div class="ie-item" onclick="exportPDF('revenue')"><span class="ie-icon">📄</span>Export PDF Report</div>
       </div>
     </div>`)
@@ -2647,7 +2686,7 @@ async function pageCompliance(){
       <button class="btn" onclick="toggleIEMenu('comp-ie')">⬇️ Export</button>
       <div class="ie-menu" id="comp-ie" style="display:none">
         <div class="ie-item" onclick="exportCSV('compliance')"><span class="ie-icon">📤</span>Export CSV</div>
-        <div class="ie-item" onclick="exportExcel('compliance')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportExcel('compliance')"><span class="ie-icon">📊</span>Export Excel (.xlsx)</div>
         <div class="ie-item" onclick="exportPDF('compliance')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>`)
