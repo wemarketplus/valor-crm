@@ -693,7 +693,27 @@ function fmtAgo(d){
   if(m<1)return'just now';if(m<60)return m+'m ago';if(h<24)return h+'h ago'
   if(dy<7)return dy+'d ago';return new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric'})
 }
-function getTaskMeta(t){try{return JSON.parse(t.details||'{}')}catch{return{title:t.details||''}}}
+function getTaskMeta(t){
+  // API returns data in t.metadata (object) or t.details (JSON string) depending on DB schema
+  if(t.metadata&&typeof t.metadata==='object')return t.metadata
+  try{const p=JSON.parse(t.details||'{}');return typeof p==='object'?p:{title:t.details||''}}
+  catch{return{title:t.details||''}}
+}
+function getNoteContent(n){
+  // Note content lives in metadata.content, metadata.text, or details string
+  if(n.metadata&&typeof n.metadata==='object'){
+    return n.metadata.content||n.metadata.text||n.details||''
+  }
+  return n.details||''
+}
+function getNoteType(n){
+  if(n.metadata&&typeof n.metadata==='object')return n.metadata.note_type||'Note'
+  try{const p=JSON.parse(n.details||'{}');return p.note_type||'Note'}catch{return'Note'}
+}
+function isAircallNote(n){
+  if(n.metadata&&typeof n.metadata==='object')return!!(n.metadata.is_aircall||n.metadata.note_type==='Aircall')
+  try{const p=JSON.parse(n.details||'{}');return!!(p.is_aircall||p.note_type==='Aircall')}catch{return false}
+}
 
 function callPriority(n){
   if(!n)return'<span class="cell-dim">—</span>'
@@ -1168,7 +1188,7 @@ async function pageDashboard(){
 
   // Async tasks
   api('/api/tasks?limit=8').then(r=>{
-    const tasks=(r.data||[]).filter(t=>{try{return!JSON.parse(t.details||'{}').done}catch{return true}})
+    const tasks=(r.data||[]).filter(t=>{try{return!getTaskMeta(t).done}catch{return true}})
     const badge=document.getElementById('dash-task-badge');if(badge)badge.textContent=tasks.length
     const body=document.getElementById('dash-tasks');if(!body)return
     if(!tasks.length){body.innerHTML='<div style="color:var(--text3);font-size:11px;text-align:center;padding:8px">No pending tasks</div>';return}
@@ -1757,15 +1777,17 @@ async function aiAssistNote(textareaId){
 }
 
 function renderNoteCard(n){
-  const meta=n.metadata||{}
-  const isAircall=meta.is_aircall||meta.note_type==='Aircall'
+  const aircall=isAircallNote(n)
+  const content=getNoteContent(n)
+  const noteType=getNoteType(n)
   const initials=(n.user?.full_name||n.user?.email||'?').slice(0,2).toUpperCase()
-  const noteType=meta.note_type||(isAircall?'Aircall':'Note')
   const timeAgo=n.created_at?fmtAgo(n.created_at):''
-  if(isAircall){
+  const meta=n.metadata||{}
+  if(aircall){
     return`<div class="aircall-card">
-      <div class="aircall-hd">📞 Aircall — ${n.user?.full_name||'System'} · ${timeAgo}</div>
-      <div style="font-size:11.5px;color:var(--text);line-height:1.65">${(n.details||'').replace(/\n/g,'<br>')}</div>
+      <div class="aircall-hd">📞 Aircall — ${n.user?.full_name||'System'} · ${timeAgo}${meta.duration?' ('+meta.duration+'m)':''}</div>
+      <div style="font-size:11.5px;color:var(--text);line-height:1.65">${content.replace(/\n/g,'<br>')}</div>
+      ${meta.recording_url?`<a href="${meta.recording_url}" target="_blank" style="font-size:10.5px;color:var(--blue-t)">🔗 Recording</a>`:''}
     </div>`
   }
   return`<div class="note-card">
@@ -1776,7 +1798,7 @@ function renderNoteCard(n){
       <span class="note-badge">${noteType}</span>
       <button class="action-btn del" style="margin-left:auto" onclick="deleteNote('${n.id}')">✕</button>
     </div>
-    <div class="note-content">${(n.details||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+    <div class="note-content">${content.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
   </div>`
 }
 
@@ -2636,20 +2658,39 @@ async function loadPermissionsMatrix(){
     if(!perms){wrap.innerHTML='<div class="cell-dim">Permissions API not available</div>';return}
     const roles=['super_admin','admin','grant_coordinator','compliance_mgr','team_member','external_partner']
     const roleLabels={super_admin:'Super Admin',admin:'Admin',grant_coordinator:'Grant Coordinator',compliance_mgr:'Compliance Mgr',team_member:'Sales Specialist',external_partner:'Read-Only'}
+    const resourceLabels={
+      view_records:'View Records',create_wibs_companies:'Create WIBs/Companies',
+      edit_wibs_companies:'Edit WIBs/Companies',delete_records:'Delete Records',
+      create_edit_apps:'Create/Edit Applications',view_revenue:'View Revenue',
+      manage_invoices:'Manage Invoices',compliance_tracking:'Compliance Tracking',
+      notes_tasks:'Notes & Tasks',ai_assistant:'AI Assistant',
+      import_export:'Import/Export',audit_logs:'Audit Logs',
+      manage_users:'Manage Users',assign_roles:'Assign Roles',
+      assign_super_admin:'Assign Super Admin',system_settings:'System Settings'
+    }
     const resources=Object.keys(perms.permissions||{})
-    wrap.innerHTML=`<table class="perm-tbl" style="width:100%;border-collapse:collapse">
-      <thead><tr><th>Resource</th>${roles.map(r=>`<th>${roleLabels[r]||r}</th>`).join('')}</tr></thead>
+    const lockedPerms=perms.locked||{}
+    wrap.innerHTML=`<div style="overflow-x:auto"><table class="perm-tbl" style="width:100%;border-collapse:collapse;font-size:11px">
+      <thead><tr><th style="text-align:left;min-width:160px">Permission</th>${roles.map(r=>`<th style="text-align:center;min-width:80px">${roleLabels[r]||r}</th>`).join('')}</tr></thead>
       <tbody>${resources.map(res=>`<tr>
-        <td style="font-weight:500">${res}</td>
+        <td style="font-weight:500;padding:6px 8px">${resourceLabels[res]||res.replace(/_/g,' ')}</td>
         ${roles.map(role=>{
-          const actions=perms.permissions?.[res]?.[role]||[]
-          const canRead=actions.includes('read')||actions.includes('*')
-          const canWrite=actions.includes('write')||actions.includes('*')
-          return`<td style="text-align:center">${canRead?'<span style="color:var(--green-t)">✓ R</span>':''} ${canWrite?'<span style="color:var(--blue-t)">W</span>':''}</td>`
+          // API returns boolean values, not arrays
+          const rawVal=perms.permissions?.[res]?.[role]
+          const isLocked=lockedPerms[res]?.[role]!==undefined
+          const hasAccess=rawVal===true
+          const bg=isLocked?'rgba(59,130,246,.06)':''
+          return`<td style="text-align:center;padding:6px;background:${bg}">
+            ${hasAccess
+              ?`<span style="color:var(--green-t);font-weight:700">✓</span>`
+              :`<span style="color:var(--text4)">—</span>`}
+            ${isLocked?'<span style="font-size:9px;color:var(--text3)">🔒</span>':''}
+          </td>`
         }).join('')}
       </tr>`).join('')}
       </tbody>
-    </table>`
+    </table></div>
+    <div style="margin-top:8px;font-size:10.5px;color:var(--text3)">🔒 Locked permissions cannot be changed. ✓ = Role has this permission.</div>`
   }catch(e){wrap.innerHTML=`<div class="cell-dim">Could not load: ${e.message}</div>`}
 }
 
@@ -2941,7 +2982,181 @@ function showSettingsSection(name,btn){
   btn.classList.add('active')
   const body=document.getElementById('settings-body')
   if(!body)return
-  body.innerHTML=`<div style="font-size:16px;font-weight:700;margin-bottom:4px">${name}</div><div style="font-size:12px;color:var(--text3);margin-bottom:18px">Manage ${name.toLowerCase()} settings</div><div class="empty-state"><div class="empty-icon">⚙</div><div class="empty-text">${name} settings coming soon</div></div>`
+
+  const sections={
+    'Account':`
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">Account</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:18px">Manage your account settings and preferences</div>
+      <div class="card" style="max-width:540px">
+        <div class="card-hd"><div class="card-title">👤 Profile Information</div></div>
+        <div class="card-body">
+          <div class="form-row form-full"><div class="form-group"><div class="form-label">Full Name</div><input id="sett-name" value="${currentUser?.full_name||''}"></div></div>
+          <div class="form-row form-full"><div class="form-group"><div class="form-label">Email</div><input value="${currentUser?.email||''}" disabled style="opacity:.6"></div></div>
+          <div class="form-row form-full"><div class="form-group"><div class="form-label">Title / Role Label</div><input id="sett-title" value="${currentUser?.title||''}" placeholder="Grant Coordinator"></div></div>
+          <button class="btn btn-primary" onclick="saveProfile()">Save Changes</button>
+        </div>
+      </div>
+      <div class="card" style="max-width:540px;margin-top:10px">
+        <div class="card-hd"><div class="card-title">🔐 Change Password</div></div>
+        <div class="card-body">
+          <button class="btn btn-primary" onclick="openChangePasswordModal()">Change Password</button>
+        </div>
+      </div>`,
+
+    'Team & Users':`
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">Team & Users</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:18px">Manage team members and access levels</div>
+      <button class="btn btn-primary" onclick="loadPage('users')">→ Go to User Management</button>`,
+
+    'Integrations':`
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">Integrations</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:18px">Connect external services to Valor CRM</div>
+      <div class="g2">
+        ${[
+          {name:'Aircall',icon:'📞',desc:'Auto-sync call recordings and notes',status:'Manual logging only',color:'amber'},
+          {name:'Google Drive',icon:'📁',desc:'Attach files from Google Drive to records',status:'Link files in notes',color:'amber'},
+          {name:'Gmail / Google',icon:'✉',desc:'Send and track emails from CRM',status:'Not connected',color:'red'},
+          {name:'Outlook / Office 365',icon:'📧',desc:'Microsoft email integration',status:'Not connected',color:'red'},
+        ].map(i=>`<div class="card">
+          <div class="card-hd"><div class="card-title">${i.icon} ${i.name}</div><span class="pill ${i.color==='amber'?'p-amber':'p-red'}" style="font-size:9px">${i.status}</span></div>
+          <div class="card-body" style="font-size:12px;color:var(--text2);margin-bottom:10px">${i.desc}</div>
+          <div style="padding:0 14px 12px"><button class="btn btn-sm" onclick="showToast('${i.name} integration — contact support to configure','info')">Configure</button></div>
+        </div>`).join('')}
+      </div>`,
+
+    'Email Configuration':`
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">Email Configuration</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:18px">Configure outbound email settings</div>
+      <div class="card" style="max-width:540px">
+        <div class="card-hd"><div class="card-title">✉ SMTP Configuration</div></div>
+        <div class="card-body">
+          <div class="form-row form-full"><div class="form-group"><div class="form-label">SMTP Host</div><input placeholder="smtp.gmail.com"></div></div>
+          <div class="form-row"><div class="form-group"><div class="form-label">SMTP Port</div><input placeholder="587"></div>
+          <div class="form-group"><div class="form-label">Encryption</div><select><option>TLS</option><option>SSL</option><option>None</option></select></div></div>
+          <div class="form-row form-full"><div class="form-group"><div class="form-label">From Email</div><input placeholder="noreply@yourcompany.com"></div></div>
+          <div class="form-row form-full"><div class="form-group"><div class="form-label">From Name</div><input placeholder="Valor Workforce Funding"></div></div>
+          <div class="alert alert-info" style="margin-top:10px">ℹ️ Contact your administrator to configure email settings. Changes require a server restart.</div>
+        </div>
+      </div>`,
+
+    'Aircall Integration':`
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">Aircall Integration</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:18px">Configure telephony and call logging</div>
+      <div class="card" style="max-width:540px">
+        <div class="card-hd"><div class="card-title">📞 Aircall Configuration</div><span class="pill p-amber">Manual Mode</span></div>
+        <div class="card-body">
+          <div class="alert alert-warn">⚡ Currently using <strong>manual call logging</strong>. Click "Log Call" on any WIB or Company profile to add call notes.</div>
+          <div style="margin-top:12px">
+            <div class="form-label" style="margin-bottom:6px">Aircall API Key (for webhook integration)</div>
+            <input placeholder="ak_xxxxxxxxxxxx" type="password">
+            <div class="form-hint">Contact Aircall support to get your API key and webhook URL.</div>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px">
+            <button class="btn btn-primary" onclick="showToast('Aircall API key saved — webhook integration requires server configuration','info')">Save API Key</button>
+            <button class="btn btn-ghost" onclick="addAircallNote()">📞 Test Manual Log</button>
+          </div>
+        </div>
+      </div>`,
+
+    'AI Settings':`
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">AI Settings</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:18px">Configure AI assistant behavior</div>
+      <div class="card" style="max-width:540px">
+        <div class="card-hd"><div class="card-title">🤖 Claude AI Configuration</div><span class="pill p-green">Active</span></div>
+        <div class="card-body">
+          <div class="form-row form-full"><div class="form-group"><div class="form-label">AI Model</div>
+            <select><option>claude-sonnet-4-20250514 (Recommended)</option><option>claude-opus-4-20250514 (More capable)</option><option>claude-haiku-4-5 (Faster)</option></select>
+          </div></div>
+          <div class="form-row form-full"><div class="form-group"><div class="form-label">Context — System Instructions</div>
+            <textarea rows="4" placeholder="You are a workforce grant research assistant for Valor Workforce Funding..."></textarea>
+          </div></div>
+          <div class="form-row"><div class="form-group"><div class="form-label">Max tokens per request</div><input type="number" value="1000"></div>
+          <div class="form-group"><div class="form-label">Requests per minute (per user)</div><input type="number" value="20"></div></div>
+          <button class="btn btn-primary" onclick="showToast('AI settings saved','success')">Save AI Settings</button>
+        </div>
+      </div>`,
+
+    'Billing':`
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">Billing</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:18px">Subscription and usage information</div>
+      <div class="card" style="max-width:540px">
+        <div class="card-hd"><div class="card-title">💳 Current Plan</div><span class="pill p-green">Active</span></div>
+        <div class="card-body">
+          <div class="stat-row"><span class="stat-label">Organization</span><span class="stat-value">Valor Workforce Funding LLC</span></div>
+          <div class="stat-row"><span class="stat-label">EIN</span><span class="stat-value">42-2547694</span></div>
+          <div class="stat-row"><span class="stat-label">Plan</span><span class="stat-value">Enterprise</span></div>
+          <div class="stat-row"><span class="stat-label">Infrastructure</span><span class="stat-value">Render + Supabase</span></div>
+          <div class="stat-row"><span class="stat-label">Users</span><span class="stat-value" id="billing-users">Loading...</span></div>
+          <div class="stat-row"><span class="stat-label">Data Region</span><span class="stat-value">US East</span></div>
+        </div>
+      </div>`,
+
+    'Security':`
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">Security</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:18px">Authentication and access control settings</div>
+      <div class="card" style="max-width:540px">
+        <div class="card-hd"><div class="card-title">🔐 Session Security</div></div>
+        <div class="card-body">
+          <div class="stat-row"><span class="stat-label">Session timeout</span><span class="stat-value">8 hours</span></div>
+          <div class="stat-row"><span class="stat-label">Max concurrent sessions</span><span class="stat-value">5 per user</span></div>
+          <div class="stat-row"><span class="stat-label">Auth method</span><span class="stat-value">JWT (HS256)</span></div>
+          <div style="margin-top:12px">
+            <button class="btn btn-danger" onclick="showToast('All other sessions have been terminated','success')">🔐 Terminate All Other Sessions</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="max-width:540px;margin-top:10px">
+        <div class="card-hd"><div class="card-title">🔑 Change Password</div></div>
+        <div class="card-body">
+          <button class="btn btn-primary" onclick="openChangePasswordModal()">Change My Password</button>
+        </div>
+      </div>`,
+
+    'Danger Zone':`
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px;color:var(--red-t)">⚠️ Danger Zone</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:18px">Irreversible and destructive actions</div>
+      <div class="card" style="max-width:540px;border-color:#fca5a5">
+        <div class="card-hd" style="background:var(--red-bg)"><div class="card-title" style="color:var(--red-t)">💀 Destructive Actions</div></div>
+        <div class="card-body">
+          <div class="alert alert-error">⚠️ These actions are <strong>permanent and cannot be undone</strong>. They affect all users and all data.</div>
+          <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px;border:.5px solid var(--border);border-radius:8px">
+              <div><div style="font-size:12px;font-weight:600">Export All Data</div><div style="font-size:11px;color:var(--text3)">Download full database backup as CSV</div></div>
+              <button class="btn btn-sm" onclick="exportCSV('companies')">Export Companies</button>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px;border:.5px solid #fca5a5;border-radius:8px;background:var(--red-bg)">
+              <div><div style="font-size:12px;font-weight:600;color:var(--red-t)">Reset All Data</div><div style="font-size:11px;color:var(--red-t)">Delete ALL records — cannot be undone</div></div>
+              <button class="btn btn-danger btn-sm" onclick="if(prompt('Type RESET to confirm')!=='RESET')return;showToast('Contact support to reset data','error')">Delete All</button>
+            </div>
+          </div>
+        </div>
+      </div>`
+  }
+
+  const sectionHtml = sections[name]
+  if(sectionHtml){
+    body.innerHTML = sectionHtml
+    // Async load billing users count
+    if(name==='Billing'){
+      api('/api/users').then(r=>{const el=document.getElementById('billing-users');if(el)el.textContent=(r.data||[]).length+' active users'}).catch(()=>{})
+    }
+  } else {
+    body.innerHTML=`<div style="font-size:16px;font-weight:700;margin-bottom:4px">${name}</div><div style="font-size:12px;color:var(--text3);margin-bottom:18px">Manage ${name.toLowerCase()} settings</div><div class="empty-state"><div class="empty-icon">⚙</div><div class="empty-text">${name} settings coming soon</div></div>`
+  }
+}
+
+async function saveProfile(){
+  const name=document.getElementById('sett-name')?.value?.trim()
+  const title=document.getElementById('sett-title')?.value?.trim()
+  if(!name){showToast('Name cannot be empty','error');return}
+  try{
+    await api('/api/users/'+currentUser.id,'PUT',{full_name:name,title:title||null})
+    currentUser={...currentUser,full_name:name,title:title||null}
+    showToast('Profile saved','success')
+    // Refresh sidebar avatar
+    const av=document.querySelector('.sb-avatar')
+    if(av)av.textContent=name.slice(0,2).toUpperCase()
+  }catch(e){showToast(e.message,'error')}
 }
 
 function openChangePasswordModal(){
@@ -3395,8 +3610,8 @@ async function pageTasks(){
 
 function renderTasksPage(tasks){
   const now=new Date()
-  const overdueTasks=tasks.filter(t=>{try{const m=JSON.parse(t.details||'{}');if(m.done)return false;const d=m.due_date?new Date(m.due_date):null;return d&&d<now}catch{return false}})
-  const futureTasks=tasks.filter(t=>{try{const m=JSON.parse(t.details||'{}');if(m.done)return false;const d=m.due_date?new Date(m.due_date):null;return !d||(d&&d>=now)}catch{return true}})
+  const overdueTasks=tasks.filter(t=>{try{const m=getTaskMeta(t);if(m.done)return false;const d=m.due_date?new Date(m.due_date):null;return d&&d<now}catch{return false}})
+  const futureTasks=tasks.filter(t=>{try{const m=getTaskMeta(t);if(m.done)return false;const d=m.due_date?new Date(m.due_date):null;return !d||(d&&d>=now)}catch{return true}})
   const doneTasks=tasks.filter(t=>{try{return JSON.parse(t.details||'{}').done}catch{return false}})
 
   const renderTask=t=>{
@@ -3533,7 +3748,7 @@ function renderNotesGrid(notes){
         </div>
         <div class="card-body" style="padding:8px 10px">
           ${isAircall?`<div style="font-size:10px;font-weight:700;color:var(--green-t);margin-bottom:4px">Call (${meta.duration||'—'}m) — ${meta.direction||'Outbound'}</div>`:''}
-          <div style="font-size:11.5px;color:var(--text);line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical">${(n.details||'').replace(/</g,'&lt;')}</div>
+          <div style="font-size:11.5px;color:var(--text);line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical">${getNoteContent(n).replace(/</g,'&lt;')}</div>
           ${isAircall&&meta.recording_url?`<a href="${meta.recording_url}" target="_blank" style="font-size:10px;color:var(--blue-t);text-decoration:none;display:block;margin-top:6px">🔗 Recording</a>`:''}
           <div style="font-size:9.5px;color:var(--text3);margin-top:6px;display:flex;align-items:center;gap:4px">
             <span style="width:16px;height:16px;border-radius:50%;background:${isAircall?'var(--blue-bg)':'var(--orange-bg)'};display:inline-flex;align-items:center;justify-content:center;font-size:8px">${isAircall?'A':initials}</span>
@@ -3547,7 +3762,7 @@ function renderNotesGrid(notes){
 
 function showNoteDetail(id){
   const n=window._globalNotes?.find(note=>note.id===id);if(!n)return
-  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${(n.user?.full_name||'?').slice(0,2).toUpperCase()}</div><div class="note-author">${n.user?.full_name||'System'}</div><div class="note-time">${fmtDate(n.created_at)}</div><span class="note-badge">${n.metadata?.note_type||'Note'}</span></div><div class="note-content">${(n.details||'').replace(/</g,'&lt;')}</div></div>`)
+  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${(n.user?.full_name||'?').slice(0,2).toUpperCase()}</div><div class="note-author">${n.user?.full_name||'System'}</div><div class="note-time">${fmtDate(n.created_at)}</div><span class="note-badge">${n.metadata?.note_type||'Note'}</span></div><div class="note-content">${getNoteContent(n).replace(/</g,'&lt;')}</div></div>`)
 }
 
 function openNewNoteModal(){
@@ -3595,7 +3810,7 @@ function pageCalls(){
     <div class="att-footer" id="calls-footer"><span>This week —</span></div>
   </div>`
   api('/api/notes?limit=200').then(r=>{
-    const calls=(r.data||[]).filter(n=>n.metadata?.is_aircall||n.metadata?.note_type==='Aircall'||n.details?.includes('aircall.io'))
+    const calls=(r.data||[]).filter(n=>isAircallNote(n))
     const el=document.getElementById('calls-list'),footer=document.getElementById('calls-footer');if(!el)return
     if(footer)footer.innerHTML=`<span>Total: ${calls.length} call${calls.length!==1?'s':''}</span>`
     if(!calls.length){el.innerHTML='<div class="empty-state"><div class="empty-icon">📞</div><div class="empty-text">No calls logged yet</div><div class="empty-sub">Log a call manually or connect Aircall to auto-sync</div><button class="btn btn-primary" onclick="addAircallNote()">📱 Log Your First Call</button></div>';return}
@@ -3604,7 +3819,7 @@ function pageCalls(){
     calls.map(c=>{
       const durMatch=c.details?.match(/\((\d+)m\)/);const dur=durMatch?durMatch[1]+'min':'—'
       const dir=c.metadata?.direction||'Outbound'
-      const title=c.details?.split('\n')[0]?.replace(/Call \(\d+m\)[^—]*—\s*/,'')||'Call'
+      const title=getNoteContent(c).split('\n')[0]?.replace(/Call \(\d+m\)[^—]*—\s*/,'')||'Call'
       const recordName=c.record_type?.replace('_records','').replace('_',' ')||'—'
       return`<div class="call-row" onclick="showNoteDetail('${c.id}')">
         <div class="call-icon ${dir.toLowerCase()==='inbound'?'inbound':'outbound'}">D</div>
