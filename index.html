@@ -1924,7 +1924,11 @@ function importCSV(type){
       <input type="file" accept=".csv" id="import-file-input" onchange="processCSVImport(this,'${type}')"></div></div>
     <div id="import-preview" style="margin-top:10px"></div>`,
   async()=>{
-    showToast('CSV import complete — refresh the page to see new records','success')
+    const fileInput=document.getElementById('import-file-input')
+    if(!fileInput||!fileInput.files||!fileInput.files[0]){
+      showToast('Please select a CSV file first','warn');return false
+    }
+    showToast('CSV file received. Full import processing is coming in Phase 3 — use the preview to verify your data format.','info')
   })
 }
 
@@ -2095,6 +2099,7 @@ async function pageCompanies(){
         <div class="ie-sep"></div>
         <div class="ie-item" onclick="exportCSV('companies')"><span class="ie-icon">📤</span>Export CSV</div>
         <div class="ie-item" onclick="exportExcel('companies')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportPDF('companies')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>
     <button class="btn btn-primary" onclick="openCompanyModal()">+ New Company</button>`)
@@ -2172,6 +2177,8 @@ async function pageLocations(){
         <div class="ie-item" onclick="importCSV('locations')"><span class="ie-icon">📥</span>Import CSV</div>
         <div class="ie-sep"></div>
         <div class="ie-item" onclick="exportCSV('locations')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="exportExcel('locations')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportPDF('locations')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>
     <button class="btn btn-primary" onclick="openLocationModal()">+ New Location</button>`)
@@ -2232,6 +2239,7 @@ async function pageFunding(){
         <div class="ie-sep"></div>
         <div class="ie-item" onclick="exportCSV('funding')"><span class="ie-icon">📤</span>Export CSV</div>
         <div class="ie-item" onclick="exportExcel('funding')"><span class="ie-icon">📊</span>Export Excel</div>
+        <div class="ie-item" onclick="exportPDF('funding')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>
     <button class="btn btn-primary" onclick="openFundingModal()">+ New Opportunity</button>`)
@@ -2292,6 +2300,8 @@ async function pageApplications(){
     <div class="ie-dropdown">
       <button class="btn" onclick="toggleIEMenu('app-ie')">⬇️ Import / Export</button>
       <div class="ie-menu" id="app-ie" style="display:none">
+        <div class="ie-item" onclick="importCSV('applications')"><span class="ie-icon">📥</span>Import CSV</div>
+        <div class="ie-sep"></div>
         <div class="ie-item" onclick="exportCSV('applications')"><span class="ie-icon">📤</span>Export CSV</div>
         <div class="ie-item" onclick="exportExcel('applications')"><span class="ie-icon">📊</span>Export Excel</div>
         <div class="ie-item" onclick="exportPDF('applications')"><span class="ie-icon">📄</span>Export PDF</div>
@@ -2372,6 +2382,7 @@ async function pageCompliance(){
       <button class="btn" onclick="toggleIEMenu('comp-ie')">⬇️ Export</button>
       <div class="ie-menu" id="comp-ie" style="display:none">
         <div class="ie-item" onclick="exportCSV('compliance')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="exportExcel('compliance')"><span class="ie-icon">📊</span>Export Excel</div>
         <div class="ie-item" onclick="exportPDF('compliance')"><span class="ie-icon">📄</span>Export PDF</div>
       </div>
     </div>`)
