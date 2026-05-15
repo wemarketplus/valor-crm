@@ -133,8 +133,8 @@ app.post('/api/login', rateLimitLogin, async (req, res) => {
     }
 
     // Update last login
-    await supabase.from('user_profiles').update({ last_login_at: new Date().toISOString() }).eq('id', data.user.id).catch(() => {})
-    await supabase.from('activity_log').insert({ user_id: data.user.id, action: 'USER_LOGIN', details: `Login from ${req.headers['x-forwarded-for']?.split(',')[0] || 'unknown'}` }).catch(() => {})
+    try { await supabase.from('user_profiles').update({ last_login_at: new Date().toISOString() }).eq('id', data.user.id) } catch(_) {}
+    try { await supabase.from('activity_log').insert({ user_id: data.user.id, action: 'USER_LOGIN', details: `Login from ${req.headers['x-forwarded-for']?.split(',')[0] || 'unknown'}` }) } catch(_) {}
 
     console.log(`Login success: ${cleanEmail} (${profile.role})`)
     return res.json({ token: data.session.access_token, user: profile })
@@ -157,8 +157,8 @@ app.post('/api/login', rateLimitLogin, async (req, res) => {
 
 // ─── LOGOUT ───────────────────────────────────────────────────────────────────
 app.post('/api/logout', auth, async (req, res) => {
-  await authClient.auth.signOut().catch(() => {})
-  await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'USER_LOGOUT', details: 'Signed out' }).catch(() => {})
+  try { await authClient.auth.signOut() } catch(_) {}
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'USER_LOGOUT', details: 'Signed out' }) } catch(_) {}
   res.json({ success: true })
 })
 
@@ -175,30 +175,6 @@ app.get('/api/health', (req, res) => res.json({
   } 
 }))
 
-// Debug login — helps diagnose Supabase auth issues without exposing full credentials  
-app.post('/api/debug-login', rateLimitLogin, async (req, res) => {
-  const { email, password } = req.body || {}
-  if (!email || !password) return res.status(400).json({ error: 'Email and password required' })
-  try {
-    console.log('Debug login attempt for:', email)
-    console.log('Auth client type:', SUPABASE_ANON_KEY ? 'anon key' : 'service key fallback')
-    
-    const result = await authClient.auth.signInWithPassword({ email: email.trim().toLowerCase(), password })
-    
-    return res.json({
-      has_data: !!result.data,
-      has_session: !!result.data?.session,
-      has_token: !!result.data?.session?.access_token,
-      has_user: !!result.data?.user,
-      error: result.error ? result.error.message : null,
-      error_code: result.error ? result.error.status : null
-    })
-  } catch (err) {
-    console.error('Debug login threw:', err.message, err.stack?.split('\n')[1])
-    return res.status(500).json({ threw: true, error: err.message, type: err.constructor.name })
-  }
-})
-
 // ─── CHANGE OWN PASSWORD ──────────────────────────────────────────────────────
 app.post('/api/change-password', auth, async (req, res) => {
   try {
@@ -209,7 +185,7 @@ app.post('/api/change-password', auth, async (req, res) => {
     if (authErr) return res.status(401).json({ error: 'Current password is incorrect' })
     const { error } = await supabase.auth.admin.updateUserById(req.user.id, { password: new_password })
     if (error) return res.status(400).json({ error: error.message })
-    await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CHANGE_PASSWORD', details: 'User changed own password' }).catch(() => {})
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CHANGE_PASSWORD', details: 'User changed own password' }) } catch(_) {}
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: 'Password change failed. Please try again.' })
@@ -225,7 +201,7 @@ app.post('/api/users/:id/reset-password', auth, requireAdmin, async (req, res) =
     if (!target) return res.status(404).json({ error: 'User not found' })
     const { error } = await supabase.auth.admin.updateUserById(req.params.id, { password: new_password })
     if (error) return res.status(400).json({ error: error.message })
-    await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'RESET_PASSWORD', details: `Admin reset password for: ${target.email}` }).catch(() => {})
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'RESET_PASSWORD', details: `Admin reset password for: ${target.email}` }) } catch(_) {}
     res.json({ success: true, message: `Password reset for ${target.email}` })
   } catch (err) {
     res.status(500).json({ error: 'Password reset failed. Please try again.' })
@@ -258,7 +234,7 @@ app.post('/api/wibs', auth, async (req, res) => {
   if (!body.source_url?.trim()) return res.status(400).json({ error: 'Source URL required (public government page)' })
   const { data, error } = await supabase.from('wib_records').insert({ ...body, owner_id: req.user.id }).select('*, owner:user_profiles!owner_id(full_name,email)').single()
   if (error) return res.status(400).json({ error: error.message })
-  await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_WIB', record_type: 'wib_records', record_id: data.id, details: `Created: ${data.wib_name}` }).catch(() => {})
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_WIB', record_type: 'wib_records', record_id: data.id, details: `Created: ${data.wib_name}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -267,7 +243,7 @@ app.put('/api/wibs/:id', auth, async (req, res) => {
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   const { data, error } = await supabase.from('wib_records').update(body).eq('id', req.params.id).select('*, owner:user_profiles!owner_id(full_name,email)').single()
   if (error) return res.status(400).json({ error: error.message })
-  await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_WIB', record_type: 'wib_records', record_id: req.params.id, details: `Updated: ${data.wib_name}` }).catch(() => {})
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_WIB', record_type: 'wib_records', record_id: req.params.id, details: `Updated: ${data.wib_name}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -275,7 +251,7 @@ app.delete('/api/wibs/:id', auth, requireAdmin, async (req, res) => {
   const { data: wib } = await supabase.from('wib_records').select('wib_name').eq('id', req.params.id).single()
   const { error } = await supabase.from('wib_records').delete().eq('id', req.params.id)
   if (error) return res.status(400).json({ error: error.message })
-  await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'DELETE_WIB', details: `Deleted: ${wib?.wib_name}` }).catch(() => {})
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'DELETE_WIB', details: `Deleted: ${wib?.wib_name}` }) } catch(_) {}
   res.json({ success: true })
 })
 
@@ -297,7 +273,7 @@ app.post('/api/companies', auth, async (req, res) => {
   if (!body.company_name?.trim()) return res.status(400).json({ error: 'Company name required' })
   const { data, error } = await supabase.from('companies').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_COMPANY', record_type: 'companies', record_id: data.id, details: `Created: ${data.company_name}` }).catch(() => {})
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_COMPANY', record_type: 'companies', record_id: data.id, details: `Created: ${data.company_name}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -372,7 +348,7 @@ app.post('/api/funding', auth, async (req, res) => {
   if (!body.source_url?.trim()) return res.status(400).json({ error: 'Source URL required' })
   const { data, error } = await supabase.from('funding_opportunities').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_FUNDING', record_type: 'funding_opportunities', record_id: data.id, details: `Created: ${data.opportunity_name}` }).catch(() => {})
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_FUNDING', record_type: 'funding_opportunities', record_id: data.id, details: `Created: ${data.opportunity_name}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -408,7 +384,7 @@ app.post('/api/applications', auth, async (req, res) => {
   if (!body.wib_id) return res.status(400).json({ error: 'WIB required' })
   const { data, error } = await supabase.from('applications').insert({ ...body, owner_id: req.user.id }).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_APPLICATION', record_type: 'applications', record_id: data.id, details: `Created: ${data.application_number}` }).catch(() => {})
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_APPLICATION', record_type: 'applications', record_id: data.id, details: `Created: ${data.application_number}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -417,7 +393,7 @@ app.put('/api/applications/:id', auth, async (req, res) => {
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   const { data, error } = await supabase.from('applications').update(body).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_APPLICATION', record_type: 'applications', record_id: req.params.id, details: `Status: ${body.status || 'updated'}` }).catch(() => {})
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_APPLICATION', record_type: 'applications', record_id: req.params.id, details: `Status: ${body.status || 'updated'}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -460,7 +436,7 @@ app.put('/api/revenue/:id', auth, async (req, res) => {
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   const { data, error } = await supabase.from('revenue_records').update(body).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
-  await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_REVENUE', record_type: 'revenue_records', record_id: req.params.id, details: `Invoice: ${body.invoice_status || 'updated'}` }).catch(() => {})
+  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_REVENUE', record_type: 'revenue_records', record_id: req.params.id, details: `Invoice: ${body.invoice_status || 'updated'}` }) } catch(_) {}
   res.json(data)
 })
 
@@ -560,7 +536,7 @@ app.post('/api/users', auth, requireAdmin, async (req, res) => {
     })
     if (error) return res.status(400).json({ error: error.message })
     await supabase.from('user_profiles').update({ full_name: full_name || null, role, title: title || null, phone: phone || null, is_active: true }).eq('id', data.user.id)
-    await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_USER', details: `Created: ${email} (${role})` }).catch(() => {})
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_USER', details: `Created: ${email} (${role})` }) } catch(_) {}
     const { data: profile } = await supabase.from('user_profiles').select('*').eq('id', data.user.id).single()
     res.json({ user: profile })
   } catch (err) {
@@ -588,7 +564,7 @@ app.put('/api/users/:id', auth, requireAdmin, async (req, res) => {
     if (is_active !== undefined) update.is_active = is_active
     const { data, error } = await supabase.from('user_profiles').update(update).eq('id', req.params.id).select().single()
     if (error) return res.status(400).json({ error: error.message })
-    await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_USER', details: `Updated: ${data.email}${is_active === false ? ' — DISABLED' : ''}` }).catch(() => {})
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_USER', details: `Updated: ${data.email}${is_active === false ? ' — DISABLED' : ''}` }) } catch(_) {}
     res.json(data)
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -606,7 +582,7 @@ app.delete('/api/users/:id', auth, requireSuper, async (req, res) => {
     }
     const { error } = await supabase.auth.admin.deleteUser(req.params.id)
     if (error) return res.status(400).json({ error: error.message })
-    await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'DELETE_USER', details: `DELETED: ${target.email}` }).catch(() => {})
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'DELETE_USER', details: `DELETED: ${target.email}` }) } catch(_) {}
     res.json({ success: true })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -657,7 +633,7 @@ app.get('/api/export/:type', auth, async (req, res) => {
     } else {
       return res.status(400).json({ error: 'Unknown export type' })
     }
-    await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'EXPORT', details: `Exported ${type} (${rows.length} records)` }).catch(() => {})
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'EXPORT', details: `Exported ${type} (${rows.length} records)` }) } catch(_) {}
     const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n')
     res.setHeader('Content-Type', 'text/csv')
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
