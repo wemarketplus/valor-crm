@@ -526,7 +526,8 @@ async function logout(){
 function renderApp(){
   const isAdmin=['super_admin','admin'].includes(currentUser?.role)
   const initials=(currentUser?.full_name||currentUser?.email||'?').slice(0,2).toUpperCase()
-  const roleLabel=(currentUser?.role||'').replace(/_/g,' ')
+  const roleLabels={super_admin:'Super Admin',admin:'Admin',grant_coordinator:'Grant Coordinator',compliance_mgr:'Compliance Mgr',team_member:'Sales Specialist',external_partner:'Read-Only'}
+  const roleLabel=roleLabels[currentUser?.role]||(currentUser?.role||'').replace(/_/g,' ')
   document.getElementById('app').innerHTML=`
   <div class="app">
     <div class="sidebar" id="sidebar">
@@ -1511,8 +1512,14 @@ async function pageUsers(){
     <div class="tbl-head">
       <div class="tbl-head-left">
         <div class="search-inp">🔍<input placeholder="Search users..." oninput="filterUsers(this.value)"></div>
-        <select class="filter-btn" style="border-radius:6px;padding:5px 9px">
-          <option>All roles</option><option>Super Admin</option><option>Admin</option><option>Sales Specialist</option><option>Grant Coordinator</option><option>Compliance Manager</option><option>Read-Only</option>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px" onchange="filterUsersByRole(this.value)">
+          <option value="">All roles</option>
+          <option value="super_admin">Super Admin</option>
+          <option value="admin">Admin</option>
+          <option value="grant_coordinator">Grant Coordinator</option>
+          <option value="compliance_mgr">Compliance Mgr</option>
+          <option value="team_member">Sales Specialist</option>
+          <option value="external_partner">Read-Only</option>
         </select>
       </div>
     </div>
@@ -1527,21 +1534,35 @@ async function pageUsers(){
   </div>
   <div class="card" style="margin-top:12px">
     <div class="card-header"><div class="card-title">🔐 Role Permissions Matrix</div></div>
-    <div class="card-body">
-      <table style="font-size:11px"><thead><tr><th>Permission</th><th>Super Admin</th><th>Admin</th><th>Sales Specialist</th><th>Grant Coordinator</th><th>Compliance Mgr</th><th>Read-Only</th></tr></thead>
+    <div class="card-body" style="overflow-x:auto">
+      <table style="font-size:11px;min-width:700px"><thead><tr>
+        <th style="min-width:160px">Permission</th>
+        <th style="text-align:center;color:var(--purple-t)">Super Admin</th>
+        <th style="text-align:center;color:var(--blue-t)">Admin</th>
+        <th style="text-align:center;color:var(--teal-t)">Grant Coordinator</th>
+        <th style="text-align:center;color:var(--orange-t)">Compliance Mgr</th>
+        <th style="text-align:center;color:var(--green-t)">Sales Specialist</th>
+        <th style="text-align:center;color:var(--text3)">Read-Only</th>
+      </tr></thead>
       <tbody>
         ${[
-          ['View all records','✅','✅','✅','✅','✅','✅'],
-          ['Create records','✅','✅','✅','✅','⬜','⬜'],
-          ['Edit records','✅','✅','✅','✅','✅','⬜'],
-          ['Delete records','✅','✅','⬜','⬜','⬜','⬜'],
-          ['Manage users','✅','✅','⬜','⬜','⬜','⬜'],
-          ['View revenue','✅','✅','✅','✅','⬜','⬜'],
-          ['Manage invoices','✅','✅','⬜','✅','⬜','⬜'],
-          ['Access audit logs','✅','✅','⬜','⬜','⬜','⬜'],
-          ['AI assistant','✅','✅','✅','✅','✅','⬜'],
-          ['Import/Export','✅','✅','✅','✅','✅','⬜'],
-        ].map(r=>`<tr>${r.map((c,i)=>`<td style="${i===0?'font-weight:500':'text-align:center'}">${c}</td>`).join('')}</tr>`).join('')}
+          ['View all records',           '✅','✅','✅','✅','✅','✅'],
+          ['Create WIBs / Companies',    '✅','✅','✅','⬜','✅','⬜'],
+          ['Edit WIBs / Companies',      '✅','✅','✅','⬜','✅','⬜'],
+          ['Delete records',             '✅','✅','⬜','⬜','⬜','⬜'],
+          ['Create / Edit Applications', '✅','✅','✅','⬜','✅','⬜'],
+          ['View Revenue & Invoices',    '✅','✅','✅','⬜','✅','⬜'],
+          ['Manage Invoices & Payments', '✅','✅','✅','⬜','⬜','⬜'],
+          ['Compliance Tracking',        '✅','✅','✅','✅','⬜','⬜'],
+          ['Add / Edit Notes & Tasks',   '✅','✅','✅','✅','✅','⬜'],
+          ['AI Assistant',               '✅','✅','✅','✅','✅','⬜'],
+          ['Import / Export CSV',        '✅','✅','✅','✅','✅','⬜'],
+          ['Access Audit Logs',          '✅','✅','⬜','⬜','⬜','⬜'],
+          ['Manage Users',               '✅','✅','⬜','⬜','⬜','⬜'],
+          ['Assign / Change Roles',      '✅','✅','⬜','⬜','⬜','⬜'],
+          ['Assign Super Admin role',    '✅','⬜','⬜','⬜','⬜','⬜'],
+          ['System Settings',            '✅','✅','⬜','⬜','⬜','⬜'],
+        ].map(r=>`<tr style="border-bottom:.5px solid var(--gray2)">${r.map((c,i)=>`<td style="padding:7px 10px;${i===0?'font-weight:500;color:var(--text)':'text-align:center;font-size:13px'}">${c}</td>`).join('')}</tr>`).join('')}
       </tbody></table>
     </div>
   </div>`
@@ -1561,17 +1582,29 @@ function renderUserRow(u){
     <td><span class="pill ${u.is_active?'p-green':'p-gray'}" onclick="toggleUserActive('${u.id}','${u.is_active}',this)" style="cursor:pointer">${u.is_active?'✓ Active':'Inactive'}</span></td>
     <td style="font-size:10.5px;color:var(--text2)">${u.last_login_at?new Date(u.last_login_at).toLocaleDateString():'Never'}</td>
     <td><div class="action-btns">
-      <button class="action-btn" onclick="openEditUserModal(${JSON.stringify(u).replace(/"/g,"'")})">Edit</button>
-      <button class="action-btn" onclick="resetUserPassword('${u.id}','${u.email}')">Reset PW</button>
-      <button class="action-btn" onclick="toggleUserActive('${u.id}',${u.is_active},null)">${u.is_active?'Disable':'Enable'}</button>
+      ${u.id!==currentUser?.id?`<button class="action-btn" onclick="openEditUserModal(${JSON.stringify(u).replace(/"/g,"'")})">Edit</button>`:'<button class="action-btn" onclick="openChangePasswordModal()" title="Edit your own account via Change Password">My PW</button>'}
+      ${u.id!==currentUser?.id?`<button class="action-btn" onclick="resetUserPassword('${u.id}','${u.email}')">Reset PW</button>`:''}
+      ${u.id!==currentUser?.id?`<button class="action-btn" onclick="toggleUserActive('${u.id}',${u.is_active},null)">${u.is_active?'Disable':'Enable'}</button>`:''}
       ${currentUser?.role==='super_admin'&&u.id!==currentUser?.id?`<button class="action-btn del" onclick="deleteUserConfirm('${u.id}','${u.full_name||u.email}')">Delete</button>`:''}
     </div></td>
   </tr>`
 }
 
 function filterUsers(q){
+  window._userSearch=q
+  applyUserFilters()
+}
+function filterUsersByRole(role){
+  window._userRoleFilter=role
+  applyUserFilters()
+}
+function applyUserFilters(){
   if(!window._users)return
-  const d=q?window._users.filter(u=>(u.email+' '+(u.full_name||'')).toLowerCase().includes(q.toLowerCase())):window._users
+  let d=window._users
+  const q=window._userSearch||''
+  const role=window._userRoleFilter||''
+  if(q)d=d.filter(u=>(u.email+' '+(u.full_name||'')).toLowerCase().includes(q.toLowerCase()))
+  if(role)d=d.filter(u=>u.role===role)
   document.getElementById('users-tbody').innerHTML=d.map(u=>renderUserRow(u)).join('')
 }
 
@@ -1618,9 +1651,11 @@ function openUserModal(){
     </div>
     <div class="form-group"><div class="form-label">Role <span class="form-req">*</span></div><select id="u-role">
       <option value="team_member">Sales Specialist</option>
+      <option value="grant_coordinator">Grant Coordinator</option>
+      <option value="compliance_mgr">Compliance Mgr</option>
       <option value="admin">Admin</option>
       <option value="external_partner">Read-Only (External Partner)</option>
-      <option value="super_admin">Super Admin</option>
+      ${currentUser?.role==='super_admin'?'<option value="super_admin">Super Admin</option>':''}
     </select></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Title</div><input id="u-title" placeholder="Grant Coordinator"></div>
     <div class="form-group"><div class="form-label">Phone</div><input id="u-phone" placeholder="+1 (555) 000-0000"></div></div>`,
@@ -1646,10 +1681,12 @@ function openEditUserModal(u){
   showModal(`Edit User: ${u.full_name||u.email}`,`
     <div class="form-row"><div class="form-group"><div class="form-label">Full Name</div><input id="eu-name" value="${u.full_name||''}"></div>
     <div class="form-group"><div class="form-label">Role</div><select id="eu-role">
-      <option value="team_member"${u.role==='team_member'?' selected':''}>Sales Specialist (Team Member)</option>
+      <option value="team_member"${u.role==='team_member'?' selected':''}>Sales Specialist</option>
+      <option value="grant_coordinator"${u.role==='grant_coordinator'?' selected':''}>Grant Coordinator</option>
+      <option value="compliance_mgr"${u.role==='compliance_mgr'?' selected':''}>Compliance Mgr</option>
       <option value="admin"${u.role==='admin'?' selected':''}>Admin</option>
       <option value="external_partner"${u.role==='external_partner'?' selected':''}>Read-Only (External Partner)</option>
-      <option value="super_admin"${u.role==='super_admin'?' selected':''}>Super Admin</option>
+      ${currentUser?.role==='super_admin'?`<option value="super_admin"${u.role==='super_admin'?' selected':''}>Super Admin</option>`:''}
     </select></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Title</div><input id="eu-title" value="${u.title||''}"></div>
     <div class="form-group"><div class="form-label">Phone</div><input id="eu-phone" value="${u.phone||''}"></div></div>
@@ -2675,8 +2712,9 @@ function invoicePill(s){
   return`<span class="pill ${m[s]||'p-gray'}">${(s||'').replace(/_/g,' ')}</span>`
 }
 function rolePill(r){
-  const m={super_admin:'p-purple',admin:'p-blue',team_member:'p-green',external_partner:'p-gray'}
-  return`<span class="pill ${m[r]||'p-gray'}">${(r||'').replace(/_/g,' ')}</span>`
+  const labels={super_admin:'Super Admin',admin:'Admin',grant_coordinator:'Grant Coordinator',compliance_mgr:'Compliance Mgr',team_member:'Sales Specialist',external_partner:'Read-Only'}
+  const colors={super_admin:'p-purple',admin:'p-blue',grant_coordinator:'p-teal',compliance_mgr:'p-orange',team_member:'p-green',external_partner:'p-gray'}
+  return`<span class="pill ${colors[r]||'p-gray'}">${labels[r]||r}</span>`
 }
 
 // Replace alert validations in company/location/funding modals
