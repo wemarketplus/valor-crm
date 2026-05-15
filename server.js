@@ -92,10 +92,14 @@ app.use((req, res, next) => {
   next()
 })
 
-// ─── STATIC — serve ONLY /public dir ──────────────────────────────────────────
-// This is the critical fix: ONLY serve from /public, not the root directory
+// ─── STATIC — serve /public dir and root for index.html ──────────────────────
 app.use(express.static(path.join(__dirname, 'public'), {
-  index: false, // we handle the root ourselves
+  index: false,
+  dotfiles: 'deny'
+}))
+// Also serve root-level index.html if it exists there
+app.use(express.static(path.join(__dirname), {
+  index: false,
   dotfiles: 'deny'
 }))
 
@@ -866,12 +870,18 @@ app.get('/api/template/:type', auth, (req, res) => {
 })
 
 // ─── SERVE FRONTEND ────────────────────────────────────────────────────────────
-// Only serve index.html — all API routes handled above
+// Check multiple locations for index.html — handles root or /public/ placement
 app.get('*', (req, res) => {
-  const htmlPath = path.join(__dirname, 'public', 'index.html')
-  if (fs.existsSync(htmlPath)) {
-    res.setHeader('X-Content-Type-Options', 'nosniff')
-    return res.sendFile(htmlPath)
+  const candidates = [
+    path.join(__dirname, 'public', 'index.html'),
+    path.join(__dirname, 'index.html'),
+  ]
+  for (const htmlPath of candidates) {
+    if (fs.existsSync(htmlPath)) {
+      res.setHeader('X-Content-Type-Options', 'nosniff')
+      console.log('Serving:', htmlPath)
+      return res.sendFile(htmlPath)
+    }
   }
   res.status(503).send(`
     <html><body style="font-family:sans-serif;padding:40px;text-align:center">
