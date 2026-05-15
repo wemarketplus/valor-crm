@@ -761,9 +761,11 @@ app.post('/api/contacts', auth, async (req, res) => {
 
 app.put('/api/contacts/:id', auth, async (req, res) => {
   const { name, title, email, phone, notes } = req.body
-  const { data: existing } = await supabase.from('activity_log').select('metadata').eq('id', req.params.id).single()
-  const merged = { ...(existing?.metadata || {}), ...{ name, title, email, phone, notes } }
-  const { data, error } = await supabase.from('activity_log').update({ details: name || existing?.metadata?.name, metadata: merged }).eq('id', req.params.id).select().single()
+  const { data: existing } = await supabase.from('activity_log').select('id,details,created_at').eq('id', req.params.id).single()
+  const existingParsed = parseLogRow(existing)
+  const merged = { ...(existingParsed?.metadata || {}), name, title, email, phone, notes }
+  const updateVal = global._hasMetadata ? { metadata: merged, details: name || existingParsed?.metadata?.name } : { details: JSON.stringify({ text: name, ...merged }) }
+  const { data, error } = await supabase.from('activity_log').update(updateVal).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
 })
@@ -798,9 +800,13 @@ app.post('/api/training-providers', auth, async (req, res) => {
 })
 
 app.put('/api/training-providers/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select('metadata,details').eq('id', req.params.id).single()
-  const merged = { ...(existing?.metadata || {}), ...req.body }
-  const { data, error } = await supabase.from('activity_log').update({ details: req.body.name || existing?.details, metadata: merged }).eq('id', req.params.id).select().single()
+  const { data: existing } = await supabase.from('activity_log').select('id,details,created_at').eq('id', req.params.id).single()
+  const existingParsed = parseLogRow(existing)
+  const merged = { ...(existingParsed?.metadata || {}), ...req.body }
+  const tpUpdateData = global._hasMetadata
+    ? { details: req.body.name || existing?.details, metadata: merged }
+    : { details: JSON.stringify({ text: req.body.name || existing?.details, ...merged }) }
+  const { data, error } = await supabase.from('activity_log').update(tpUpdateData).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
 })
@@ -838,9 +844,10 @@ app.post('/api/invoices', auth, async (req, res) => {
 })
 
 app.put('/api/invoices/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select('metadata').eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select('id,details,created_at').eq('id', req.params.id).single()
   const merged = { ...(existing?.metadata || {}), ...req.body }
-  const { data, error } = await supabase.from('activity_log').update({ metadata: merged }).eq('id', req.params.id).select().single()
+  const updateData = global._hasMetadata ? { metadata: merged } : { details: JSON.stringify(merged) }
+  const { data, error } = await supabase.from('activity_log').update(updateData).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
   try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_INVOICE', details: `Invoice ${merged.invoice_number} → ${req.body.status || 'updated'}` }) } catch(_) {}
   res.json(data)
@@ -871,9 +878,10 @@ app.post('/api/contracts', auth, async (req, res) => {
 })
 
 app.put('/api/contracts/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select('metadata').eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select('id,details,created_at').eq('id', req.params.id).single()
   const merged = { ...(existing?.metadata || {}), ...req.body }
-  const { data, error } = await supabase.from('activity_log').update({ metadata: merged }).eq('id', req.params.id).select().single()
+  const updateData = global._hasMetadata ? { metadata: merged } : { details: JSON.stringify(merged) }
+  const { data, error } = await supabase.from('activity_log').update(updateData).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
 })
