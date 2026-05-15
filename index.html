@@ -4693,92 +4693,301 @@ var IMPORT_FIELDS = {
   ],
 }
 
+/* ── SYNONYM MAP: maps Attio export column names → CRM field keys ── */
+var IMPORT_SYNONYMS = {
+  /* location fields */
+  'name': {'locations':'location_name','companies':'company_name','wibs':'wib_name'},
+  'location': 'location_name',
+  'location name': 'location_name',
+  'facility': 'location_name',
+  'facility name': 'location_name',
+  'nursing home': 'location_name',
+  'parent operator': 'parent_operator',
+  'operator': 'parent_operator',
+  'parent company': 'parent_operator',
+  'company': {'locations':'parent_operator','applications':'company_name'},
+  'company name': 'company_name',
+  'state': 'state',
+  'st': 'state',
+  'city': 'city',
+  'county': 'county',
+  'address': 'address',
+  'status': 'status',
+  'employee count': 'employee_count',
+  'employees': 'employee_count',
+  'employee_count': 'employee_count',
+  'notes': 'notes',
+  /* company fields */
+  'domain': 'domain',
+  'website': {'companies':'domain','wibs':'website'},
+  'web site': {'companies':'domain','wibs':'website'},
+  'fein': 'fein',
+  'tax id': 'fein',
+  'ein': 'fein',
+  'rating': 'rating',
+  'supported by': 'supported_by',
+  'contact name': 'primary_contact_name',
+  'contact email': 'primary_contact_email',
+  'contact phone': 'primary_contact_phone',
+  'phone': {'companies':'primary_contact_phone','wibs':'wib_phone'},
+  'email': {'companies':'primary_contact_email','wibs':'wib_email'},
+  'training needs': 'training_needs',
+  'is 25%': 'is_25_pct_operator',
+  'is 25% operator': 'is_25_pct_operator',
+  /* wib fields */
+  'wib name': 'wib_name',
+  'workforce board': 'wib_name',
+  'board name': 'wib_name',
+  'short name': 'short_name',
+  'wib email': 'wib_email',
+  'wib email address': 'wib_email',
+  'wib phone': 'wib_phone',
+  'type': {'wibs':'wib_type'},
+  'wib type': 'wib_type',
+  'source url': 'source_url',
+  'source': 'source_url',
+  'max award': 'max_award_per_ein',
+  'max award per ein': 'max_award_per_ein',
+  'match requirement': 'match_requirement_pct',
+  'next steps': 'next_steps',
+  'blockers': 'blockers',
+  'call priority': 'call_priority_score',
+  'call priority score': 'call_priority_score',
+  /* funding fields */
+  'opportunity name': 'opportunity_name',
+  'funding opportunity': 'opportunity_name',
+  'opportunity': 'opportunity_name',
+  'application link': 'application_link',
+  'application url': 'application_link',
+  'deadline': 'application_deadline',
+  'application deadline': 'application_deadline',
+  'max per ein': 'max_award_per_ein',
+  'max per employee': 'max_award_per_employee',
+  /* application fields */
+  'application': 'application_number',
+  'application number': 'application_number',
+  'wib': 'wib_name',
+  'workforce board name': 'wib_name',
+  'amount requested': 'award_amount_requested',
+  'amount approved': 'award_amount_approved',
+  'award amount': 'award_amount_requested',
+  'award': 'award_amount_requested',
+  'submission date': 'submission_date',
+  'submitted': 'submission_date',
+  'decision date': 'decision_date',
+}
+
+function smartAutoMatch(header, type) {
+  var h = header.toLowerCase().trim()
+  // Direct key match
+  if (h in IMPORT_SYNONYMS) {
+    var v = IMPORT_SYNONYMS[h]
+    if (typeof v === 'object' && v[type]) return v[type]
+    if (typeof v === 'string') return v
+  }
+  // Strip special chars and try again
+  var hClean = h.replace(/[^a-z0-9 ]/g, '').trim()
+  if (hClean in IMPORT_SYNONYMS) {
+    var v2 = IMPORT_SYNONYMS[hClean]
+    if (typeof v2 === 'object' && v2[type]) return v2[type]
+    if (typeof v2 === 'string') return v2
+  }
+  // Check if any field key is a substring of the header or vice versa
+  var fields = IMPORT_FIELDS[type] || []
+  var hNoSpace = h.replace(/[^a-z0-9]/g,'')
+  for (var i = 0; i < fields.length; i++) {
+    var fk = fields[i].key.toLowerCase().replace(/[^a-z0-9]/g,'')
+    if (fk === hNoSpace) return fields[i].key
+    if (fk.length > 4 && hNoSpace.includes(fk)) return fields[i].key
+    if (hNoSpace.length > 4 && fk.includes(hNoSpace)) return fields[i].key
+  }
+  return '__skip'
+}
+
 function openImportModal(type) {
   var typeLabels = {companies:'Companies',wibs:'Workforce Boards',locations:'Locations',funding:'Funding Opportunities',applications:'Applications'}
   var label = typeLabels[type] || type
+  var reqNote = {
+    companies: 'Required: Company Name. Supports linking by name.',
+    wibs: 'Required: WIB Name + State + Source URL.',
+    locations: 'Required: Location Name + State. Supports parent company linking by name.',
+    funding: 'Required: Opportunity Name + Source URL.',
+    applications: 'Required: Company Name.',
+  }
+  var fieldCount = (IMPORT_FIELDS[type]||[]).filter(function(f){ return f.key!=='__skip' }).length
   window._importStep = 1
-  showModal('Import ' + label + ' via CSV',
+  showModal('📥 Import '+label+' — '+fieldCount+' Supported Fields',
     '<div class="wiz-steps">' +
-    '<div class="wiz-step active" id="wiz-s1"><div class="wiz-num">1</div><div class="wiz-label">Upload CSV File</div></div>' +
+    '<div class="wiz-step active" id="wiz-s1"><div class="wiz-num">1</div><div class="wiz-label">Upload File</div></div>' +
     '<div class="wiz-line"></div>' +
     '<div class="wiz-step" id="wiz-s2"><div class="wiz-num">2</div><div class="wiz-label">Map Fields</div></div>' +
     '<div class="wiz-line"></div>' +
     '<div class="wiz-step" id="wiz-s3"><div class="wiz-num">3</div><div class="wiz-label">Import</div></div>' +
     '</div>' +
     '<div id="import-step-area">' +
-    '<div class="form-row form-full"><div class="form-group"><div class="form-label">Select CSV file</div>' +
-    '<input type="file" id="import-file-input" accept=".csv,.tsv,.txt" style="border:.5px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:11.5px;width:100%"></div></div>' +
-    '<div class="alert alert-info" style="margin-top:8px">Tip: Export from Attio, HubSpot, or any spreadsheet. The mapper handles column name variations automatically.<br><br>' +
-    '<a href="/api/template/' + type + '" style="color:var(--blue-t);font-weight:500" target="_blank">Download CSV template for ' + label + '</a></div>' +
+    '<div class="alert alert-info" style="margin-bottom:10px">' +
+    'ℹ️ '+reqNote[type]+' <strong>No row limits</strong> — files of any size are imported automatically in batches.' +
+    '</div>' +
+    '<div class="form-row form-full" style="margin-bottom:8px"><div class="form-group">' +
+    '<div class="form-label">📥 Download CSV Template ('+fieldCount+' fields)</div>' +
+    '<a href="/api/template/'+type+'" class="btn btn-sm" target="_blank" style="display:inline-flex;margin-top:4px">⬇ Download CSV Template</a>' +
+    '</div></div>' +
+    '<div class="form-row form-full"><div class="form-group">' +
+    '<div class="form-label">Upload CSV or Excel File (.csv, .xlsx, .xls)</div>' +
+    '<input type="file" id="import-file-input" accept=".csv,.tsv,.txt,.xlsx,.xls" style="border:.5px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:11.5px;width:100%;margin-top:4px">' +
+    '</div></div>' +
     '<div id="import-parse-err"></div>' +
     '</div>',
   async function() {
+
+    /* ── STEP 1: Parse the CSV ── */
     if (window._importStep === 1) {
       var fileEl = document.getElementById('import-file-input')
       if (!fileEl||!fileEl.files||!fileEl.files[0]) {
-        document.getElementById('import-parse-err').innerHTML='<div class="alert alert-error">Please select a CSV file</div>'; return false
+        document.getElementById('import-parse-err').innerHTML='<div class="alert alert-error">Please select a CSV file</div>'
+        return false
       }
       var text = await fileEl.files[0].text()
       var rows = parseCSVText(text)
       if (!rows||!rows.length) {
-        document.getElementById('import-parse-err').innerHTML='<div class="alert alert-error">No data found in file</div>'; return false
+        document.getElementById('import-parse-err').innerHTML='<div class="alert alert-error">No data found in file — check that the file has a header row and data rows</div>'
+        return false
       }
-      window._importRows = rows; window._importType = type; window._importStep = 2
-      var s2 = document.getElementById('wiz-s2')
-      if (s2) { s2.className='wiz-step active'; s2.querySelector('.wiz-num').style.background='var(--nv)'; s2.querySelector('.wiz-num').style.color='var(--cream)' }
-      var btn = document.getElementById('modal-ok-btn'); if (btn) btn.textContent='Start Import'
+      window._importRows = rows
+      window._importType = type
+      window._importStep = 2
+
+      /* mark step 2 active */
+      var s1 = document.getElementById('wiz-s1'), s2 = document.getElementById('wiz-s2')
+      if (s1) { s1.className='wiz-step done'; s1.querySelector('.wiz-num').style.background='var(--green)'; s1.querySelector('.wiz-num').style.color='#fff' }
+      if (s2) { s2.className='wiz-step active'; s2.querySelector('.wiz-num').style.background='var(--nv)'; s2.querySelector('.wib-num'); s2.querySelector('.wiz-num').style.color='var(--cream)' }
+      var btn = document.getElementById('modal-ok-btn')
+      if (btn) { btn.textContent='Start Import →'; btn.disabled=false }
+
       var headers = Object.keys(rows[0])
       var fields  = IMPORT_FIELDS[type] || [{key:'__skip',label:'— Skip —'}]
+
+      /* build field mapping UI */
+      var mappedCount = 0
+      var rowsHtml = headers.map(function(h, i) {
+        var matched = smartAutoMatch(h, type)
+        if (matched !== '__skip') mappedCount++
+        var sampleVal = ''
+        for (var ri = 0; ri < Math.min(3, rows.length); ri++) {
+          if (rows[ri][h] && String(rows[ri][h]).trim()) { sampleVal = String(rows[ri][h]).trim(); break }
+        }
+        return '<div class="fmr-grid">' +
+          '<div>' +
+            '<div class="fmr-src" title="'+h+'">'+h+'</div>' +
+            (sampleVal ? '<div style="font-size:9.5px;color:var(--text3);margin-top:2px;font-style:italic">e.g. '+sampleVal.slice(0,40)+(sampleVal.length>40?'...':'')+'</div>' : '') +
+          '</div>' +
+          '<div class="fmr-arrow">→</div>' +
+          '<select class="fmr-sel" id="fmr-sel-'+i+'">' +
+            fields.map(function(f){ return '<option value="'+f.key+'"'+(f.key===matched?' selected':'')+'>'+(f.required?'★ ':'')+f.label+'</option>' }).join('') +
+          '</select>' +
+        '</div>'
+      }).join('')
+
       document.getElementById('import-step-area').innerHTML =
-        '<div style="font-size:11.5px;color:var(--text2);margin-bottom:10px"><strong>' + headers.length + '</strong> CSV columns detected. <span style="color:var(--green-t);font-weight:500">' + rows.length + ' rows.</span></div>' +
-        '<div style="display:grid;grid-template-columns:1fr 18px 1fr;gap:6px;margin-bottom:6px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:0 10px"><span>CSV Column</span><span></span><span>CRM Field</span></div>' +
-        headers.map(function(h, i) {
-          var hLower = h.toLowerCase().replace(/[^a-z0-9]/g,'')
-          var autoMatch = fields.find(function(f){ var fLower=f.key.toLowerCase().replace(/[^a-z0-9]/g,''); return fLower===hLower||fLower.includes(hLower.slice(0,8))||hLower.includes(fLower.slice(0,8)) })
-          var selectVal = autoMatch ? autoMatch.key : '__skip'
-          return '<div class="fmr-grid"><div class="fmr-src" title="'+h+'">'+h+'</div><div class="fmr-arrow">→</div>' +
-            '<select class="fmr-sel" id="fmr-sel-'+i+'">' +
-            fields.map(function(f){ return '<option value="'+f.key+'"'+(f.key===selectVal?' selected':'')+'>'+(f.required?'* ':'')+f.label+'</option>' }).join('') +
-            '</select></div>'
-        }).join('')
-      return false
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
+          '<div style="font-size:11.5px;color:var(--text2)"><strong>'+headers.length+'</strong> CSV columns · <span style="color:var(--green-t)">'+rows.length+' rows</span></div>' +
+          '<div style="font-size:10.5px;color:var(--text3)"><span style="color:var(--green-t);font-weight:600">'+mappedCount+'</span> auto-matched · review below</div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 18px 1fr;gap:6px;margin-bottom:6px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:0 10px">' +
+          '<span>CSV Column (your file)</span><span></span><span>CRM Field (destination)</span>' +
+        '</div>' +
+        '<div style="max-height:340px;overflow-y:auto;padding-bottom:8px">' + rowsHtml + '</div>' +
+        '<div class="alert alert-info" style="margin-top:8px;font-size:10.5px">★ = Required field. Columns mapped to "— Skip —" will be ignored.</div>'
+
+      return false /* keep modal open */
     }
+
+    /* ── STEP 2: Run the import ── */
     if (window._importStep === 2) {
       var headers2 = Object.keys(window._importRows[0])
       var fieldMap = {}
-      headers2.forEach(function(h, i) { var sel=document.getElementById('fmr-sel-'+i); if(sel&&sel.value&&sel.value!=='__skip') fieldMap[h]=sel.value })
+      headers2.forEach(function(h, i) {
+        var sel = document.getElementById('fmr-sel-'+i)
+        if (sel && sel.value && sel.value !== '__skip') fieldMap[h] = sel.value
+      })
+
+      /* check required fields are mapped */
+      var reqFields = (IMPORT_FIELDS[type]||[]).filter(function(f){ return f.required })
+      var missingReq = reqFields.filter(function(rf){
+        return !Object.values(fieldMap).includes(rf.key)
+      })
+      if (missingReq.length) {
+        showToast('Please map required field: '+missingReq.map(function(f){ return f.label }).join(', '), 'error')
+        return false
+      }
+
+      /* remap all rows */
       var mappedRows = window._importRows.map(function(row) {
         var out = {}
-        Object.keys(fieldMap).forEach(function(csvCol) { if(row[csvCol]!==undefined&&String(row[csvCol]).trim()) out[fieldMap[csvCol]]=String(row[csvCol]).trim() })
-        Object.keys(row).forEach(function(k){ if(!out[k]) out[k]=row[k] })
+        Object.keys(fieldMap).forEach(function(csvCol) {
+          var val = row[csvCol]
+          if (val !== undefined && String(val).trim()) out[fieldMap[csvCol]] = String(val).trim()
+        })
+        /* also pass original keys for server-side fallback matching */
         return out
       })
-      var btn2=document.getElementById('modal-ok-btn'); if(btn2){btn2.disabled=true;btn2.textContent='Importing...'}
-      var s3=document.getElementById('wiz-s3'); if(s3){s3.className='wiz-step active';s3.querySelector('.wiz-num').style.background='var(--nv)';s3.querySelector('.wiz-num').style.color='var(--cream)'}
+
+      /* mark step 3 active */
+      var btn2 = document.getElementById('modal-ok-btn')
+      if (btn2) { btn2.disabled=true; btn2.textContent='Importing...' }
+      var s3 = document.getElementById('wiz-s3')
+      if (s3) { s3.className='wiz-step active'; s3.querySelector('.wiz-num').style.background='var(--nv)'; s3.querySelector('.wiz-num').style.color='var(--cream)' }
+
       document.getElementById('import-step-area').innerHTML =
-        '<div style="margin-bottom:10px;font-size:12px;font-weight:500">Importing ' + mappedRows.length + ' records...</div>' +
+        '<div style="margin-bottom:10px;font-size:12px;font-weight:500">Importing '+mappedRows.length+' records...</div>' +
         '<div class="prog-outer"><div class="prog-inner" id="import-prog" style="width:0%"></div></div>' +
-        '<div id="import-prog-label" style="font-size:10.5px;color:var(--text3)">Starting...</div>' +
+        '<div id="import-prog-label" style="font-size:10.5px;color:var(--text3);margin-bottom:12px">Starting...</div>' +
         '<div id="import-errors"></div>'
-      var BATCH=200, totalBatches=Math.ceil(mappedRows.length/BATCH), totalCreated=0, allErrors=[]
-      for (var b=0;b<totalBatches;b++) {
-        var batch=mappedRows.slice(b*BATCH,(b+1)*BATCH), pct=Math.round(((b+1)/totalBatches)*100)
-        var progEl=document.getElementById('import-prog'), labelEl=document.getElementById('import-prog-label')
-        if(progEl)progEl.style.width=pct+'%'; if(labelEl)labelEl.textContent='Batch '+(b+1)+' of '+totalBatches+' — '+pct+'% complete'
-        try { var result=await api('/api/import/'+type,'POST',{rows:batch,batch:b+1,totalBatches:totalBatches}); totalCreated+=result.created||0; if(result.errors)allErrors=allErrors.concat(result.errors) }
-        catch(e){ allErrors.push('Batch '+(b+1)+' failed: '+e.message) }
+
+      var BATCH = 200
+      var totalBatches = Math.ceil(mappedRows.length / BATCH)
+      var totalCreated = 0
+      var allErrors = []
+
+      for (var b = 0; b < totalBatches; b++) {
+        var batch = mappedRows.slice(b * BATCH, (b+1) * BATCH)
+        var pct = Math.round(((b+1) / totalBatches) * 100)
+        var progEl = document.getElementById('import-prog')
+        var labelEl = document.getElementById('import-prog-label')
+        if (progEl) progEl.style.width = pct+'%'
+        if (labelEl) labelEl.textContent = 'Batch '+(b+1)+' of '+totalBatches+' — '+pct+'% complete ('+totalCreated+' imported so far)'
+        try {
+          var result = await api('/api/import/'+type, 'POST', {rows:batch, batch:b+1, totalBatches:totalBatches})
+          totalCreated += result.created || 0
+          if (result.errors) allErrors = allErrors.concat(result.errors.slice(0,5))
+        } catch(e) {
+          allErrors.push('Batch '+(b+1)+' failed: '+e.message)
+        }
       }
-      var errEl=document.getElementById('import-errors'), progEl2=document.getElementById('import-prog')
-      if(progEl2){progEl2.style.width='100%';progEl2.style.background=allErrors.length<mappedRows.length?'var(--green)':'var(--amber)'}
-      if(errEl) errEl.innerHTML=
-        '<div class="import-summary">' +
-        '<div class="isn-card"><div class="isn-n">'+mappedRows.length+'</div><div class="isn-l">Rows processed</div></div>' +
-        '<div class="isn-card"><div class="isn-n" style="color:var(--green-t)">'+totalCreated+'</div><div class="isn-l">Records created</div></div>' +
-        '<div class="isn-card"><div class="isn-n" style="color:'+(allErrors.length?'var(--red-t)':'var(--green-t)')+'">'+allErrors.length+'</div><div class="isn-l">Errors</div></div>' +
-        '</div>' +
-        (allErrors.length?'<div class="alert alert-warn" style="margin-top:10px;font-size:10.5px;max-height:120px;overflow-y:auto"><strong>Errors (first 10):</strong><br>'+allErrors.slice(0,10).map(function(e){return'• '+e}).join('<br>')+(allErrors.length>10?'<br>...and '+(allErrors.length-10)+' more':'')+'</div>':'') +
-        '<div style="margin-top:12px;text-align:center"><button class="btn btn-primary" onclick="closeModal();loadPage(\''+type+'\')">Done — View '+label+'</button></div>'
-      window._importStep=1; window._importRows=null; window._importType=null
+
+      /* show summary */
+      var errEl = document.getElementById('import-errors')
+      var progEl2 = document.getElementById('import-prog')
+      var labelEl2 = document.getElementById('import-prog-label')
+      if (progEl2) { progEl2.style.width='100%'; progEl2.style.background=totalCreated>0?'var(--green)':'var(--amber)' }
+      if (labelEl2) labelEl2.textContent = 'Import complete! '+totalCreated+' imported · '+(mappedRows.length-totalCreated)+' skipped'
+
+      if (errEl) {
+        errEl.innerHTML =
+          '<div class="import-summary">' +
+            '<div class="isn-card"><div class="isn-n">'+mappedRows.length+'</div><div class="isn-l">Total rows</div></div>' +
+            '<div class="isn-card"><div class="isn-n" style="color:var(--green-t)">'+totalCreated+'</div><div class="isn-l">Records imported</div></div>' +
+            '<div class="isn-card"><div class="isn-n" style="color:'+(allErrors.length?'var(--red-t)':'var(--green-t)')+'">'+allErrors.length+'</div><div class="isn-l">Errors</div></div>' +
+          '</div>' +
+          (allErrors.length ? '<div class="alert alert-warn" style="margin-top:10px;font-size:10.5px;max-height:100px;overflow-y:auto"><strong>First errors:</strong><br>'+allErrors.slice(0,5).join('<br>')+'</div>' : '') +
+          (totalCreated===0 ? '<div class="alert alert-error" style="margin-top:8px"><strong>Nothing imported.</strong> First error: '+(allErrors[0]||'Unknown')+'<br><br><strong>Common fixes:</strong><br>• Check column names match the template<br>• Required fields must not be empty<br>• <a href="/api/template/'+type+'" target="_blank" class="cell-link">Download CSV template</a></div>' : '') +
+          '<div style="margin-top:12px;text-align:center">' +
+            '<button class="btn btn-primary" onclick="closeModal();loadPage(\''+type+'\')">Done — View '+label+'</button>' +
+          '</div>'
+      }
+
+      window._importStep = 1
+      window._importRows = null
       return false
     }
   }, 'modal-xl')
