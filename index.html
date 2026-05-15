@@ -2229,7 +2229,9 @@ function importCSV(type){
 
     const allRows=window._importRows
     const type=window._importType
-    const CHUNK=50  // 50 rows per batch — small enough for any hosting limit
+    // Chunk size: larger for simple types, smaller for complex ones
+    const importChunks={'locations':200,'wibs':100,'companies':100,'applications':20}
+    const CHUNK=importChunks[type]||50
     const totalBatches=Math.ceil(allRows.length/CHUNK)
     let totalCreated=0, totalErrors=[]
 
