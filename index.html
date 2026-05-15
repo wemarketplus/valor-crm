@@ -692,9 +692,19 @@ async function apiDownload(url){
 async function apiAI(prompt){
   try {
     const d=await api('/api/ai','POST',{prompt,context:''})
-    if(d.error&&!d.text) return 'AI Error: '+(d.error||'unknown')
+    if(d.error&&!d.text){
+      if(d.error.includes('ANTHROPIC_API_KEY')||d.error.includes('API_KEY')){
+        return '🔑 AI not configured yet.\n\nTo enable the AI Assistant:\n1. Go to your Render dashboard\n2. Open Environment Variables\n3. Add: ANTHROPIC_API_KEY = your-key-here\n4. Click Save & Redeploy'
+      }
+      return '⚠️ AI Error: '+(d.error||'Unknown error')
+    }
     return d.text||'No response generated.'
-  } catch(e) { return '❌ AI failed: '+e.message }
+  } catch(e) {
+    if(e.message.includes('ANTHROPIC_API_KEY')||e.message.includes('API_KEY')){
+      return '🔑 AI not configured yet.\n\nTo enable the AI Assistant:\n1. Go to your Render dashboard\n2. Open Environment Variables\n3. Add: ANTHROPIC_API_KEY = your-key-here\n4. Click Save & Redeploy'
+    }
+    return '⚠️ AI connection failed: '+e.message
+  }
 }
 
 // ── SESSION TIMEOUT: 1hr auto-logout, 2-min warning modal ──
@@ -1049,7 +1059,6 @@ function setTopbar(titleHtml,badge='',actions=''){
       ${badge?`<span class="topbar-badge">${badge}</span>`:''}
     </div>
     <div class="topbar-right">
-      <div class="topbar-icon" title="Share" onclick="showToast('Share link copied','success')">🔗</div>
       <div class="topbar-icon" title="Search" onclick="focusSearch()">🔍</div>
       <div class="topbar-icon" title="Help">❓</div>
       <div class="topbar-icon has-label" title="Ask Claude AI" onclick="loadPage('ai')">🤖 Ask AI</div>
@@ -1216,7 +1225,7 @@ async function loadPage(page){
     else if(page==='workflows')pageWorkflows()
     else if(page==='settings')pageSettings()
     else if(page==='automations')pageAutomations()
-    else document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🚧</div><div class="empty-text">Coming soon</div></div>`
+    else document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🚧</div><div class="empty-text">Page not found</div><div class="empty-sub">Navigate using the sidebar</div></div>`
   }catch(e){
     document.getElementById('page-area').innerHTML=`<div class="alert alert-error" style="margin:20px">⚠️ ${e.message}</div>`
   }
@@ -1573,8 +1582,7 @@ async function openWibProfile(id){
   if(!currentWib){document.getElementById('page-area').innerHTML='<div class="alert alert-error">WIB not found</div>';return}
   const w=currentWib
   setTopbar(`<span class="topbar-crumb" onclick="loadPage('wibs')">Workforce Boards</span><span class="topbar-crumb-sep">/</span>${w.wib_name}`,'',`
-    <button class="btn" onclick="openWibModal(currentWib)">✎ Edit</button>
-    <button class="btn btn-ghost" onclick="showToast('Link copied','success')">🔗 Share</button>`)
+    <button class="btn" onclick="openWibModal(currentWib)">✎ Edit</button>`)
   setTabs([
     {id:'overview',label:'Overview'},
     {id:'notes',label:'Notes'},
@@ -2143,8 +2151,7 @@ async function openCompanyProfile(id){
   if(!currentCompany){document.getElementById('page-area').innerHTML='<div class="alert alert-error">Company not found</div>';return}
   const c=currentCompany
   setTopbar(`<span class="topbar-crumb" onclick="loadPage('companies')">Companies</span><span class="topbar-crumb-sep">/</span>${c.company_name}`,'',`
-    <button class="btn" onclick="openCompanyModal(currentCompany)">✎ Edit</button>
-    <button class="btn btn-ghost" onclick="showToast('Link copied','success')">🔗 Share</button>`)
+    <button class="btn" onclick="openCompanyModal(currentCompany)">✎ Edit</button>`)
   setTabs([
     {id:'overview',label:'Overview'},
     {id:'notes',label:'Notes'},
@@ -2323,7 +2330,7 @@ function renderCompanyProfile(){
   }
   else{
     pa.style.padding='14px'
-    pa.innerHTML=`<div class="empty-state"><div class="empty-icon">🚧</div><div class="empty-text">Coming soon</div></div>`
+    pa.innerHTML=`<div class="empty-state"><div class="empty-icon">👤</div><div class="empty-text">No contacts yet</div><div class="empty-sub">Contacts will appear here once added to this company record</div></div>`
   }
 }
 
@@ -2957,17 +2964,21 @@ async function pageAuditLogs(){
     </div>`
   }catch(e){
     const msg=e.message||''
-    if(msg.includes('details') && msg.includes('not exist')){
+    if(msg.includes('does not exist')||msg.includes('column')||msg.includes('details')){
       document.getElementById('page-area').innerHTML=`
-        <div class="alert alert-error" style="margin-bottom:12px">
-          ⚠️ Database schema needs refresh: <strong>${msg}</strong>
-        </div>
+        <div class="alert alert-error" style="margin-bottom:10px">⚠️ <strong>Schema Cache Issue</strong><br><br>${msg}<br><br>
+        This is a known Supabase PostgREST issue. Click below to fix it.</div>
         <div class="card"><div class="card-body" style="text-align:center;padding:24px">
-          <div style="font-size:14px;font-weight:600;margin-bottom:8px">Schema Cache Issue</div>
-          <div style="font-size:12px;color:var(--text2);margin-bottom:16px">The PostgREST schema cache is stale. Click below to refresh it, or run:<br>
-            <code style="background:var(--gray2);padding:4px 8px;border-radius:5px;font-size:11px">SELECT pg_notify('pgrst', 'reload schema');</code><br>in your Supabase SQL Editor.
+          <div style="font-size:28px;margin-bottom:12px">🔄</div>
+          <div style="font-size:14px;font-weight:600;margin-bottom:8px">Fix Schema Cache</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:16px">
+            This refreshes the PostgREST schema cache and reloads the page.
           </div>
-          <button class="btn btn-primary" onclick="refreshSchemaAndReload()">🔄 Refresh Schema Cache</button>
+          <button class="btn btn-primary" style="padding:10px 24px" onclick="refreshSchemaAndReload()">🔄 Refresh Schema Cache & Reload</button>
+          <div style="margin-top:16px;padding:10px;background:var(--gray);border-radius:8px;font-size:11px;color:var(--text3);text-align:left">
+            <strong>Or run manually in Supabase SQL Editor:</strong><br>
+            <code style="font-family:monospace">SELECT pg_notify('pgrst', 'reload schema');</code>
+          </div>
         </div></div>`
     } else {
       document.getElementById('page-area').innerHTML=`<div class="alert alert-error">${msg}</div>`
@@ -2979,9 +2990,13 @@ async function refreshSchemaAndReload(){
   try{
     showToast('Refreshing schema cache...','info')
     const r=await api('/api/refresh-schema','POST')
-    showToast(r.message||'Schema refreshed','success')
-    setTimeout(()=>pageAuditLogs(),1000)
-  }catch(e){showToast('Refresh failed: '+e.message,'error')}
+    showToast(r.message||'Schema refreshed - reloading in 2 seconds...','success')
+    setTimeout(()=>window.location.reload(),2000)
+  }catch(e){
+    // Even if the API call fails, try to reload - the schema might have been refreshed
+    showToast('Attempting reload...','warn')
+    setTimeout(()=>window.location.reload(),1500)
+  }
 }
 
 /* ═══════════════════════════════════════════════════
@@ -3830,10 +3845,24 @@ async function pageTasks(){
     renderTasksPage(window._tasks)
   }catch(e){
     const msg=e.message||''
-    if(msg.includes('details') && msg.includes('not exist')){
-      document.getElementById('page-area').innerHTML=`<div class="alert alert-error">⚠️ Schema cache issue: ${msg}<br><br><button class="btn btn-primary" onclick="refreshSchemaAndReload().then(()=>pageTasks())">🔄 Fix Schema & Reload</button></div>`
+    if(msg.includes('does not exist')||msg.includes('column')){
+      document.getElementById('page-area').innerHTML=`
+        <div class="alert alert-error" style="margin-bottom:10px">⚠️ <strong>Schema Cache Issue</strong><br><br>${msg}<br><br>
+        Your database schema cache needs to be refreshed. This is a one-time fix.</div>
+        <div class="card"><div class="card-body" style="text-align:center;padding:24px">
+          <div style="font-size:28px;margin-bottom:12px">🔄</div>
+          <div style="font-size:14px;font-weight:600;margin-bottom:8px">Fix in one click</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:16px">
+            Click below to refresh the PostgREST schema cache, then the page will reload automatically.
+          </div>
+          <button class="btn btn-primary" style="padding:10px 24px" onclick="refreshSchemaAndReload()">🔄 Refresh Schema Cache & Reload</button>
+          <div style="margin-top:16px;padding:10px;background:var(--gray);border-radius:8px;font-size:11px;color:var(--text3);text-align:left">
+            <strong>Or run manually in Supabase SQL Editor:</strong><br>
+            <code style="font-family:monospace">SELECT pg_notify('pgrst', 'reload schema');</code>
+          </div>
+        </div></div>`
     } else {
-      document.getElementById('page-area').innerHTML=`<div class="alert alert-error">${msg}</div>`
+      document.getElementById('page-area').innerHTML=`<div class="alert alert-error">⚠️ ${msg}</div>`
     }
   }
 }
@@ -3949,7 +3978,20 @@ async function pageNotes(){
     const r=await api('/api/notes?limit=100')
     window._globalNotes=r.data||[]
     renderNotesGrid(window._globalNotes)
-  }catch(e){document.getElementById('page-area').innerHTML=`<div class="alert alert-error">${e.message}</div>`}
+  }catch(e){
+    const msg=e.message||''
+    if(msg.includes('does not exist')||msg.includes('column')){
+      document.getElementById('page-area').innerHTML=`
+        <div class="alert alert-error" style="margin-bottom:10px">⚠️ <strong>Schema Cache Issue</strong><br><br>${msg}</div>
+        <div class="card"><div class="card-body" style="text-align:center;padding:24px">
+          <div style="font-size:28px;margin-bottom:12px">🔄</div>
+          <div style="font-size:14px;font-weight:600;margin-bottom:8px">Fix in one click</div>
+          <button class="btn btn-primary" style="padding:10px 24px" onclick="refreshSchemaAndReload()">🔄 Refresh Schema Cache & Reload</button>
+        </div></div>`
+    } else {
+      document.getElementById('page-area').innerHTML=`<div class="alert alert-error">⚠️ ${msg}</div>`
+    }
+  }
 }
 
 function renderNotesGrid(notes){
@@ -4131,7 +4173,7 @@ function pageEmails(){
     <div style="display:flex;align-items:center;gap:0;border-bottom:.5px solid var(--border);padding:0 14px">
       <button class="rtab active">✉ Drafts 4</button>
       <button class="rtab" onclick="showToast('Outbox empty — connect email provider in Settings','info')">✉ Outbox 0</button>
-      <button class="rtab" onclick="showToast('Email templates — coming soon','info')">⊡ Templates 4</button>
+      <button class="rtab" id="etab-templates" onclick="switchEmailTab('templates',this)">⊡ Templates 4</button>
       <div style="margin-left:auto;padding:6px 0"><button class="btn btn-xs btn-ghost">❓ Help</button></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr auto;padding:7px 14px;border-bottom:.5px solid var(--border);font-size:10.5px;color:var(--text3)">
