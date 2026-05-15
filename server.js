@@ -92,10 +92,22 @@ async function auth(req, res, next) {
   }
 }
 
+// ─── ROLE DEFINITIONS ─────────────────────────────────────────────────────────
+// Roles: super_admin > admin > grant_coordinator > compliance_mgr > team_member > external_partner
+const VALID_ROLES = ['super_admin','admin','grant_coordinator','compliance_mgr','team_member','external_partner']
+
 const requireAdmin = (req, res, next) =>
-  ['super_admin', 'admin'].includes(req.user?.role) ? next() : res.status(403).json({ error: 'Admin access required' })
+  ['super_admin','admin'].includes(req.user?.role) ? next() : res.status(403).json({ error: 'Admin access required' })
+
 const requireSuper = (req, res, next) =>
   req.user?.role === 'super_admin' ? next() : res.status(403).json({ error: 'Super admin access required' })
+
+const requireContributor = (req, res, next) =>
+  ['super_admin','admin','grant_coordinator','compliance_mgr','team_member'].includes(req.user?.role)
+    ? next() : res.status(403).json({ error: 'Contributor access required — contact your administrator' })
+
+const requireDelete = (req, res, next) =>
+  ['super_admin','admin'].includes(req.user?.role) ? next() : res.status(403).json({ error: 'Delete requires Admin or Super Admin access' })
 
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 app.post('/api/login', rateLimitLogin, async (req, res) => {
@@ -524,10 +536,10 @@ app.post('/api/users', auth, requireAdmin, async (req, res) => {
     const { email, password, full_name, role = 'team_member', title, phone } = req.body
     if (!email || !password) return res.status(400).json({ error: 'Email and password required' })
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
-    const validRoles = ['super_admin', 'admin', 'team_member', 'external_partner']
+    const validRoles = VALID_ROLES
     if (!validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
-    if (['super_admin', 'admin'].includes(role) && req.user.role !== 'super_admin') {
-      return res.status(403).json({ error: 'Only Super Admin can create Admin accounts' })
+    if (role === 'super_admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Only Super Admin can assign the Super Admin role' })
     }
     const { data, error } = await supabase.auth.admin.createUser({
       email: email.trim().toLowerCase(), password,
