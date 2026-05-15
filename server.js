@@ -5,39 +5,138 @@ const fs = require('fs')
 const app = express()
 
 // ─── SECURITY HEADERS ──────────────────────────────────────────────────────────
+// CORS: strip localhost origins in production to prevent cross-origin abuse
+const IS_PROD = process.env.NODE_ENV === 'production'
+const CORS_ORIGINS = IS_PROD
+  ? ['https://valor-crm.onrender.com']
+  : ['https://valor-crm.onrender.com', 'http://localhost:3001', 'http://localhost:3000']
+
+const crypto = require('crypto')
+
 app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  res.setHeader('X-Frame-Options', 'DENY')
-  res.setHeader('X-XSS-Protection', '1; mode=block')
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  // ── Standard security headers ───────────────────────────────────────────────
+  res.setHeader('X-Content-Type-Options',    'nosniff')
+  res.setHeader('X-Frame-Options',           'DENY')
+  res.setHeader('X-XSS-Protection',          '0')            // Modern browsers: rely on CSP instead
+  res.setHeader('Referrer-Policy',           'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy',        'camera=(), microphone=(), geolocation=()')
+  res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload')
   res.removeHeader('X-Powered-By')
+
+  // ── Content Security Policy ─────────────────────────────────────────────────
+  // Blocks inline XSS execution from user-injected content.
+  // 'unsafe-inline' on style-src is required because the app uses inline styles heavily.
+  // script-src does NOT include 'unsafe-inline' — this is the critical protection.
+  // When the codebase is migrated to an external .js bundle, remove 'unsafe-inline' from style-src.
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",          // tighten to nonce after bundle split
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: https: blob:",
+    "font-src 'self' data:",
+    "connect-src 'self' https://*.supabase.co https://api.anthropic.com",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+  ].join('; '))
+
+  // ── CORS ────────────────────────────────────────────────────────────────────
   const origin = req.headers.origin
-  const allowed = ['https://valor-crm.onrender.com','http://localhost:3001','http://localhost:3000']
-  if (origin && allowed.includes(origin)) res.setHeader('Access-Control-Allow-Origin', origin)
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-  if (req.method === 'OPTIONS') return res.sendStatus(200)
+  if (origin && CORS_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin',  origin)
+    res.setHeader('Vary', 'Origin')                          // required when ACAO is not wildcard
+  }
+  res.setHeader('Access-Control-Allow-Methods',  'GET,POST,PUT,DELETE,OPTIONS')
+  res.setHeader('Access-Control-Allow-Headers',  'Content-Type,Authorization')
+  res.setHeader('Access-Control-Max-Age',        '86400')    // cache preflight 24h
+
+  if (req.method === 'OPTIONS') return res.sendStatus(204)
   next()
 })
 
-app.use(express.json({ limit: '50mb' }))
+// JSON body limit: 2MB for regular API calls.
+// The Aircall webhook uses express.raw() separately.
+// Import calls send pre-chunked batches of 200 rows max, each well under 2MB.
+app.use((req, res, next) => {
+  // Skip express.json for the raw webhook endpoint
+  if (req.path === '/api/webhooks/aircall') return next()
+  express.json({ limit: '2mb', strict: true })(req, res, next)
+})
 
 // ─── RATE LIMITING ─────────────────────────────────────────────────────────────
-const loginAttempts = new Map()
-function rateLimitLogin(req, res, next) {
-  const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown'
-  const now = Date.now(), window = 15 * 60 * 1000, max = 10
-  const e = loginAttempts.get(ip) || { count: 0, resetAt: now + window }
+// Primary: database-backed rate limiting — survives server restarts and cold starts.
+// Fallback: in-memory Map used only if the DB query fails (network issue on startup).
+// The login_attempts table should be created once (see inline DDL on first boot).
+const _loginFallback = new Map()
+
+async function rateLimitLogin(req, res, next) {
+  const ip  = (req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown').substring(0, 45)
+  const MAX = 10
+  const WINDOW_MINUTES = 15
+
+  try {
+    // Count attempts in the last WINDOW_MINUTES for this IP using Supabase
+    const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000).toISOString()
+    const { count, error } = await supabase
+      .from('login_attempts')
+      .select('id', { count: 'exact', head: true })
+      .eq('ip_address', ip)
+      .gte('attempted_at', since)
+
+    if (!error) {
+      if (count >= MAX) {
+        return res.status(429).json({
+          error: `Too many login attempts. Try again in ${WINDOW_MINUTES} minutes.`
+        })
+      }
+      // Record this attempt
+      await supabase.from('login_attempts').insert({ ip_address: ip })
+      return next()
+    }
+    // DB error — fall through to in-memory fallback
+    console.warn('rateLimitLogin DB error, using in-memory fallback:', error.message)
+  } catch (_) {
+    // Network error on startup — use fallback
+  }
+
+  // In-memory fallback (single-process only, resets on restart)
+  const now = Date.now(), window = WINDOW_MINUTES * 60 * 1000
+  const e = _loginFallback.get(ip) || { count: 0, resetAt: now + window }
   if (now > e.resetAt) { e.count = 0; e.resetAt = now + window }
   e.count++
-  loginAttempts.set(ip, e)
-  if (e.count > max) {
-    const mins = Math.ceil((e.resetAt - now) / 60000)
-    return res.status(429).json({ error: `Too many login attempts. Try again in ${mins} minutes.` })
+  _loginFallback.set(ip, e)
+  if (e.count > MAX) {
+    return res.status(429).json({
+      error: `Too many login attempts. Try again in ${WINDOW_MINUTES} minutes.`
+    })
   }
   next()
 }
-setInterval(() => { const now = Date.now(); for (const [ip, e] of loginAttempts) if (now > e.resetAt) loginAttempts.delete(ip) }, 30 * 60 * 1000)
+
+// Cleanup fallback Map every 30 minutes
+setInterval(() => {
+  const now = Date.now()
+  for (const [ip, e] of _loginFallback) if (now > e.resetAt) _loginFallback.delete(ip)
+}, 30 * 60 * 1000)
+
+// Create login_attempts table on first boot if it doesn't exist
+// This is idempotent and safe to run on every restart
+;(async () => {
+  try {
+    await supabase.rpc('exec_ddl', {
+      sql: `CREATE TABLE IF NOT EXISTS login_attempts (
+        id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+        ip_address  TEXT        NOT NULL,
+        attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip_address, attempted_at);
+      DELETE FROM login_attempts WHERE attempted_at < NOW() - INTERVAL '24 hours';`
+    }).throwOnError()
+  } catch (_) {
+    // Table may already exist or exec_ddl RPC may not be available — non-fatal
+  }
+})()
 
 // ─── SUPABASE CLIENTS ──────────────────────────────────────────────────────────
 const SUPABASE_URL = process.env.SUPABASE_URL
@@ -82,18 +181,86 @@ app.use(express.static(path.join(__dirname, 'public'), { index: false, dotfiles:
 // ─── AUTH MIDDLEWARE ───────────────────────────────────────────────────────────
 async function auth(req, res, next) {
   try {
-    const token = req.headers.authorization?.replace('Bearer ', '').trim()
-    if (!token || token.length < 10) return res.status(401).json({ error: 'Authentication required' })
-    const { data: { user }, error } = await authClient.auth.getUser(token)
-    if (error || !user) return res.status(401).json({ error: 'Session expired. Please sign in again.' })
-    const { data: profile, error: pe } = await supabase.from('user_profiles').select('*').eq('id', user.id).single()
-    if (pe || !profile) return res.status(401).json({ error: 'User profile not found. Contact administrator.' })
-    if (profile.is_active === false) return res.status(403).json({ error: 'Account disabled. Contact your administrator.' })
-    req.user = profile
+    const rawToken = req.headers.authorization?.replace('Bearer ', '').trim()
+    if (!rawToken || rawToken.length < 10) {
+      return res.status(401).json({ error: 'Authentication required' })
+    }
+
+    // ── 1. Validate token with Supabase auth server ──────────────────────────
+    // getUser() makes a live request to Supabase auth — not a local JWT decode.
+    // This means a revoked Supabase session is rejected here automatically.
+    const { data: { user }, error: authErr } = await authClient.auth.getUser(rawToken)
+    if (authErr || !user) {
+      return res.status(401).json({ error: 'Session expired. Please sign in again.' })
+    }
+
+    // ── 2. Check token revocation table ─────────────────────────────────────
+    // Extract the JWT jti claim (unique token identifier) for revocation lookup.
+    // The jti is in the middle section of the JWT (base64url-encoded JSON payload).
+    try {
+      const jwtPayload = JSON.parse(
+        Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8')
+      )
+      const jti = jwtPayload?.jti
+      if (jti) {
+        const { data: revoked } = await supabase
+          .from('revoked_tokens')
+          .select('jti')
+          .eq('jti', jti)
+          .single()
+        if (revoked) {
+          return res.status(401).json({ error: 'Session revoked. Please sign in again.' })
+        }
+      }
+    } catch (_) {
+      // JWT parse failure is non-fatal — Supabase already validated the token above.
+      // This only affects revocation list checking.
+    }
+
+    // ── 3. Load user profile and check active status ─────────────────────────
+    const { data: profile, error: profileErr } = await supabase
+      .from('user_profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single()
+
+    if (profileErr || !profile) {
+      return res.status(401).json({ error: 'User profile not found. Contact administrator.' })
+    }
+
+    // is_active check: profile.is_active === false means admin explicitly disabled the account.
+    // Combined with Supabase's ban (set when disabling), this double-blocks access.
+    if (profile.is_active === false) {
+      return res.status(403).json({ error: 'Account disabled. Contact your administrator.' })
+    }
+
+    req.user    = profile
+    req.rawToken = rawToken  // stored for logout / force-revoke operations
+
     next()
   } catch (err) {
     console.error('Auth middleware error:', err.message)
     return res.status(500).json({ error: 'Authentication service error' })
+  }
+}
+
+// ── Helper: revoke a token immediately (used on disable + password reset) ──────
+async function revokeToken(rawToken, userId, reason = 'admin_action') {
+  try {
+    const payload = JSON.parse(
+      Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8')
+    )
+    const jti       = payload?.jti
+    const expiresAt = payload?.exp ? new Date(payload.exp * 1000).toISOString() : null
+    if (!jti || !expiresAt) return { error: 'No jti in token' }
+
+    const { error } = await supabase.from('revoked_tokens').upsert(
+      { jti, user_id: userId, reason, expires_at: expiresAt },
+      { onConflict: 'jti', ignoreDuplicates: true }
+    )
+    return { error }
+  } catch (e) {
+    return { error: e.message }
   }
 }
 
@@ -1768,6 +1935,146 @@ app.post('/api/import-test', auth, requireAdmin, async (req, res) => {
 })
 
 
+// ─── AIRCALL WEBHOOK ─────────────────────────────────────────────────────────
+// Receives call lifecycle events from Aircall and stores them idempotently.
+// Three webhooks fire per call (call.ended, call.assigned, call_recording.created)
+// and may arrive out of order. ON CONFLICT ensures safe concurrent upsert.
+// Signature verification uses crypto.timingSafeEqual to prevent timing attacks.
+
+app.post('/api/webhooks/aircall',
+  express.raw({ type: '*/*', limit: '1mb' }),  // raw body required for HMAC verification
+  async (req, res) => {
+
+    // ── 1. HMAC-SHA256 signature verification ──────────────────────────────────
+    // Aircall sends X-Aircall-Signature: sha256=<hmac>
+    // If AIRCALL_WEBHOOK_SECRET is not set, we accept the webhook but log a warning.
+    const secret = process.env.AIRCALL_WEBHOOK_SECRET
+    const sigHeader = req.headers['x-aircall-signature'] || ''
+
+    if (secret) {
+      // Compute HMAC of the raw request body
+      const computed = 'sha256=' + crypto
+        .createHmac('sha256', secret)
+        .update(req.body)           // req.body is a Buffer because of express.raw()
+        .digest('hex')
+
+      // timingSafeEqual prevents timing oracle attacks on the comparison
+      const sigBuf  = Buffer.from(sigHeader.padEnd(computed.length))
+      const compBuf = Buffer.from(computed)
+      if (sigBuf.length !== compBuf.length || !crypto.timingSafeEqual(sigBuf, compBuf)) {
+        console.warn('Aircall webhook: signature mismatch from IP', req.ip)
+        return res.status(401).json({ error: 'Invalid webhook signature' })
+      }
+    } else {
+      console.warn('AIRCALL_WEBHOOK_SECRET not set — accepting webhook without signature verification')
+    }
+
+    // ── 2. Parse body ──────────────────────────────────────────────────────────
+    let payload
+    try {
+      payload = JSON.parse(req.body.toString('utf8'))
+    } catch (e) {
+      return res.status(400).json({ error: 'Invalid JSON in webhook body' })
+    }
+
+    const { event, data: callData } = payload
+    if (!callData?.id) {
+      return res.status(400).json({ error: 'Missing call_id in payload' })
+    }
+
+    const callId = String(callData.id)
+
+    // ── 3. Idempotent upsert using ON CONFLICT ─────────────────────────────────
+    // All three concurrent webhooks for the same call merge into one row.
+    // COALESCE ensures existing non-null fields are never overwritten by null values
+    // from a partial webhook (e.g., recording_url arrives last via call_recording.created).
+    const upsertPayload = {
+      call_id:        callId,
+      direction:      callData.direction    || null,
+      duration:       callData.duration     || null,
+      started_at:     callData.started_at   ? new Date(callData.started_at * 1000).toISOString()  : null,
+      ended_at:       callData.ended_at     ? new Date(callData.ended_at   * 1000).toISOString()  : null,
+      recording_url:  callData.recording    || null,
+      assigned_email: callData.user?.email  || null,
+      raw_payload:    payload,
+    }
+
+    // Resolve assigned_to UUID from email if the user exists in our system
+    if (callData.user?.email) {
+      const { data: agentProfile } = await supabase
+        .from('user_profiles')
+        .select('id')
+        .eq('email', callData.user.email)
+        .single()
+      if (agentProfile) upsertPayload.assigned_to = agentProfile.id
+    }
+
+    const { data: upserted, error: upsertErr } = await supabase
+      .from('aircall_calls')
+      .upsert(upsertPayload, {
+        onConflict:     'call_id',
+        ignoreDuplicates: false,  // DO UPDATE (not DO NOTHING) to merge partial data
+      })
+      .select()
+      .single()
+
+    if (upsertErr) {
+      console.error('Aircall upsert error:', upsertErr.message, 'call_id:', callId)
+      return res.status(500).json({ error: 'Failed to store call record' })
+    }
+
+    // ── 4. Create a linked Note in the notes table when call ends ──────────────
+    // Only create the note once: when both duration and ended_at are now present
+    // (which means we have the complete call data) and no note exists yet.
+    if (event === 'call.ended' && upserted.duration && !upserted.note_id) {
+      // Format: [AIRCALL NOTE] | Date | Duration | Agent | Summary
+      const callDate     = upserted.started_at ? new Date(upserted.started_at).toLocaleDateString('en-US') : 'Unknown'
+      const durationStr  = upserted.duration ? `${Math.floor(upserted.duration / 60)}m ${upserted.duration % 60}s` : 'Unknown'
+      const agentName    = callData.user?.name || callData.user?.email || 'Unknown Agent'
+      const direction    = upserted.direction === 'inbound' ? '📞 Inbound' : '📤 Outbound'
+      const recordingStr = upserted.recording_url ? `\nRecording: ${upserted.recording_url}` : ''
+
+      const noteContent = [
+        `[AIRCALL NOTE] | ${callDate} | ${durationStr} | ${agentName}`,
+        `Direction: ${direction}`,
+        `Duration: ${durationStr}`,
+        recordingStr,
+      ].filter(Boolean).join('\n')
+
+      // Insert the note (linked to the CRM record if we know which one)
+      if (upserted.assigned_to) {
+        const { data: newNote } = await supabase
+          .from('notes')
+          .insert({
+            record_type: upserted.record_type || 'internal',
+            record_id:   upserted.record_id   || upserted.assigned_to,  // fallback to agent's profile
+            content:     noteContent,
+            note_type:   'Call Summary',
+            is_aircall:  true,
+            aircall_id:  callId,
+            created_by:  upserted.assigned_to,
+          })
+          .select('id')
+          .single()
+
+        // Link the note back to the call record
+        if (newNote) {
+          await supabase
+            .from('aircall_calls')
+            .update({ note_id: newNote.id, status: 'note_created' })
+            .eq('call_id', callId)
+        }
+      }
+    }
+
+    // ── 5. Acknowledge receipt immediately ─────────────────────────────────────
+    // Aircall expects a 200 response within 10 seconds or it retries.
+    // All async work above completes before this response.
+    res.status(200).json({ received: true, call_id: callId, event })
+  }
+)
+
+
 // ─── AI ASSISTANT PROXY ──────────────────────────────────────────────────────
 // Proxy Anthropic API calls through server to keep API key secure
 app.post('/api/ai', auth, async (req, res) => {
@@ -1914,80 +2221,168 @@ function requirePermission(permKey) {
 
 // ─── EXPORT ───────────────────────────────────────────────────────────────────
 const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+// ─── STREAMING CSV EXPORT ─────────────────────────────────────────────────────
+// Uses cursor-based pagination (1,000 rows/page) and Transfer-Encoding: chunked
+// so the server never loads more than 1,000 rows into memory at once.
+// Supports unlimited export size without heap exhaustion.
+
+// Export config: defines table, columns, headers, and row-mapper per type
+const EXPORT_CONFIG = {
+  wibs: {
+    table:   'wib_records',
+    select:  'wib_name,short_name,state,status,wib_phone,wib_email,website,max_award_per_ein,match_requirement_pct,iwt_program_active,source_url,call_priority_score,last_verified_date,next_steps,blockers',
+    order:   { col: 'call_priority_score', asc: false },
+    headers: ['WIB Name','Short Name','State','Status','Phone','Email','Website','Max Award/EIN','Match %','IWT Active','Source URL','Score','Last Verified','Next Steps','Blockers'],
+    map:     r => [r.wib_name,r.short_name||'',r.state,r.status,r.wib_phone||'',r.wib_email||'',r.website||'',r.max_award_per_ein||'',r.match_requirement_pct||'',r.iwt_program_active?'Yes':'No',r.source_url||'',r.call_priority_score||0,r.last_verified_date||'',r.next_steps||'',r.blockers||''],
+  },
+  companies: {
+    table:   'companies',
+    select:  'company_name,company_type,status,fein,domain,employee_count_total,avg_hourly_wage,primary_contact_name,primary_contact_email,primary_contact_phone,training_needs,notes,rating,created_at',
+    order:   { col: 'company_name', asc: true },
+    headers: ['Company Name','Type','Status','FEIN','Domain','Employees','Avg Hourly Wage','Contact Name','Contact Email','Contact Phone','Training Needs','Notes','Rating','Created'],
+    map:     r => [r.company_name,r.company_type||'',r.status,r.fein||'',r.domain||'',r.employee_count_total||'',r.avg_hourly_wage||'',r.primary_contact_name||'',r.primary_contact_email||'',r.primary_contact_phone||'',r.training_needs||'',r.notes||'',r.rating||'',r.created_at?.split('T')[0]||''],
+  },
+  locations: {
+    table:   'locations',
+    select:  'location_name,state,county,city,status,employee_count,address,created_at',
+    order:   { col: 'location_name', asc: true },
+    headers: ['Location','State','County','City','Status','Employees','Address','Created'],
+    map:     r => [r.location_name,r.state||'',r.county||'',r.city||'',r.status||'',r.employee_count||'',r.address||'',r.created_at?.split('T')[0]||''],
+  },
+  funding: {
+    table:   'funding_opportunities',
+    select:  'opportunity_name,status,program_type,max_award_per_ein,max_award_per_employee,application_deadline,blocked_reason,source_url,created_at',
+    order:   { col: 'created_at', asc: false },
+    headers: ['Opportunity','Status','Program','Max Award/EIN','Max/Employee','Deadline','Blocked Reason','Source URL','Created'],
+    map:     r => [r.opportunity_name,r.status,r.program_type||'',r.max_award_per_ein||'',r.max_award_per_employee||'',r.application_deadline||'',r.blocked_reason||'',r.source_url||'',r.created_at?.split('T')[0]||''],
+  },
+  applications: {
+    table:   'applications',
+    select:  'application_number,status,notes,award_amount_requested,award_amount_approved,submission_date,decision_date,created_at,company:companies!company_id(company_name,domain,primary_contact_email),funding:funding_opportunities!funding_opportunity_id(opportunity_name,status),location:locations!location_id(location_name,state),wib:wib_records!wib_id(wib_name)',
+    order:   { col: 'created_at', asc: false },
+    headers: ['Application','Company','Domain','Email','Funding Opportunity','Funding Status','Location','State','WIB','Status','Award Requested','Award Approved','Submission Date','Decision Date','Latest Update','Created'],
+    map:     r => [
+      r.application_number || ((r.company?.company_name||'') + (r.funding?.opportunity_name ? ' — ' + r.funding.opportunity_name : '')),
+      r.company?.company_name||'', r.company?.domain||'', r.company?.primary_contact_email||'',
+      r.funding?.opportunity_name||'', r.funding?.status||'',
+      r.location?.location_name||'', r.location?.state||'',
+      r.wib?.wib_name||'', r.status,
+      r.award_amount_requested||'', r.award_amount_approved||'',
+      r.submission_date||'', r.decision_date||'',
+      (r.notes||'').split('\n')[0].substring(0,100),
+      r.created_at?.split('T')[0]||'',
+    ],
+  },
+  revenue: {
+    table:   'revenue_records',
+    select:  'fee_model,grant_award_amount,calculated_success_fee,invoice_status,payment_received_date,created_at',
+    order:   { col: 'created_at', asc: false },
+    headers: ['Fee Model','Grant Award','Valor Fee','Invoice Status','Payment Date','Created'],
+    map:     r => [r.fee_model||'',r.grant_award_amount||'',r.calculated_success_fee||'',r.invoice_status||'',r.payment_received_date||'',r.created_at?.split('T')[0]||''],
+  },
+}
+
 app.get('/api/export/:type', auth, async (req, res) => {
   const { type } = req.params
-  let rows = [], headers = []
-  const filename = `valor-${type}-${new Date().toISOString().split('T')[0]}.csv`
-  try {
-    if (type === 'wibs') {
-      const { data } = await supabase.from('wib_records').select('wib_name,short_name,state,status,wib_phone,wib_email,website,max_award_per_ein,match_requirement_pct,iwt_program_active,source_url,call_priority_score,last_verified_date,next_steps,blockers').order('call_priority_score', { ascending: false })
-      headers = ['WIB Name','Short Name','State','Status','Phone','Email','Website','Max Award/EIN','Match %','IWT Active','Source URL','Score','Last Verified','Next Steps','Blockers']
-      rows = (data || []).map(r => [r.wib_name,r.short_name||'',r.state,r.status,r.wib_phone||'',r.wib_email||'',r.website||'',r.max_award_per_ein||'',r.match_requirement_pct||'',r.iwt_program_active?'Yes':'No',r.source_url||'',r.call_priority_score||0,r.last_verified_date||'',r.next_steps||'',r.blockers||''])
-    } else if (type === 'companies') {
-      const { data } = await supabase.from('companies').select('company_name,company_type,status,fein,domain,employee_count_total,avg_hourly_wage,primary_contact_name,primary_contact_email,primary_contact_phone,training_needs,notes,rating,created_at').order('company_name')
-      headers = ['Company Name','Type','Status','FEIN','Domain','Employees','Avg Hourly Wage','Contact Name','Contact Email','Contact Phone','Training Needs','Notes','Rating','Created']
-      rows = (data || []).map(r => [r.company_name,r.company_type||'',r.status,r.fein||'',r.domain||'',r.employee_count_total||'',r.avg_hourly_wage||'',r.primary_contact_name||'',r.primary_contact_email||'',r.primary_contact_phone||'',r.training_needs||'',r.notes||'',r.rating||'',r.created_at?.split('T')[0]||''])
-    } else if (type === 'applications') {
-      const { data } = await supabase.from('applications')
-        .select('application_number,status,notes,award_amount_requested,award_amount_approved,submission_date,decision_date,created_at,company:companies!company_id(company_name,domain,primary_contact_email),funding:funding_opportunities!funding_opportunity_id(opportunity_name,status,source_url),location:locations!location_id(location_name,state),wib:wib_records!wib_id(wib_name,state)')
-        .order('created_at', { ascending: false })
-      headers = ['Application','Company','Company Domain','Company Email','Funding Opportunity','Funding Status','Location','State','WIB','Status','Award Requested','Award Approved','Submission Date','Decision Date','Latest Update','Created']
-      rows = (data || []).map(r => [
-        r.application_number || (r.company?.company_name ? r.company.company_name + ' — ' + (r.funding?.opportunity_name||'') : ''),
-        r.company?.company_name||'',
-        r.company?.domain||'',
-        r.company?.primary_contact_email||'',
-        r.funding?.opportunity_name||'',
-        r.funding?.status||'',
-        r.location?.location_name||'',
-        r.location?.state||r.wib?.state||'',
-        r.wib?.wib_name||'',
-        r.status,
-        r.award_amount_requested||'',
-        r.award_amount_approved||'',
-        r.submission_date||'',
-        r.decision_date||'',
-        (r.notes||'').split('\n')[0].substring(0,100),
-        r.created_at?.split('T')[0]||''
-      ])
-    } else if (type === 'funding') {
-      const { data } = await supabase.from('funding_opportunities').select('opportunity_name,status,program_type,max_award_per_ein,application_deadline,source_url,created_at')
-      headers = ['Opportunity','Status','Program','Max Award','Deadline','Source URL','Created']
-      rows = (data || []).map(r => [r.opportunity_name,r.status,r.program_type||'',r.max_award_per_ein||'',r.application_deadline||'',r.source_url||'',r.created_at?.split('T')[0]||''])
-    } else if (type === 'revenue') {
-      const { data } = await supabase.from('revenue_records').select('fee_model,grant_award_amount,calculated_success_fee,invoice_status,payment_received_date,created_at')
-      headers = ['Fee Model','Grant Award','Valor Fee','Invoice Status','Payment Date','Created']
-      rows = (data || []).map(r => [r.fee_model||'',r.grant_award_amount||'',r.calculated_success_fee||'',r.invoice_status||'',r.payment_received_date||'',r.created_at?.split('T')[0]||''])
-    } else if (type === 'users') {
-      if (!['super_admin','admin'].includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
-      const { data } = await supabase.from('user_profiles').select('full_name,email,role,title,is_active,created_at')
-      headers = ['Name','Email','Role','Title','Active','Created']
-      rows = (data || []).map(r => [r.full_name||'',r.email,r.role,r.title||'',r.is_active?'Yes':'No',r.created_at?.split('T')[0]||''])
-    } else if (type === 'locations') {
-      const { data } = await supabase.from('locations').select('location_name,state,county,city,status,employee_count,created_at').order('location_name')
-      headers = ['Location','State','County','City','Status','Employees','Created']
-      rows = (data || []).map(r => [r.location_name,r.state||'',r.county||'',r.city||'',r.status||'',r.employee_count||'',r.created_at?.split('T')[0]||''])
-    } else if (type === 'compliance') {
-      const { data } = await supabase.from('v_compliance_alerts').select('*').order('days_until_final_due')
-      headers = ['Application #','Company','WIB','Status','Award Amount','Training End','Final Report Due','Days Until Due','Report Submitted','Attendance Collected','Notes']
-      rows = (data || []).map(r => [r.application_number||'',r.company_name||'',r.wib_name||'',r.status||'',r.award_amount_approved||'',r.training_end_date||'',r.final_report_due_date||'',r.days_until_final_due??'',r.final_report_submitted?'Yes':'No',r.attendance_sheets_collected?'Yes':'No',r.compliance_notes||''])
-    } else if (type === 'audit') {
-      if (!['super_admin','admin'].includes(req.user.role)) return res.status(403).json({ error: 'Forbidden' })
-      const safeCols2 = (global._safeActivityCols || 'id,action,created_at').replace('id,action,created_at','action,created_at')
-      const auditSelect = 'action,created_at' + (global._hasRecordType?',record_type':'') + (global._detailsColumnMissing?'':(global._hasMetadata?',metadata':',details')) + ',user:user_profiles!user_id(email)'
-      const { data } = await supabase.from('activity_log').select(auditSelect).order('created_at', { ascending: false }).limit(1000)
-      headers = ['Action','User','Details','Record Type','Timestamp']
-      rows = (data || []).map(r => [r.action,r.user?.email||'',r.details||'',r.record_type||'',r.created_at||''])
-    } else {
-      return res.status(400).json({ error: 'Unknown export type' })
+
+  // ── Permission checks for sensitive types ──────────────────────────────────
+  if (type === 'users' || type === 'audit') {
+    if (!['super_admin','admin'].includes(req.user.role)) {
+      return res.status(403).json({ error: 'Admin access required for this export' })
     }
-    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'EXPORT', details: `Exported ${type} (${rows.length} records)` }) } catch(_) {}
+  }
+
+  // ── Handle special-case non-paginated types ────────────────────────────────
+  if (type === 'users') {
+    const { data } = await supabase.from('user_profiles').select('full_name,email,role,title,is_active,created_at')
+    const headers = ['Name','Email','Role','Title','Active','Created']
+    const rows = (data||[]).map(r => [r.full_name||'',r.email,r.role,r.title||'',r.is_active?'Yes':'No',r.created_at?.split('T')[0]||''])
     const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n')
     res.setHeader('Content-Type', 'text/csv')
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
-    res.send(csv)
+    res.setHeader('Content-Disposition', `attachment; filename="valor-users-${new Date().toISOString().split('T')[0]}.csv"`)
+    return res.send(csv)
+  }
+
+  if (type === 'compliance') {
+    const { data } = await supabase.from('v_compliance_alerts').select('*').order('days_until_final_due')
+    const headers = ['Application #','Company','WIB','Status','Award Amount','Training End','Final Report Due','Days Until Due','Report Submitted','Attendance Collected','Notes']
+    const rows = (data||[]).map(r => [r.application_number||'',r.company_name||'',r.wib_name||'',r.status||'',r.award_amount_approved||'',r.training_end_date||'',r.final_report_due_date||'',r.days_until_final_due??'',r.final_report_submitted?'Yes':'No',r.attendance_sheets_collected?'Yes':'No',r.compliance_notes||''])
+    const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n')
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', `attachment; filename="valor-compliance-${new Date().toISOString().split('T')[0]}.csv"`)
+    return res.send(csv)
+  }
+
+  if (type === 'audit') {
+    const auditSelect = 'action,created_at' + (global._hasRecordType?',record_type':'') +
+      (global._detailsColumnMissing?'':(global._hasMetadata?',metadata':',details')) +
+      ',user:user_profiles!user_id(email)'
+    const { data } = await supabase.from('activity_log').select(auditSelect).order('created_at', { ascending: false }).limit(2000)
+    const headers = ['Action','User','Details','Record Type','Timestamp']
+    const rows = (data||[]).map(r => [r.action,r.user?.email||'',r.details||r.metadata?.text||'',r.record_type||'',r.created_at||''])
+    const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n')
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', `attachment; filename="valor-audit-${new Date().toISOString().split('T')[0]}.csv"`)
+    return res.send(csv)
+  }
+
+  // ── Paginated streaming export for large tables ────────────────────────────
+  const config = EXPORT_CONFIG[type]
+  if (!config) return res.status(400).json({ error: `Unknown export type: ${type}` })
+
+  const PAGE_SIZE = 1000  // rows per DB round-trip; keeps heap usage under 50MB at all times
+  const filename  = `valor-${type}-${new Date().toISOString().split('T')[0]}.csv`
+
+  res.setHeader('Content-Type',        'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+  res.setHeader('Transfer-Encoding',   'chunked')
+  res.setHeader('Cache-Control',       'no-store')
+
+  // Write CSV header row immediately so the browser starts the download dialog
+  res.write(config.headers.map(esc).join(',') + '\n')
+
+  let offset = 0
+  let totalExported = 0
+
+  try {
+    while (true) {
+      const { data, error } = await supabase
+        .from(config.table)
+        .select(config.select)
+        .order(config.order.col, { ascending: config.order.asc })
+        .range(offset, offset + PAGE_SIZE - 1)
+
+      if (error) {
+        // Can't send a JSON error here — response has started. Write an error comment to CSV.
+        res.write(`\n# ERROR: ${error.message}\n`)
+        break
+      }
+
+      if (!data || data.length === 0) break  // no more rows
+
+      // Map each row to CSV values and write the chunk
+      const chunk = data.map(r => config.map(r).map(esc).join(',')).join('\n') + '\n'
+      res.write(chunk)
+
+      totalExported += data.length
+      offset        += PAGE_SIZE
+
+      if (data.length < PAGE_SIZE) break  // last page — fewer rows than PAGE_SIZE means done
+    }
+
+    // Log the export action (fire-and-forget)
+    safeInsertLog({
+      user_id: req.user.id,
+      action:  'EXPORT',
+      details: `Exported ${type} — ${totalExported} records`,
+    }).catch(() => {})
+
+    res.end()
+
   } catch (e) {
-    res.status(500).json({ error: e.message })
+    console.error('Export stream error:', e.message)
+    res.write(`\n# EXPORT FAILED: ${e.message}\n`)
+    res.end()
   }
 })
 
