@@ -5051,194 +5051,447 @@ function smartAutoMatch(header, type) {
   return '__skip'
 }
 
+/* ═══════════════════════════════════════════════════
+   IMPORT WIZARD — standalone (not using showModal's
+   button-state-machine because async return false is
+   unreliable for multi-step flows)
+═══════════════════════════════════════════════════ */
+
+var IMPORT_SYNONYMS_MAP = {
+  /* universal */
+  'name':            {locations:'location_name', companies:'company_name', wibs:'wib_name', funding:'opportunity_name', applications:'company_name'},
+  'status':          'status',
+  'state':           'state',
+  'city':            'city',
+  'county':          'county',
+  'address':         'address',
+  'notes':           'notes',
+  'email':           {companies:'primary_contact_email', wibs:'wib_email'},
+  'phone':           {companies:'primary_contact_phone', wibs:'wib_phone'},
+  'type':            {wibs:'wib_type', companies:'company_type'},
+  /* locations */
+  'location':        'location_name',
+  'location name':   'location_name',
+  'facility':        'location_name',
+  'facility name':   'location_name',
+  'nursing home':    'location_name',
+  'parent operator': 'parent_operator',
+  'operator':        {locations:'parent_operator'},
+  'parent company':  'parent_operator',
+  'company':         {locations:'parent_operator', applications:'company_name'},
+  'company name':    'company_name',
+  'employee count':  'employee_count',
+  'employees':       'employee_count',
+  'employee_count':  'employee_count',
+  'bed count':       'employee_count',
+  'beds':            'employee_count',
+  /* companies */
+  'domain':          'domain',
+  'website':         {companies:'domain', wibs:'website'},
+  'web site':        {companies:'domain', wibs:'website'},
+  'fein':            'fein',
+  'tax id':          'fein',
+  'ein':             'fein',
+  'rating':          'rating',
+  'supported by':    'supported_by',
+  'contact name':    'primary_contact_name',
+  'contact email':   'primary_contact_email',
+  'contact phone':   'primary_contact_phone',
+  'is 25%':          'is_25_pct_operator',
+  'is 25% operator': 'is_25_pct_operator',
+  'training needs':  'training_needs',
+  /* wibs */
+  'wib name':        'wib_name',
+  'workforce board': 'wib_name',
+  'board name':      'wib_name',
+  'short name':      'short_name',
+  'wib email':       'wib_email',
+  'wib email address':'wib_email',
+  'wib phone':       'wib_phone',
+  'wib type':        'wib_type',
+  'source url':      'source_url',
+  'source':          'source_url',
+  'max award':       'max_award_per_ein',
+  'max award per ein':'max_award_per_ein',
+  'call priority':   'call_priority_score',
+  'call priority score':'call_priority_score',
+  'website url':     'website',
+  'web url':         'website',
+  /* funding */
+  'opportunity name':'opportunity_name',
+  'funding opportunity':'opportunity_name',
+  'opportunity':     'opportunity_name',
+  'application link':'application_link',
+  'application url': 'application_link',
+  'deadline':        'application_deadline',
+  'application deadline':'application_deadline',
+  'max per ein':     'max_award_per_ein',
+  'max per employee':'max_award_per_employee',
+  'promotion':       'promotion_for_participants',
+  'wage increase':   'wage_increase_for_participants',
+  'blocked reason':  'blocked_reason',
+  /* applications */
+  'application number':'application_number',
+  'wib':             'wib_name',
+  'amount requested':'award_amount_requested',
+  'amount approved': 'award_amount_approved',
+  'award amount':    'award_amount_requested',
+  'award':           'award_amount_requested',
+  'submission date': 'submission_date',
+  'submitted':       'submission_date',
+  'decision date':   'decision_date',
+  'latest update':   'notes',
+  'lastest update':  'notes',
+  'last update':     'notes',
+}
+
+function smartMatch(header, type) {
+  var h = header.toLowerCase().trim().replace(/[_\-]/g,' ')
+  // Direct match
+  if (h in IMPORT_SYNONYMS_MAP) {
+    var v = IMPORT_SYNONYMS_MAP[h]
+    if (typeof v === 'object' && v[type]) return v[type]
+    if (typeof v === 'string') return v
+  }
+  // Strip special chars
+  var hc = h.replace(/[^a-z0-9 ]/g,'').trim()
+  if (hc in IMPORT_SYNONYMS_MAP) {
+    var v2 = IMPORT_SYNONYMS_MAP[hc]
+    if (typeof v2 === 'object' && v2[type]) return v2[type]
+    if (typeof v2 === 'string') return v2
+  }
+  // Substring match against field keys
+  var fields = IMPORT_FIELDS[type] || []
+  var hn = h.replace(/[^a-z0-9]/g,'')
+  for (var i=0;i<fields.length;i++) {
+    var fk = fields[i].key.toLowerCase().replace(/[^a-z0-9]/g,'')
+    if (fk === hn) return fields[i].key
+    if (fk.length > 3 && hn.includes(fk)) return fields[i].key
+    if (hn.length > 3 && fk.includes(hn)) return fields[i].key
+  }
+  return '__skip'
+}
+
 function openImportModal(type) {
-  var typeLabels = {companies:'Companies',wibs:'Workforce Boards',locations:'Locations',funding:'Funding Opportunities',applications:'Applications'}
+  var typeLabels = {companies:'Companies', wibs:'Workforce Boards', locations:'Locations', funding:'Funding Opportunities', applications:'Applications'}
   var label = typeLabels[type] || type
   var reqNote = {
-    companies: 'Required: Company Name. Supports linking by name.',
-    wibs: 'Required: WIB Name + State + Source URL.',
-    locations: 'Required: Location Name + State. Supports parent company linking by name.',
-    funding: 'Required: Opportunity Name + Source URL.',
+    companies:    'Required: Company Name.',
+    wibs:         'Required: WIB Name + State.',
+    locations:    'Required: Location Name + State. Supports parent company linking by name.',
+    funding:      'Required: Opportunity Name.',
     applications: 'Required: Company Name.',
   }
-  var fieldCount = (IMPORT_FIELDS[type]||[]).filter(function(f){ return f.key!=='__skip' }).length
-  window._importStep = 1
-  showModal('📥 Import '+label+' — '+fieldCount+' Supported Fields',
-    '<div class="wiz-steps">' +
-    '<div class="wiz-step active" id="wiz-s1"><div class="wiz-num">1</div><div class="wiz-label">Upload File</div></div>' +
-    '<div class="wiz-line"></div>' +
-    '<div class="wiz-step" id="wiz-s2"><div class="wiz-num">2</div><div class="wiz-label">Map Fields</div></div>' +
-    '<div class="wiz-line"></div>' +
-    '<div class="wiz-step" id="wiz-s3"><div class="wiz-num">3</div><div class="wiz-label">Import</div></div>' +
-    '</div>' +
-    '<div id="import-step-area">' +
-    '<div class="alert alert-info" style="margin-bottom:10px">' +
-    'ℹ️ '+reqNote[type]+' <strong>No row limits</strong> — files of any size are imported automatically in batches.' +
-    '</div>' +
-    '<div class="form-row form-full" style="margin-bottom:8px"><div class="form-group">' +
-    '<div class="form-label">📥 Download CSV Template ('+fieldCount+' fields)</div>' +
-    '<a href="/api/template/'+type+'" class="btn btn-sm" target="_blank" style="display:inline-flex;margin-top:4px">⬇ Download CSV Template</a>' +
-    '</div></div>' +
-    '<div class="form-row form-full"><div class="form-group">' +
-    '<div class="form-label">Upload CSV or Excel File (.csv, .xlsx, .xls)</div>' +
-    '<input type="file" id="import-file-input" accept=".csv,.tsv,.txt,.xlsx,.xls" style="border:.5px solid var(--border2);border-radius:7px;padding:8px 10px;font-size:11.5px;width:100%;margin-top:4px">' +
-    '</div></div>' +
-    '<div id="import-parse-err"></div>' +
-    '</div>',
-  async function() {
+  var fields = IMPORT_FIELDS[type] || []
+  var fieldCount = fields.filter(function(f){return f.key!=='__skip'}).length
 
-    /* ── STEP 1: Parse the CSV ── */
-    if (window._importStep === 1) {
-      var fileEl = document.getElementById('import-file-input')
-      if (!fileEl||!fileEl.files||!fileEl.files[0]) {
-        document.getElementById('import-parse-err').innerHTML='<div class="alert alert-error">Please select a CSV file</div>'
-        return false
-      }
+  // Build the wizard modal HTML directly — no showModal() state machine
+  var wizHtml = `
+  <div class="modal-overlay" onclick="event.stopPropagation()">
+    <div class="modal modal-xl" onclick="event.stopPropagation()" style="max-height:90vh;display:flex;flex-direction:column">
+      <div class="modal-hd">
+        <div class="modal-title">📥 Import ${label} — ${fieldCount} Supported Fields</div>
+        <button class="modal-close" onclick="closeImportWizard()">✕</button>
+      </div>
+      <div class="modal-body" id="iwiz-body" style="flex:1;overflow-y:auto;padding:18px 20px">
+
+        <!-- Step indicators -->
+        <div class="wiz-steps" id="iwiz-steps">
+          <div class="wiz-step active" id="iwiz-s1"><div class="wiz-num">1</div><div class="wiz-label">Upload File</div></div>
+          <div class="wiz-line"></div>
+          <div class="wiz-step" id="iwiz-s2"><div class="wiz-num">2</div><div class="wiz-label">Map Fields</div></div>
+          <div class="wiz-line"></div>
+          <div class="wiz-step" id="iwiz-s3"><div class="wiz-num">3</div><div class="wiz-label">Import</div></div>
+        </div>
+
+        <!-- Step 1 content -->
+        <div id="iwiz-step1">
+          <div class="alert alert-info" style="margin-bottom:12px">
+            ℹ️ ${reqNote[type]} <strong>No row limits</strong> — files of any size are imported automatically in batches.
+          </div>
+          <div style="margin-bottom:12px">
+            <a href="/api/template/${type}" target="_blank" class="btn btn-sm" style="display:inline-flex;align-items:center;gap:6px">
+              ⬇ Download CSV Template (${fieldCount} fields)
+            </a>
+          </div>
+          <div class="form-label" style="margin-bottom:6px">Upload CSV or Excel File (.csv, .xlsx, .xls)</div>
+          <input type="file" id="iwiz-file" accept=".csv,.tsv,.txt,.xlsx,.xls"
+            style="border:.5px solid var(--border2);border-radius:7px;padding:10px 12px;font-size:12px;width:100%;box-sizing:border-box">
+          <div id="iwiz-file-err" style="margin-top:8px"></div>
+          <div id="iwiz-preview" style="margin-top:10px"></div>
+        </div>
+
+        <!-- Step 2 content (hidden initially) -->
+        <div id="iwiz-step2" style="display:none"></div>
+
+        <!-- Step 3 content (hidden initially) -->
+        <div id="iwiz-step3" style="display:none"></div>
+
+      </div>
+      <div class="modal-foot" style="border-top:.5px solid var(--border);padding:12px 20px;display:flex;align-items:center;justify-content:space-between">
+        <button class="btn btn-ghost" onclick="closeImportWizard()" id="iwiz-cancel">Cancel</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn" id="iwiz-back" onclick="iwizBack()" style="display:none">← Back</button>
+          <button class="btn btn-primary" id="iwiz-next" onclick="iwizNext('${type}')">Next: Map Fields →</button>
+        </div>
+      </div>
+    </div>
+  </div>`
+
+  document.getElementById('modal-container').innerHTML = wizHtml
+  window._iwizType = type
+  window._iwizStep = 1
+  window._iwizRows = null
+
+  // File input preview
+  document.getElementById('iwiz-file').addEventListener('change', function(e){
+    var f = e.target.files[0]
+    if (!f) return
+    var prev = document.getElementById('iwiz-preview')
+    prev.innerHTML = '<div style="font-size:11px;color:var(--text3)">Reading file...</div>'
+    f.text().then(function(text){
+      var rows = parseCSVText(text)
+      if (!rows || !rows.length) { prev.innerHTML = '<div class="alert alert-error">No data found — check the file has a header row</div>'; return }
+      window._iwizParsed = rows
+      var headers = Object.keys(rows[0])
+      prev.innerHTML = '<div style="display:flex;gap:14px;font-size:11px;color:var(--text2)">' +
+        '<span>📄 <strong style="color:var(--text)">' + rows.length.toLocaleString() + '</strong> rows</span>' +
+        '<span>📋 <strong style="color:var(--text)">' + headers.length + '</strong> columns</span>' +
+        '<span style="color:var(--green-t)">✓ File ready</span>' +
+        '</div>'
+    }).catch(function(){ prev.innerHTML = '<div class="alert alert-error">Could not read file</div>' })
+  })
+}
+
+function closeImportWizard() {
+  document.getElementById('modal-container').innerHTML = ''
+  window._iwizRows = null
+  window._iwizParsed = null
+  window._iwizType = null
+  window._iwizStep = 1
+}
+
+function iwizSetStep(n) {
+  window._iwizStep = n
+  var steps = [1,2,3]
+  steps.forEach(function(s){
+    var el = document.getElementById('iwiz-s'+s)
+    if (!el) return
+    if (s < n) {
+      el.className = 'wiz-step done'
+      el.querySelector('.wiz-num').style.cssText = 'background:var(--green);color:#fff'
+    } else if (s === n) {
+      el.className = 'wiz-step active'
+      el.querySelector('.wiz-num').style.cssText = 'background:var(--nv);color:var(--cream)'
+    } else {
+      el.className = 'wiz-step'
+      el.querySelector('.wiz-num').style.cssText = ''
+    }
+  })
+  document.getElementById('iwiz-step1').style.display = n===1?'block':'none'
+  document.getElementById('iwiz-step2').style.display = n===2?'block':'none'
+  document.getElementById('iwiz-step3').style.display = n===3?'block':'none'
+}
+
+async function iwizNext(type) {
+  var step = window._iwizStep
+
+  /* ── STEP 1 → 2: Parse file and build field mapping UI ── */
+  if (step === 1) {
+    var fileEl = document.getElementById('iwiz-file')
+    if (!fileEl || !fileEl.files || !fileEl.files[0]) {
+      document.getElementById('iwiz-file-err').innerHTML = '<div class="alert alert-error">Please select a CSV or Excel file first</div>'
+      return
+    }
+    var nextBtn = document.getElementById('iwiz-next')
+    nextBtn.disabled = true
+    nextBtn.textContent = 'Reading file...'
+
+    try {
       var text = await fileEl.files[0].text()
       var rows = parseCSVText(text)
-      if (!rows||!rows.length) {
-        document.getElementById('import-parse-err').innerHTML='<div class="alert alert-error">No data found in file — check that the file has a header row and data rows</div>'
-        return false
+      if (!rows || !rows.length) {
+        document.getElementById('iwiz-file-err').innerHTML = '<div class="alert alert-error">No data found in file. Make sure it has a header row and at least one data row.</div>'
+        nextBtn.disabled = false
+        nextBtn.textContent = 'Next: Map Fields →'
+        return
       }
-      window._importRows = rows
-      window._importType = type
-      window._importStep = 2
-
-      /* mark step 2 active */
-      var s1 = document.getElementById('wiz-s1'), s2 = document.getElementById('wiz-s2')
-      if (s1) { s1.className='wiz-step done'; s1.querySelector('.wiz-num').style.background='var(--green)'; s1.querySelector('.wiz-num').style.color='#fff' }
-      if (s2) { s2.className='wiz-step active'; s2.querySelector('.wiz-num').style.background='var(--nv)'; s2.querySelector('.wib-num'); s2.querySelector('.wiz-num').style.color='var(--cream)' }
-      var btn = document.getElementById('modal-ok-btn')
-      if (btn) { btn.textContent='Start Import →'; btn.disabled=false }
-
+      window._iwizRows = rows
       var headers = Object.keys(rows[0])
-      var fields  = IMPORT_FIELDS[type] || [{key:'__skip',label:'— Skip —'}]
+      var fields = IMPORT_FIELDS[type] || []
 
-      /* build field mapping UI */
-      var mappedCount = 0
-      var rowsHtml = headers.map(function(h, i) {
-        var matched = smartAutoMatch(h, type)
-        if (matched !== '__skip') mappedCount++
-        var sampleVal = ''
-        for (var ri = 0; ri < Math.min(3, rows.length); ri++) {
-          if (rows[ri][h] && String(rows[ri][h]).trim()) { sampleVal = String(rows[ri][h]).trim(); break }
+      /* Auto-match headers to CRM fields */
+      var matchCount = 0
+      var rowsHtml = headers.map(function(h, i){
+        var matched = smartMatch(h, type)
+        if (matched !== '__skip') matchCount++
+        /* Get sample values from first 3 rows */
+        var samples = []
+        for (var ri=0; ri<Math.min(3, rows.length); ri++) {
+          var v = rows[ri][h]
+          if (v && String(v).trim()) { samples.push(String(v).trim()); break }
         }
-        return '<div class="fmr-grid">' +
+        var sampleTxt = samples.length ? samples[0].slice(0,50)+(samples[0].length>50?'...':'') : ''
+
+        return '<div class="fmr-grid" style="align-items:start">' +
           '<div>' +
-            '<div class="fmr-src" title="'+h+'">'+h+'</div>' +
-            (sampleVal ? '<div style="font-size:9.5px;color:var(--text3);margin-top:2px;font-style:italic">e.g. '+sampleVal.slice(0,40)+(sampleVal.length>40?'...':'')+'</div>' : '') +
+            '<div class="fmr-src" style="font-weight:600;color:var(--text)">' + h + '</div>' +
+            (sampleTxt ? '<div style="font-size:9.5px;color:var(--text3);margin-top:3px;font-style:italic">e.g. ' + sampleTxt + '</div>' : '<div style="font-size:9.5px;color:var(--text4);margin-top:2px">(empty)</div>') +
           '</div>' +
-          '<div class="fmr-arrow">→</div>' +
-          '<select class="fmr-sel" id="fmr-sel-'+i+'">' +
-            fields.map(function(f){ return '<option value="'+f.key+'"'+(f.key===matched?' selected':'')+'>'+(f.required?'★ ':'')+f.label+'</option>' }).join('') +
+          '<div class="fmr-arrow" style="padding-top:6px">→</div>' +
+          '<select class="fmr-sel" id="fmr-sel-' + i + '">' +
+            '<option value="__skip">— Skip this column —</option>' +
+            fields.map(function(f){ return '<option value="' + f.key + '"' + (f.key===matched?' selected':'') + '>' + (f.required?'★ ':'') + f.label + '</option>' }).join('') +
           '</select>' +
         '</div>'
       }).join('')
 
-      document.getElementById('import-step-area').innerHTML =
-        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
-          '<div style="font-size:11.5px;color:var(--text2)"><strong>'+headers.length+'</strong> CSV columns · <span style="color:var(--green-t)">'+rows.length+' rows</span></div>' +
-          '<div style="font-size:10.5px;color:var(--text3)"><span style="color:var(--green-t);font-weight:600">'+mappedCount+'</span> auto-matched · review below</div>' +
-        '</div>' +
-        '<div style="display:grid;grid-template-columns:1fr 18px 1fr;gap:6px;margin-bottom:6px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;padding:0 10px">' +
-          '<span>CSV Column (your file)</span><span></span><span>CRM Field (destination)</span>' +
-        '</div>' +
-        '<div style="max-height:340px;overflow-y:auto;padding-bottom:8px">' + rowsHtml + '</div>' +
-        '<div class="alert alert-info" style="margin-top:8px;font-size:10.5px">★ = Required field. Columns mapped to "— Skip —" will be ignored.</div>'
+      /* Required field check display */
+      var reqFields = fields.filter(function(f){return f.required})
 
-      return false /* keep modal open */
-    }
-
-    /* ── STEP 2: Run the import ── */
-    if (window._importStep === 2) {
-      var headers2 = Object.keys(window._importRows[0])
-      var fieldMap = {}
-      headers2.forEach(function(h, i) {
-        var sel = document.getElementById('fmr-sel-'+i)
-        if (sel && sel.value && sel.value !== '__skip') fieldMap[h] = sel.value
-      })
-
-      /* check required fields are mapped */
-      var reqFields = (IMPORT_FIELDS[type]||[]).filter(function(f){ return f.required })
-      var missingReq = reqFields.filter(function(rf){
-        return !Object.values(fieldMap).includes(rf.key)
-      })
-      if (missingReq.length) {
-        showToast('Please map required field: '+missingReq.map(function(f){ return f.label }).join(', '), 'error')
-        return false
-      }
-
-      /* remap all rows */
-      var mappedRows = window._importRows.map(function(row) {
-        var out = {}
-        Object.keys(fieldMap).forEach(function(csvCol) {
-          var val = row[csvCol]
-          if (val !== undefined && String(val).trim()) out[fieldMap[csvCol]] = String(val).trim()
-        })
-        /* also pass original keys for server-side fallback matching */
-        return out
-      })
-
-      /* mark step 3 active */
-      var btn2 = document.getElementById('modal-ok-btn')
-      if (btn2) { btn2.disabled=true; btn2.textContent='Importing...' }
-      var s3 = document.getElementById('wiz-s3')
-      if (s3) { s3.className='wiz-step active'; s3.querySelector('.wiz-num').style.background='var(--nv)'; s3.querySelector('.wiz-num').style.color='var(--cream)' }
-
-      document.getElementById('import-step-area').innerHTML =
-        '<div style="margin-bottom:10px;font-size:12px;font-weight:500">Importing '+mappedRows.length+' records...</div>' +
-        '<div class="prog-outer"><div class="prog-inner" id="import-prog" style="width:0%"></div></div>' +
-        '<div id="import-prog-label" style="font-size:10.5px;color:var(--text3);margin-bottom:12px">Starting...</div>' +
-        '<div id="import-errors"></div>'
-
-      var BATCH = 200
-      var totalBatches = Math.ceil(mappedRows.length / BATCH)
-      var totalCreated = 0
-      var allErrors = []
-
-      for (var b = 0; b < totalBatches; b++) {
-        var batch = mappedRows.slice(b * BATCH, (b+1) * BATCH)
-        var pct = Math.round(((b+1) / totalBatches) * 100)
-        var progEl = document.getElementById('import-prog')
-        var labelEl = document.getElementById('import-prog-label')
-        if (progEl) progEl.style.width = pct+'%'
-        if (labelEl) labelEl.textContent = 'Batch '+(b+1)+' of '+totalBatches+' — '+pct+'% complete ('+totalCreated+' imported so far)'
-        try {
-          var result = await api('/api/import/'+type, 'POST', {rows:batch, batch:b+1, totalBatches:totalBatches})
-          totalCreated += result.created || 0
-          if (result.errors) allErrors = allErrors.concat(result.errors.slice(0,5))
-        } catch(e) {
-          allErrors.push('Batch '+(b+1)+' failed: '+e.message)
-        }
-      }
-
-      /* show summary */
-      var errEl = document.getElementById('import-errors')
-      var progEl2 = document.getElementById('import-prog')
-      var labelEl2 = document.getElementById('import-prog-label')
-      if (progEl2) { progEl2.style.width='100%'; progEl2.style.background=totalCreated>0?'var(--green)':'var(--amber)' }
-      if (labelEl2) labelEl2.textContent = 'Import complete! '+totalCreated+' imported · '+(mappedRows.length-totalCreated)+' skipped'
-
-      if (errEl) {
-        errEl.innerHTML =
-          '<div class="import-summary">' +
-            '<div class="isn-card"><div class="isn-n">'+mappedRows.length+'</div><div class="isn-l">Total rows</div></div>' +
-            '<div class="isn-card"><div class="isn-n" style="color:var(--green-t)">'+totalCreated+'</div><div class="isn-l">Records imported</div></div>' +
-            '<div class="isn-card"><div class="isn-n" style="color:'+(allErrors.length?'var(--red-t)':'var(--green-t)')+'">'+allErrors.length+'</div><div class="isn-l">Errors</div></div>' +
+      document.getElementById('iwiz-step2').innerHTML =
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+          '<div style="font-size:12px">' +
+            '<strong style="color:var(--text)">' + headers.length + '</strong> CSV columns · ' +
+            '<span style="color:var(--green-t);font-weight:600">' + rows.length.toLocaleString() + '</span> rows' +
           '</div>' +
-          (allErrors.length ? '<div class="alert alert-warn" style="margin-top:10px;font-size:10.5px;max-height:100px;overflow-y:auto"><strong>First errors:</strong><br>'+allErrors.slice(0,5).join('<br>')+'</div>' : '') +
-          (totalCreated===0 ? '<div class="alert alert-error" style="margin-top:8px"><strong>Nothing imported.</strong> First error: '+(allErrors[0]||'Unknown')+'<br><br><strong>Common fixes:</strong><br>• Check column names match the template<br>• Required fields must not be empty<br>• <a href="/api/template/'+type+'" target="_blank" class="cell-link">Download CSV template</a></div>' : '') +
-          '<div style="margin-top:12px;text-align:center">' +
-            '<button class="btn btn-primary" onclick="closeModal();loadPage(\''+type+'\')">Done — View '+label+'</button>' +
-          '</div>'
-      }
+          '<div style="font-size:11px;color:var(--text3)">' +
+            '<span style="color:var(--green-t);font-weight:600">' + matchCount + '</span> / ' + headers.length + ' auto-matched' +
+          '</div>' +
+        '</div>' +
+        '<div style="background:var(--bg2);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:10.5px;color:var(--text2)">' +
+          '★ = Required. ' + reqFields.map(function(f){return '<strong>'+f.label+'</strong>'}).join(', ') + ' must be mapped to import.' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:1fr 28px 1fr;gap:4px;padding:0 2px 6px;font-size:9.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">' +
+          '<span>Your CSV Column + Sample</span><span></span><span>Maps to CRM Field</span>' +
+        '</div>' +
+        '<div style="max-height:360px;overflow-y:auto;border:.5px solid var(--border1);border-radius:8px;padding:6px 8px">' + rowsHtml + '</div>'
 
-      window._importStep = 1
-      window._importRows = null
-      return false
+      iwizSetStep(2)
+      document.getElementById('iwiz-back').style.display = 'inline-flex'
+      var nb = document.getElementById('iwiz-next')
+      nb.disabled = false
+      nb.textContent = '▶ Start Import'
+
+    } catch(e) {
+      document.getElementById('iwiz-file-err').innerHTML = '<div class="alert alert-error">Error reading file: ' + e.message + '</div>'
+      nextBtn.disabled = false
+      nextBtn.textContent = 'Next: Map Fields →'
     }
-  }, 'modal-xl')
+    return
+  }
+
+  /* ── STEP 2 → 3: Validate mapping and run import ── */
+  if (step === 2) {
+    var rows2 = window._iwizRows
+    if (!rows2 || !rows2.length) { showToast('No data to import','error'); return }
+
+    var headers2 = Object.keys(rows2[0])
+    var fieldMap = {}
+    headers2.forEach(function(h, i){
+      var sel = document.getElementById('fmr-sel-' + i)
+      if (sel && sel.value && sel.value !== '__skip') fieldMap[h] = sel.value
+    })
+
+    /* Validate required fields are mapped */
+    var fields2 = IMPORT_FIELDS[type] || []
+    var reqFields2 = fields2.filter(function(f){return f.required})
+    var missing = reqFields2.filter(function(rf){
+      return !Object.values(fieldMap).includes(rf.key)
+    })
+    if (missing.length) {
+      showToast('Please map required field: ' + missing.map(function(f){return f.label}).join(', '), 'error')
+      return
+    }
+
+    /* Remap all rows */
+    var mapped = rows2.map(function(row){
+      var out = {}
+      Object.keys(fieldMap).forEach(function(csvCol){
+        var val = row[csvCol]
+        if (val !== undefined && String(val).trim()) out[fieldMap[csvCol]] = String(val).trim()
+      })
+      return out
+    })
+
+    /* Switch to step 3 - progress view */
+    iwizSetStep(3)
+    document.getElementById('iwiz-next').style.display = 'none'
+    document.getElementById('iwiz-back').style.display = 'none'
+    document.getElementById('iwiz-cancel').textContent = 'Close'
+
+    document.getElementById('iwiz-step3').innerHTML =
+      '<div style="font-size:13px;font-weight:600;margin-bottom:10px">Importing ' + mapped.length.toLocaleString() + ' records...</div>' +
+      '<div class="prog-outer" style="margin-bottom:8px"><div class="prog-inner" id="iwiz-prog" style="width:0%"></div></div>' +
+      '<div id="iwiz-prog-label" style="font-size:11px;color:var(--text3);margin-bottom:16px">Starting...</div>' +
+      '<div id="iwiz-result"></div>'
+
+    /* Run batched import */
+    var BATCH = 200
+    var total3 = mapped.length
+    var totalBatches = Math.ceil(total3 / BATCH)
+    var totalCreated = 0
+    var allErrors = []
+
+    for (var b=0; b<totalBatches; b++) {
+      var batch = mapped.slice(b*BATCH, (b+1)*BATCH)
+      var pct = Math.round(((b+1)/totalBatches)*100)
+      var progEl = document.getElementById('iwiz-prog')
+      var labelEl = document.getElementById('iwiz-prog-label')
+      if (progEl) progEl.style.width = pct+'%'
+      if (labelEl) labelEl.textContent = 'Batch '+(b+1)+' of '+totalBatches+' ('+pct+'% complete) — '+totalCreated+' imported so far'
+      try {
+        var res = await api('/api/import/'+type, 'POST', {rows:batch, batch:b+1, totalBatches:totalBatches})
+        totalCreated += res.created || 0
+        if (res.errors && res.errors.length) allErrors = allErrors.concat(res.errors.slice(0,5))
+      } catch(e2) {
+        allErrors.push('Batch '+(b+1)+' failed: '+e2.message)
+      }
+    }
+
+    /* Final summary */
+    var skipped = total3 - totalCreated
+    var progEl2 = document.getElementById('iwiz-prog')
+    var labelEl2 = document.getElementById('iwiz-prog-label')
+    if (progEl2) { progEl2.style.width='100%'; progEl2.style.background = totalCreated>0 ? 'var(--green)' : 'var(--red)' }
+    if (labelEl2) labelEl2.textContent = 'Done — '+totalCreated.toLocaleString()+' imported · '+skipped.toLocaleString()+' skipped'
+
+    var resultEl = document.getElementById('iwiz-result')
+    if (resultEl) {
+      resultEl.innerHTML =
+        '<div class="import-summary" style="margin-bottom:12px">' +
+          '<div class="isn-card"><div class="isn-n">'+total3.toLocaleString()+'</div><div class="isn-l">Total rows</div></div>' +
+          '<div class="isn-card"><div class="isn-n" style="color:var(--green-t)">'+totalCreated.toLocaleString()+'</div><div class="isn-l">Imported</div></div>' +
+          '<div class="isn-card"><div class="isn-n" style="color:'+(allErrors.length?'var(--red-t)':'var(--green-t)')+'">'+allErrors.length+'</div><div class="isn-l">Errors</div></div>' +
+        '</div>' +
+        (allErrors.length ? '<div class="alert alert-warn" style="font-size:10.5px;max-height:120px;overflow-y:auto;margin-bottom:10px"><strong>Errors:</strong><br>'+allErrors.slice(0,8).join('<br>')+'</div>' : '') +
+        (totalCreated===0 ?
+          '<div class="alert alert-error" style="margin-bottom:10px">' +
+            '<strong>Nothing imported.</strong> Error: ' + (allErrors[0]||'All rows were skipped') + '<br><br>' +
+            '<strong>What to do:</strong><br>' +
+            '• Check that your required column is mapped correctly above<br>' +
+            '• The required field for ' + type + ' is: <strong>' + (IMPORT_FIELDS[type]||[]).filter(function(f){return f.required}).map(function(f){return f.label}).join(', ') + '</strong><br>' +
+            '• <a href="/api/template/'+type+'" target="_blank" class="cell-link">Download the CSV template</a> to see the exact format' +
+          '</div>' : '') +
+        '<div style="display:flex;gap:8px;justify-content:center;margin-top:8px">' +
+          '<button class="btn btn-primary" onclick="closeImportWizard();loadPage(\''+type+'\')">✓ Done — View ' + (type==='wibs'?'Workforce Boards':type.charAt(0).toUpperCase()+type.slice(1)) + '</button>' +
+          (totalCreated===0 ? '<button class="btn" onclick="iwizSetStep(2);document.getElementById(\'iwiz-next\').style.display=\'\';document.getElementById(\'iwiz-next\').textContent=\'▶ Start Import\';document.getElementById(\'iwiz-back\').style.display=\'inline-flex\'">← Fix Mapping</button>' : '') +
+        '</div>'
+    }
+    return
+  }
 }
+
+function iwizBack() {
+  if (window._iwizStep === 2) {
+    iwizSetStep(1)
+    document.getElementById('iwiz-back').style.display = 'none'
+    document.getElementById('iwiz-next').style.display = ''
+    document.getElementById('iwiz-next').textContent = 'Next: Map Fields →'
+    document.getElementById('iwiz-next').disabled = false
+  }
+}
+
 
 function parseCSVText(text) {
   var lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n')
