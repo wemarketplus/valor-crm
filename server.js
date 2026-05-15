@@ -340,7 +340,7 @@ app.get('/api/wibs/:id', auth, async (req, res) => {
 })
 
 app.post('/api/wibs', auth, async (req, res) => {
-  const allowed = ['wib_name','short_name','state','status','wib_phone','wib_email','website','max_award_per_ein','match_requirement_pct','wib_type','source_url','google_drive_folder_url','next_steps','blockers','notes','iwt_program_active','independent_creation_logged','last_verified_date']
+  const allowed = ['wib_name','short_name','state','status','wib_phone','wib_email','website','max_award_per_ein','match_requirement_pct','wib_type','source_url','google_drive_folder_url','next_steps','blockers','notes','iwt_program_active','independent_creation_logged','last_verified_date','call_priority_score']
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   if (!body.wib_name?.trim()) return res.status(400).json({ error: 'WIB name required' })
   if (!body.source_url?.trim()) return res.status(400).json({ error: 'Source URL required (public government page)' })
@@ -351,7 +351,7 @@ app.post('/api/wibs', auth, async (req, res) => {
 })
 
 app.put('/api/wibs/:id', auth, async (req, res) => {
-  const allowed = ['wib_name','short_name','state','status','wib_phone','wib_email','website','max_award_per_ein','match_requirement_pct','wib_type','source_url','google_drive_folder_url','next_steps','blockers','notes','iwt_program_active','independent_creation_logged','last_verified_date']
+  const allowed = ['wib_name','short_name','state','status','wib_phone','wib_email','website','max_award_per_ein','match_requirement_pct','wib_type','source_url','google_drive_folder_url','next_steps','blockers','notes','iwt_program_active','independent_creation_logged','last_verified_date','call_priority_score']
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   const { data, error } = await supabase.from('wib_records').update(body).eq('id', req.params.id).select('*, owner:user_profiles!owner_id(full_name,email)').single()
   if (error) return res.status(400).json({ error: error.message })
@@ -984,7 +984,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
         if (contactCols.length) noteParts.push('Contacts: ' + contactCols.map(([,v])=>v).join(', '))
         // Call priority score from Attio readonly field
         const callPriorityVal = getWibField(row, 'Call Priority','call_priority','READONLY In-Network','Priority Score','In-Network Locations')
-        if (callPriorityVal) noteParts.push('Call Priority Score: ' + callPriorityVal)
+        const callPriorityNum = callPriorityVal ? parseInt(String(callPriorityVal).replace(/[^0-9]/g, '')) || 0 : 0
         // Type (State vs Regional)
         const wibTypeVal = getWibField(row, 'Type','WIB Type','Board Type','Organization Type')
         if (wibTypeVal) noteParts.push('WIB Type: ' + wibTypeVal)
@@ -1021,7 +1021,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
           || (rawState ? stateAbbr[rawState.toLowerCase()] : null)
           || 'US'  // Final fallback — 'state' is NOT NULL in wib_records
 
-        valid.push({
+        const wibRecord = {
           wib_name: name,
           short_name: getWibField(row, 'Short Name','Short','Abbreviation','Acronym') || null,
           state: stateValue,
@@ -1029,12 +1029,14 @@ app.post('/api/import/:type', auth, async (req, res) => {
           wib_email: getWibField(row, 'WIB Email Address','Email Address','Email','Contact Email') || null,
           wib_phone: getWibField(row, 'Phone','WIB Phone','Contact Phone','Phone Number') || null,
           website: domain || null,
-          source_url: website || name || 'https://careerOneStop.org', // NOT NULL in DB
+          source_url: website || name || 'https://careerOneStop.org',
           notes: noteParts.join('\n') || null,
           independent_creation_logged: true,
           owner_id: req.user.id,
           last_verified_date: new Date().toISOString().split('T')[0]
-        })
+        }
+        if (callPriorityNum > 0) wibRecord.call_priority_score = callPriorityNum
+        valid.push(wibRecord)
       }
       results.errors.push(...skipped)
       for (let i = 0; i < valid.length; i += 100) await bulkInsert('wib_records', valid.slice(i, i + 100))
