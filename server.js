@@ -928,6 +928,65 @@ app.post('/api/import/:type', auth, async (req, res) => {
         const training = getField(row,'Training Needs','Training','training_needs')
         if (training) insertRow.training_needs = training
 
+        // Capture address + any unmapped fields into structured notes
+        const address = [
+          getField(row,'Street','Address','Street Address','Address Line 1','Street 1','Mailing Street'),
+          getField(row,'City','Mailing City'),
+          getField(row,'State','Province','Mailing State'),
+          getField(row,'Zip','Zip Code','Postal Code','Mailing Zip'),
+          getField(row,'Country','Mailing Country'),
+        ].filter(Boolean).join(', ')
+
+        const linkedin = getField(row,'LinkedIn','LinkedIn URL','linkedin_url','LinkedIn Profile')
+        const tags = getField(row,'Tags','Labels','Categories','tag','label')
+        const owner = getField(row,'Owner','Account Owner','Assigned To','Rep','Manager')
+        const source = getField(row,'Source','Lead Source','How did you hear','Channel')
+        
+        // Known columns that are already mapped to DB fields
+        const mappedKeys = new Set([
+          ...Object.keys(row).filter(k => /company.?name|^record$|^name$|^company$|^employer$|^organization$/i.test(k.trim())),
+          'Status','Stage','status','stage','Record Stage',
+          'Phone numbers','Phone Number','Phone','Mobile','Business Phone','primary_contact_phone','Contact Phone',
+          'Email addresses','Email Address','Email','Primary Email','primary_contact_email','Contact Email',
+          'Website','website','Domain','domain','URL','Homepage',
+          'Contact Name','Contact','Primary Contact','Owner Name','Account Owner','primary_contact_name','Rep','Account Manager',
+          'Employee Count','Employees','Number of Employees','employee_count_total','Staff','Headcount','Size',
+          'Notes','Description','Comments','notes','Summary','Bio','About','Details',
+          'Type','Company Type','Industry','Sector','Category','company_type',
+          'Avg Wage','Average Wage','Avg Hourly Wage','Hourly Rate','avg_hourly_wage',
+          'FEIN','EIN','Tax ID','fein','Federal Tax ID',
+          'Training Needs','Training','training_needs',
+          'Street','Address','Street Address','Address Line 1','Street 1','Mailing Street',
+          'City','Mailing City','State','Province','Mailing State',
+          'Zip','Zip Code','Postal Code','Mailing Zip','Country','Mailing Country',
+          'LinkedIn','LinkedIn URL','linkedin_url','LinkedIn Profile',
+          'Tags','Labels','Categories','tag','label',
+          'Owner','Assigned To','Manager','Lead Source','Source','How did you hear','Channel',
+          'Record ID','id','ID','Created','Created At','Updated','Updated At',
+        ])
+        
+        // Collect any remaining unmapped columns with values
+        const extra = Object.entries(row)
+          .filter(([k,v]) => !mappedKeys.has(k) && v && String(v).trim())
+          .map(([k,v]) => `${k}: ${String(v).trim()}`)
+        
+        // Build comprehensive notes field
+        const notesParts = []
+        if (insertRow.notes) notesParts.push(insertRow.notes)
+        if (address) notesParts.push(`Address: ${address}`)
+        if (linkedin) notesParts.push(`LinkedIn: ${linkedin}`)
+        if (tags) notesParts.push(`Tags: ${tags}`)
+        if (owner) notesParts.push(`Assigned To: ${owner}`)
+        if (source) notesParts.push(`Source: ${source}`)
+        if (extra.length) notesParts.push('--- Additional Fields ---\n' + extra.join('\n'))
+        
+        if (notesParts.length) insertRow.notes = notesParts.join('\n')
+        
+        // Cap notes at 10000 chars (Supabase text limit safety)
+        if (insertRow.notes && insertRow.notes.length > 10000) {
+          insertRow.notes = insertRow.notes.substring(0, 9997) + '...'
+        }
+
         const { error: insertErr } = await supabase.from('companies').insert(insertRow)
         if (insertErr) {
           results.errors.push(`"${name}": ${insertErr.message}`)
@@ -1203,9 +1262,9 @@ app.get('/api/export/:type', auth, async (req, res) => {
       headers = ['WIB Name','Short Name','State','Status','Phone','Email','Website','Max Award/EIN','Match %','IWT Active','Source URL','Score','Last Verified','Next Steps','Blockers']
       rows = (data || []).map(r => [r.wib_name,r.short_name||'',r.state,r.status,r.wib_phone||'',r.wib_email||'',r.website||'',r.max_award_per_ein||'',r.match_requirement_pct||'',r.iwt_program_active?'Yes':'No',r.source_url||'',r.call_priority_score||0,r.last_verified_date||'',r.next_steps||'',r.blockers||''])
     } else if (type === 'companies') {
-      const { data } = await supabase.from('companies').select('company_name,company_type,status,fein,domain,employee_count_total,avg_hourly_wage,primary_contact_name,primary_contact_email,created_at').order('company_name')
-      headers = ['Company','Type','Status','FEIN','Domain','Employees','Avg Wage','Contact','Email','Created']
-      rows = (data || []).map(r => [r.company_name,r.company_type||'',r.status,r.fein||'',r.domain||'',r.employee_count_total||'',r.avg_hourly_wage||'',r.primary_contact_name||'',r.primary_contact_email||'',r.created_at?.split('T')[0]||''])
+      const { data } = await supabase.from('companies').select('company_name,company_type,status,fein,domain,employee_count_total,avg_hourly_wage,primary_contact_name,primary_contact_email,primary_contact_phone,training_needs,notes,rating,created_at').order('company_name')
+      headers = ['Company Name','Type','Status','FEIN','Domain','Employees','Avg Hourly Wage','Contact Name','Contact Email','Contact Phone','Training Needs','Notes','Rating','Created']
+      rows = (data || []).map(r => [r.company_name,r.company_type||'',r.status,r.fein||'',r.domain||'',r.employee_count_total||'',r.avg_hourly_wage||'',r.primary_contact_name||'',r.primary_contact_email||'',r.primary_contact_phone||'',r.training_needs||'',r.notes||'',r.rating||'',r.created_at?.split('T')[0]||''])
     } else if (type === 'applications') {
       const { data } = await supabase.from('applications').select('application_number,status,award_amount_requested,award_amount_approved,submission_date,created_at').order('created_at', { ascending: false })
       headers = ['App Number','Status','Requested','Approved','Submitted','Created']
