@@ -993,7 +993,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
       }
 
       for (const row of rows) {
-        const name = getWibField(row, 'Workforce Board','WIB Name','WIB','Name','Record','Board Name')
+        const name = getWibField(row, 'wib_name','Workforce Board','WIB Name','WIB','Name','Record','Board Name')
         if (!name?.trim()) { skipped.push('Skipped — no WIB name'); continue }
 
         const rawStatus = (getWibField(row, 'Status','WIB Status','Funding Status') || '').toLowerCase().trim()
@@ -1279,15 +1279,16 @@ app.post('/api/import/:type', auth, async (req, res) => {
 
       const locBatch = []
       for (const row of rows) {
-        const name = row['Record']?.trim() || row['Location Name']?.trim() || row['Location']?.trim() || row['Name']?.trim()
+        // Support both mapped CRM keys (from new wizard) and raw Attio header names
+        const name = (row['location_name'] || row['Record'] || row['Location Name'] || row['Location'] || row['Name'] || '').trim()
         if (!name) { results.errors.push('Skipped — no location name'); continue }
 
-        const parentName = row['Parent Operator']?.trim() || row['Parent Company']?.trim() || row['Company']?.trim() || row['Operator']?.trim()
+        const parentName = (row['parent_operator'] || row['Parent Operator'] || row['Parent Company'] || row['Company'] || row['Operator'] || '').trim()
         const company_id = findCo(parentName)
 
-        const rawState = row['State']?.trim() || row['Province']?.trim()
-        const rawStatus = (row['Status'] || 'prospect').toLowerCase()
-        const statusMap = { 'not contacted': 'prospect', 'network member': 'prospect', 'active': 'active', 'prospect': 'prospect', 'inactive': 'inactive' }
+        const rawState = (row['state'] || row['State'] || row['Province'] || '').trim()
+        const rawStatus = (row['status'] || row['Status'] || 'prospect').toLowerCase().trim()
+        const statusMap = { 'not contacted': 'prospect', 'network member': 'prospect', 'active': 'active', 'prospect': 'prospect', 'inactive': 'inactive', 'open': 'prospect' }
         
         // UPSERT: check if location already exists
         const { data: existingLoc } = await supabase.from('locations')
@@ -1296,11 +1297,12 @@ app.post('/api/import/:type', auth, async (req, res) => {
         const locRow = {
           location_name: name,
           state: rawState || null,
-          city: row['City']?.trim() || null,
-          county: row['County']?.trim() || null,
+          city: (row['city'] || row['City'] || '').trim() || null,
+          county: (row['county'] || row['County'] || '').trim() || null,
           status: statusMap[rawStatus] || 'prospect',
-          employee_count: row['Employee Count'] ? parseInt(row['Employee Count']) : null,
-          notes: row['Notes'] || null,
+          employee_count: (row['employee_count'] || row['Employee Count']) ? parseInt(row['employee_count'] || row['Employee Count']) : null,
+          notes: row['notes'] || row['Notes'] || null,
+          address: row['address'] || row['Address'] || null,
         }
         if (company_id) locRow.company_id = company_id
 
@@ -1335,12 +1337,12 @@ app.post('/api/import/:type', auth, async (req, res) => {
     } else if (type === 'funding') {
       const valid = []
       for (const row of rows) {
-        const name = row['Opportunity Name']?.trim()
+        const name = (row['opportunity_name'] || row['Opportunity Name'] || row['Name'] || row['Funding Opportunity'] || '').trim()
         if (!name) { results.errors.push('Skipped row — Opportunity Name required'); continue }
         valid.push({
           opportunity_name: name,
           status: (() => {
-            const rawS = (row['Status'] || '').toLowerCase().trim()
+            const rawS = (row['status'] || row['Status'] || '').toLowerCase().trim()
             const fundingStatusMap = {
               'open': 'open', 'active': 'open', 'available': 'open',
               'pending': 'pending', 'pending_employer': 'pending_employer',
@@ -1351,10 +1353,14 @@ app.post('/api/import/:type', auth, async (req, res) => {
             }
             return fundingStatusMap[rawS] || 'open'
           })(),
-          program_type: row['Program Type'] || null,
-          source_url: row['Source URL'] || name,
-          max_award_per_ein: row['Max Award/EIN'] ? parseFloat(row['Max Award/EIN']) : null,
-          application_deadline: row['Deadline'] || null,
+          program_type: row['program_type'] || row['Program Type'] || null,
+          source_url: row['source_url'] || row['application_link'] || row['Source URL'] || row['Application Link'] || null,
+          max_award_per_ein: (row['max_award_per_ein'] || row['Max Award/EIN'] || row['Max per EIN']) ? parseFloat(row['max_award_per_ein'] || row['Max Award/EIN'] || row['Max per EIN']) : null,
+          max_award_per_employee: (row['max_award_per_employee'] || row['Max per employee']) ? parseFloat(row['max_award_per_employee'] || row['Max per employee']) : null,
+          application_deadline: row['application_deadline'] || row['Deadline'] || null,
+          blocked_reason: row['blocked_reason'] || row['Blocked Reason'] || null,
+          promotion_for_participants: row['promotion_for_participants'] || row['Promotion'] || null,
+          wage_increase_for_participants: row['wage_increase_for_participants'] || row['Wage Increase'] || null,
           independent_creation_logged: true
         })
       }
