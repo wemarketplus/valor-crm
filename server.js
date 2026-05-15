@@ -835,67 +835,106 @@ app.post('/api/import/:type', auth, async (req, res) => {
       for (let i = 0; i < valid.length; i += 500) await bulkInsert('wib_records', valid.slice(i, i + 500))
 
     } else if (type === 'companies') {
-      // Use same allowed fields as POST /api/companies to guarantee DB compatibility
-      const ALLOWED = ['company_name','company_type','status','fein','domain',
-        'employee_count_total','avg_hourly_wage','primary_contact_name',
-        'primary_contact_email','primary_contact_phone','training_needs','notes','rating']
-
-      // Flexible status mapping to valid DB values
-      const companyStatusMap = {
-        'prospect':'prospect','lead':'prospect','potential':'prospect','new':'prospect',
-        'contacted':'contacted','outreach':'contacted','in progress':'contacted','in_progress':'contacted',
-        'qualified':'qualified','qualifying':'qualified',
-        'client':'active_client','active':'active_client','active client':'active_client',
-        'active_client':'active_client','partner':'active_client','customer':'active_client',
-        'network member':'active_client','network_member':'active_client','member':'active_client',
-        'churned':'churned','inactive':'churned','lost':'churned','cancelled':'churned',
-        'dnc':'dnc','do not contact':'dnc','do_not_contact':'dnc',
+      // Comprehensive field mapping — handles Attio, HubSpot, Salesforce, custom CSVs
+      // Valid DB statuses: prospect, contacted, qualified, active_client, churned, dnc
+      const coStatusMap = {
+        'prospect':'prospect','lead':'prospect','potential':'prospect','new':'prospect','unqualified':'prospect',
+        'contacted':'contacted','outreach':'contacted','in progress':'contacted','in_progress':'contacted','trying':'contacted',
+        'qualified':'qualified','qualifying':'qualified','interested':'qualified',
+        'client':'active_client','active':'active_client','active client':'active_client','active_client':'active_client',
+        'partner':'active_client','customer':'active_client','won':'active_client','closed won':'active_client',
+        'network member':'active_client','network_member':'active_client','member':'active_client','network':'active_client',
+        'churned':'churned','inactive':'churned','lost':'churned','cancelled':'churned','closed lost':'churned',
+        'dnc':'dnc','do not contact':'dnc','do_not_contact':'dnc','blocked':'dnc',
       }
 
-      // Find name column from headers
+      // Helper: find a value across multiple possible column name variants
+      const getField = (row, ...keys) => {
+        for (const k of keys) {
+          const val = row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()]
+          if (val !== undefined && String(val).trim() !== '') return String(val).trim()
+        }
+        // Try partial match on row keys
+        for (const k of keys) {
+          const found = Object.keys(row).find(rk => rk.toLowerCase().replace(/[^a-z0-9]/g,'').includes(k.toLowerCase().replace(/[^a-z0-9]/g,'')))
+          if (found && String(row[found]).trim() !== '') return String(row[found]).trim()
+        }
+        return null
+      }
+
+      // Find name column header once (handles "Record", "Company Name", "Name", etc.)
       const nameKey = rows[0] ? Object.keys(rows[0]).find(k =>
-        /^(company.?name|record|name|company|employer|organization)$/i.test(k.trim())
+        /^(company.?name|record|name|company|employer|organization|account.?name|business.?name)$/i.test(k.trim())
       ) : null
 
-      // Process in chunks of 100 using individual inserts for reliable error capture
       for (const row of rows) {
         const name = (nameKey ? row[nameKey] : null)?.trim()
-          || row['Company Name']?.trim() || row['company_name']?.trim()
-          || row['Record']?.trim() || row['Name']?.trim()
-          || row['Company']?.trim() || row['Employer']?.trim()
-          || row['Organization']?.trim()
+          || getField(row, 'Company Name','company_name','Record','Name','Company','Employer','Organization','Account Name','Business Name')
+        if (!name) { results.errors.push('Skipped — no company name found'); continue }
 
-        if (!name) { results.errors.push('Skipped — no company name in row'); continue }
+        const rawStatus = (getField(row,'Status','Stage','status','stage','Record Stage','Company Stage') || '').toLowerCase().trim()
+        const status = coStatusMap[rawStatus] || 'prospect'
 
-        const rawStatus = (row['Status'] || row['status'] || '').toLowerCase().trim()
-        const status = companyStatusMap[rawStatus] || 'prospect'
+        // Phone: Attio exports "Phone numbers", HubSpot exports "Phone Number", etc.
+        const phone = getField(row,
+          'Phone numbers','Phone Number','Phone','phone','Mobile','Mobile Phone',
+          'primary_contact_phone','Contact Phone','Main Phone','Business Phone')
 
-        // Build insert object with ONLY allowed fields (mirrors POST endpoint)
-        const insertRow = {
-          company_name: name,
-          status,
-          company_type: row['Type'] || row['Company Type'] || row['type'] || null,
-          fein: row['FEIN'] || row['EIN'] || null,
-          domain: row['Domain'] || row['Website'] || null,
-          primary_contact_name: row['Contact Name'] || row['Primary Contact'] || null,
-          primary_contact_email: row['Contact Email'] || row['Email'] || null,
-          primary_contact_phone: row['Contact Phone'] || row['Phone'] || null,
-          avg_hourly_wage: (() => { const v = row['Avg Wage'] || row['Average Wage']; return v ? parseFloat(String(v).replace(/[^0-9.]/g,'')) : null })(),
-          employee_count_total: (() => { const v = row['Employee Count'] || row['Employees']; return v ? parseInt(String(v).replace(/[^0-9]/g,'')) : null })(),
-          notes: row['Notes'] || row['Description'] || null,
-          training_needs: row['Training Needs'] || null,
+        // Email: Attio exports "Email addresses"  
+        const email = getField(row,
+          'Email addresses','Email Address','Email','email','Primary Email',
+          'primary_contact_email','Contact Email','Business Email')
+
+        // Website/Domain
+        const rawDomain = getField(row,'Website','website','Domain','domain','URL','Homepage','Web','Site')
+        const domain = rawDomain ? rawDomain.replace(/^https?:\/\/(www\.)?/,'').split('/')[0] : null
+
+        // Contact person
+        const contactName = getField(row,
+          'Contact Name','Contact','Primary Contact','Owner Name','Account Owner',
+          'primary_contact_name','Rep','Account Manager','Point of Contact')
+
+        // Employee count
+        const empRaw = getField(row,'Employee Count','Employees','Number of Employees','employee_count_total','Staff','Headcount','Size')
+        const employeeCount = empRaw ? parseInt(String(empRaw).replace(/[^0-9]/g,'')) || null : null
+
+        // Notes
+        const notes = getField(row,'Notes','Description','Comments','notes','Summary','Bio','About','Details')
+
+        // Type — default to 'operator' since that's the platform's focus
+        const rawType = getField(row,'Type','Company Type','Industry','Sector','Category','company_type')
+
+        // Build clean insert matching exact DB columns
+        const insertRow = {}
+        insertRow.company_name = name
+        insertRow.status = status
+        if (rawType) insertRow.company_type = rawType
+        if (domain) insertRow.domain = domain
+        if (email) insertRow.primary_contact_email = email
+        if (phone) insertRow.primary_contact_phone = phone
+        if (contactName) insertRow.primary_contact_name = contactName
+        if (employeeCount) insertRow.employee_count_total = employeeCount
+        if (notes) insertRow.notes = notes
+
+        // Optional numeric fields
+        const wage = getField(row,'Avg Wage','Average Wage','Avg Hourly Wage','Hourly Rate','avg_hourly_wage')
+        if (wage) {
+          const wageNum = parseFloat(String(wage).replace(/[^0-9.]/g,''))
+          if (!isNaN(wageNum)) insertRow.avg_hourly_wage = wageNum
         }
+        const fein = getField(row,'FEIN','EIN','Tax ID','fein','Federal Tax ID')
+        if (fein) insertRow.fein = fein
 
-        // Remove null values to let DB use column defaults
-        const cleanRow = Object.fromEntries(Object.entries(insertRow).filter(([,v]) => v !== null && v !== ''))
+        const training = getField(row,'Training Needs','Training','training_needs')
+        if (training) insertRow.training_needs = training
 
-        const { error: insertErr } = await supabase.from('companies').insert(cleanRow)
+        const { error: insertErr } = await supabase.from('companies').insert(insertRow)
         if (insertErr) {
           results.errors.push(`"${name}": ${insertErr.message}`)
-          // Log first error in detail for debugging
           if (results.errors.length === 1) {
-            console.error('First import error:', insertErr.code, insertErr.message, insertErr.details, insertErr.hint)
-            console.error('Row that failed:', JSON.stringify(cleanRow))
+            console.error('First company import error:', insertErr.code, insertErr.message)
+            console.error('Hint:', insertErr.hint, '| Details:', insertErr.details)
+            console.error('Row attempted:', JSON.stringify(insertRow))
           }
         } else {
           results.created++
