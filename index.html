@@ -673,6 +673,90 @@ let notifOpen = false
 let chatChannel = 'general'
 let sessionTimer = null
 window._coFilters = { search:'', status:'', rating:'', state:'' }
+// ═══════════════════════════════════════════════════════════════════════════
+// XSS SANITIZATION UTILITIES
+// All user-supplied string data MUST be passed through escHtml() before
+// being injected into innerHTML template literals.
+// 
+// USAGE:
+//   ${escHtml(c.company_name)}          — safe text content
+//   href="mailto:${escAttr(c.email)}"   — safe attribute values
+//   href="${escUrl(c.domain)}"          — safe URLs (enforces https://)
+//
+// DO NOT use raw ${escHtml(c.company_name)} in innerHTML strings — ever.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * escHtml — escapes a value for safe insertion as text content in HTML.
+ * Converts the 5 HTML meta-characters to their entity equivalents.
+ * Handles null/undefined by returning ''.
+ * @param {*} s — any value (will be coerced to string)
+ * @returns {string} — HTML-safe string
+ */
+function escHtml(s) {
+  if (s == null || s === '') return ''
+  return String(s)
+    .replace(/&/g,  '&amp;')
+    .replace(/</g,  '&lt;')
+    .replace(/>/g,  '&gt;')
+    .replace(/"/g,  '&quot;')
+    .replace(/'/g,  '&#39;')
+}
+
+/**
+ * escAttr — escapes a value for use inside an HTML attribute (href, src, etc.)
+ * More conservative than escHtml — also escapes backtick and forward-slash
+ * sequences that could break out of attribute context.
+ * @param {*} s — any value
+ * @returns {string} — attribute-safe string
+ */
+function escAttr(s) {
+  if (s == null || s === '') return ''
+  return String(s)
+    .replace(/&/g,  '&amp;')
+    .replace(/</g,  '&lt;')
+    .replace(/>/g,  '&gt;')
+    .replace(/"/g,  '&quot;')
+    .replace(/'/g,  '&#39;')
+    .replace(/`/g,  '&#96;')
+}
+
+/**
+ * escUrl — validates and returns a safe URL for use in href/src attributes.
+ * Blocks javascript: and data: URIs completely.
+ * Prepends https:// if no protocol is present.
+ * @param {string} url — a URL string from user data
+ * @param {string} [protocol='https'] — forced protocol prefix if missing
+ * @returns {string} — safe, encoded URL string, or '' if the URL is dangerous
+ */
+function escUrl(url, protocol) {
+  if (!url) return ''
+  const s = String(url).trim()
+  // Block dangerous protocols
+  if (/^(?:javascript|data|vbscript|file):/i.test(s)) return ''
+  // If it already has http:// or https://, use as-is (escAttr handles encoding)
+  if (/^https?:\/\//i.test(s)) return escAttr(s)
+  // Prepend the requested or default protocol
+  return escAttr((protocol || 'https') + '://' + s.replace(/^\/\//, ''))
+}
+
+/**
+ * escCsvCell — escapes a value for safe inclusion in a CSV cell.
+ * Prefixes formula-injection characters (=, +, -, @, tab, newline) with a
+ * single quote so spreadsheet apps don't execute them as formulas.
+ * Also wraps the value in double-quotes and escapes internal double-quotes.
+ * @param {*} v — any value
+ * @returns {string} — CSV-safe quoted cell string
+ */
+function escCsvCell(v) {
+  const s = String(v ?? '')
+  // Formula injection prevention: prefix dangerous leading characters
+  const safe = /^[=+\-@\t\r\n]/.test(s) ? "'" + s : s
+  // Standard CSV quoting
+  return '"' + safe.replace(/"/g, '""') + '"'
+}
+
+
 function clearCoFilters(){ window._coFilters={search:'',status:'',rating:'',state:''}; renderCompaniesTable(window._companies||[]) }
 window._wibFilters = { search:'', status:'', state:'', type:'', owner:'' }
 window._locFilters = { search:'' }
@@ -1320,7 +1404,7 @@ async function pageDashboard(){
         <div class="card-body" style="padding:0 14px">
           ${(apps.data||[]).length===0?'<div class="empty-state" style="padding:20px"><div class="empty-text">No applications yet</div></div>':
           (apps.data||[]).map(a=>`<div class="stat-row">
-            <span class="stat-label" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.company?.company_name||'—'}</span>
+            <span class="stat-label" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.company?.company_name||'—')}</span>
             <div style="display:flex;align-items:center;gap:6px">${appStatusPill(a.status)}<span style="font-size:10px;color:var(--text3)">${fmtDate(a.created_at)}</span></div>
           </div>`).join('')}
         </div>
@@ -1347,10 +1431,10 @@ async function pageDashboard(){
       ${(wibs.data||[]).map(w=>`<tr onclick="openWibProfile('${w.id}')">
         <td><div class="col-name-cell">
           <span class="col-icon" style="background:var(--blue-bg);color:var(--blue-t)">${(w.state||'WI').slice(0,2)}</span>
-          ${w.wib_name}
+          ${escHtml(w.wib_name)}
         </div></td>
-        <td>${w.wib_email?`<a href="mailto:${w.wib_email}" class="cell-link" onclick="event.stopPropagation()">${w.wib_email}</a>`:'<span class="cell-dim">—</span>'}</td>
-        <td class="cell-dim">${w.short_name||'—'}</td>
+        <td>${w.wib_email?`<a href="mailto:${escHtml(w.wib_email)}" class="cell-link" onclick="event.stopPropagation()">${escHtml(w.wib_email)}</a>`:'<span class="cell-dim">—</span>'}</td>
+        <td class="cell-dim">${escHtml(w.short_name||'—')}</td>
         <td>${wibStatusPill(w.status)}</td>
         <td class="cell-dim">${w.last_contact_date?fmtAgo(w.last_contact_date):'No contact'}</td>
         <td>${w.wib_type?`<span class="pill p-blue" style="font-size:9px">${w.wib_type}</span>`:'<span class="cell-dim">—</span>'}</td>
@@ -1547,10 +1631,10 @@ function renderWibTable(wibs){
         <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
         <td><div class="col-name-cell">
           <span class="col-icon" style="background:var(--blue-bg);color:var(--blue-t)">${(w.state||'WI').slice(0,2)}</span>
-          ${w.wib_name}
+          ${escHtml(w.wib_name)}
         </div></td>
-        <td>${w.wib_email?`<a href="mailto:${w.wib_email}" class="cell-link" onclick="event.stopPropagation()">${w.wib_email}</a>`:'<span class="cell-dim">—</span>'}</td>
-        <td class="cell-dim">${w.short_name||'—'}</td>
+        <td>${w.wib_email?`<a href="mailto:${escHtml(w.wib_email)}" class="cell-link" onclick="event.stopPropagation()">${escHtml(w.wib_email)}</a>`:'<span class="cell-dim">—</span>'}</td>
+        <td class="cell-dim">${escHtml(w.short_name||'—')}</td>
         <td>${wibStatusPill(w.status)}</td>
         <td class="cell-dim">${w.last_contact_date?fmtAgo(w.last_contact_date):'No contact'}</td>
         <td>${w.wib_type?`<span class="pill p-blue" style="font-size:9px">${w.wib_type}</span>`:'<span class="cell-dim">—</span>'}</td>
@@ -1574,7 +1658,7 @@ function renderWibTable(wibs){
             : '<span class="cell-dim">—</span>'
         }</td>
         <td class="cell-dim" style="max-width:120px;font-size:10px">${w.zip_codes||'—'}</td>
-        <td>${w.website?`<a href="${w.website.startsWith('http')?w.website:'https://'+w.website}" target="_blank" class="cell-link" onclick="event.stopPropagation()">${w.website.replace(/^https?:\/\//,'')}</a>`:'<span class="cell-dim">—</span>'}</td>
+        <td>${w.website?`<a href="${escUrl(w.website)}" target="_blank" class="cell-link" onclick="event.stopPropagation()">${escHtml(w.website.replace(/^https?:\/\//,''))}</a>`:'<span class="cell-dim">—</span>'}</td>
       </tr>`).join('')}
       </tbody>
     </table>
@@ -1649,7 +1733,7 @@ async function openWibProfile(id){
   catch(e){if(window._wibs?.length)currentWib=window._wibs.find(w=>w.id===id)}
   if(!currentWib){document.getElementById('page-area').innerHTML='<div class="alert alert-error">WIB not found</div>';return}
   const w=currentWib
-  setTopbar(`<span class="topbar-crumb" onclick="loadPage('wibs')">Workforce Boards</span><span class="topbar-crumb-sep">/</span>${w.wib_name}`,'',`
+  setTopbar(`<span class="topbar-crumb" onclick="loadPage('wibs')">Workforce Boards</span><span class="topbar-crumb-sep">/</span>${escHtml(w.wib_name)}`,'',`
     <button class="btn" onclick="openWibModal(currentWib)">✎ Edit</button>`)
   setTabs([
     {id:'overview',label:'Overview'},
@@ -1694,7 +1778,7 @@ function renderWibProfile(){
           <div class="profile-av-row">
             <div class="profile-av">${(w.state||'WI').slice(0,2)}</div>
             <div>
-              <div class="profile-name">${w.wib_name}</div>
+              <div class="profile-name">${escHtml(w.wib_name)}</div>
               <div class="profile-sub">${w.wib_type||'Local'} · ${w.state||''}</div>
             </div>
           </div>
@@ -1709,10 +1793,10 @@ function renderWibProfile(){
 
         <div class="profile-section">
           <div class="profile-section-title">Contact Information</div>
-          <div class="field-row"><span class="field-key">Email</span><span class="field-val">${w.wib_email?`<a href="mailto:${w.wib_email}" class="fv-link">${w.wib_email}</a>`:'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Email</span><span class="field-val">${w.wib_email?`<a href="mailto:${escHtml(w.wib_email)}" class="fv-link">${escHtml(w.wib_email)}</a>`:'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Phone</span><span class="field-val">${w.wib_phone||'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Website</span><span class="field-val">${w.source_url?`<a href="${w.source_url}" target="_blank" class="fv-link">🔗 ${w.source_url.replace(/^https?:\/\//,'').split('/')[0]}</a>`:'<span class="fv-empty">—</span>'}</span></div>
-          <div class="field-row"><span class="field-key">Short Name</span><span class="field-val">${w.short_name||'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Short Name</span><span class="field-val">${escHtml(w.short_name)||'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Type</span><span class="field-val">${w.wib_type?`<span class="pill p-blue" style="font-size:9px">${w.wib_type}</span>`:'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">State</span><span class="field-val">${w.state||'<span class="fv-empty">—</span>'}</span></div>
         </div>
@@ -1769,7 +1853,7 @@ function renderWibProfile(){
       const locs=r.data||[];const el=document.getElementById('wib-sidebar-locs');if(!el)return
       if(!locs.length){el.innerHTML='<span class="fv-empty" style="font-size:11px">No locations linked</span>';return}
       el.innerHTML=locs.map(l=>`<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:.5px solid var(--gray2);font-size:11.5px">
-        <span>📍</span><span>${l.location_name}</span><span class="cell-dim">${l.state||''}</span>
+        <span>📍</span><span>${escHtml(l.location_name)}</span><span class="cell-dim">${l.state||''}</span>
       </div>`).join('')
     }).catch(()=>{})
   }
@@ -1870,7 +1954,7 @@ async function loadWibTabData(tab){
         const acts=ar.data||[]
         actEl.innerHTML=acts.length?acts.map(a=>`<div class="act-row">
           <div class="act-icon">${{NOTE:'📝',TASK:'✅',CREATE_WIB:'🏛',UPDATE_WIB:'✏',AI_QUERY:'🤖',USER_LOGIN:'🔐'}[a.action]||'📌'}</div>
-          <div class="act-body"><div class="act-text">${a.details||a.action}</div><div class="act-meta">${a.user?.full_name||''} · ${fmtAgo(a.created_at)}</div></div>
+          <div class="act-body"><div class="act-text">${escHtml(a.details||a.action)}</div><div class="act-meta">${escHtml(a.user?.full_name||'')} · ${fmtAgo(a.created_at)}</div></div>
         </div>`).join(''):'<div style="color:var(--text3);font-size:11px;text-align:center;padding:8px">No activity yet</div>'
       }catch(e){actEl.innerHTML='<div style="font-size:11px;color:var(--text3);padding:6px">Activity unavailable</div>'}
     }
@@ -1920,11 +2004,11 @@ async function loadWibTabData(tab){
         <th><div class="th-i">Locations</div></th>
         <th><div class="th-i">Promotion</div></th>
       </tr></thead><tbody>`+fops.map(f=>`<tr onclick="openFundingModal(${JSON.stringify(f).replace(/"/g,"'")})">
-        <td style="font-weight:500">${f.opportunity_name}</td>
-        <td>${f.source_url&&f.source_url.startsWith('http')?`<a href="${f.source_url}" target="_blank" class="cell-link" onclick="event.stopPropagation()">🔗 Drive</a>`:'—'}</td>
+        <td style="font-weight:500">${escHtml(f.opportunity_name)}</td>
+        <td>${f.source_url&&f.source_url.startsWith('http')?`<a href="${escUrl(f.source_url)}" target="_blank" class="cell-link" onclick="event.stopPropagation()">🔗 Drive</a>`:'—'}</td>
         <td>${fundingStatusPill(f.status)}</td>
         <td class="cell-dim">—</td>
-        <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.application_process||'—'}</td>
+        <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(f.application_process||'—')}</td>
         <td style="color:var(--green-t);font-weight:600">${f.max_award_per_ein?fmtMoney(f.max_award_per_ein):'—'}</td>
         <td style="color:var(--green-t)">${f.max_award_per_employee?fmtMoney(f.max_award_per_employee):'—'}</td>
         <td class="cell-dim">—</td>
@@ -1945,8 +2029,8 @@ async function loadWibTabData(tab){
     </tr></thead><tbody>
     ${contacts.length?contacts.map(c=>`<tr>
       <td style="font-weight:500">${c.name||'—'}</td>
-      <td class="cell-dim">${c.title||'—'}</td>
-      <td>${c.email?`<a href="mailto:${c.email}" class="cell-link">${c.email}</a>`:'—'}</td>
+      <td class="cell-dim">${escHtml(c.title||'—')}</td>
+      <td>${c.email?`<a href="mailto:${escHtml(c.email)}" class="cell-link">${escHtml(c.email)}</a>`:'—'}</td>
       <td class="cell-dim">${c.phone||'—'}</td>
     </tr>`).join(''):`<tr><td colspan="4"><div class="empty-state" style="padding:24px"><div class="empty-icon">👥</div><div class="empty-text">No contacts yet</div></div></td></tr>`}
     </tbody></table>`
@@ -1960,8 +2044,8 @@ async function loadWibTabData(tab){
       el.innerHTML=acts.length?acts.map(a=>`<div class="act-row">
         <div class="act-icon">${{NOTE:'📝',TASK:'✅',CREATE_WIB:'🏛',UPDATE_WIB:'✏',AI_QUERY:'🤖'}[a.action]||'📌'}</div>
         <div class="act-body">
-          <div class="act-text">${a.details||a.action}</div>
-          <div class="act-meta">${a.user?.full_name||a.user?.email||'System'} · ${fmtAgo(a.created_at)}</div>
+          <div class="act-text">${escHtml(a.details||a.action)}</div>
+          <div class="act-meta">${escHtml(a.user?.full_name||a.user?.email||'System')} · ${fmtAgo(a.created_at)}</div>
         </div>
       </div>`).join(''):'<div class="empty-state" style="padding:24px"><div class="empty-icon">⚡</div><div class="empty-text">No activity</div></div>'
     }catch(e){el.innerHTML='<div class="alert alert-error">'+e.message+'</div>'}
@@ -2004,7 +2088,7 @@ function renderNoteCard(n){
   const meta=n.metadata||{}
   if(aircall){
     return`<div class="aircall-card">
-      <div class="aircall-hd">📞 Aircall — ${n.user?.full_name||'System'} · ${timeAgo}${meta.duration?' ('+meta.duration+'m)':''}</div>
+      <div class="aircall-hd">📞 Aircall — ${escHtml(n.user?.full_name||'System')} · ${timeAgo}${meta.duration?' ('+meta.duration+'m)':''}</div>
       <div style="font-size:11.5px;color:var(--text);line-height:1.65">${content.replace(/\n/g,'<br>')}</div>
       ${meta.recording_url?`<a href="${meta.recording_url}" target="_blank" style="font-size:10.5px;color:var(--blue-t)">🔗 Recording</a>`:''}
     </div>`
@@ -2012,7 +2096,7 @@ function renderNoteCard(n){
   return`<div class="note-card">
     <div class="note-meta">
       <div class="note-av">${initials}</div>
-      <div class="note-author">${n.user?.full_name||n.user?.email||'System'}</div>
+      <div class="note-author">${escHtml(n.user?.full_name||n.user?.email||'System')}</div>
       <div class="note-time">${timeAgo}</div>
       <span class="note-badge">${noteType}</span>
       <button class="action-btn del" style="margin-left:auto" onclick="deleteNote('${n.id}')">✕</button>
@@ -2041,8 +2125,8 @@ function showDuplicateCompanyModal(newData, existing) {
         A company with this name already exists in the CRM:
       </div>
       <div style="background:var(--bg2);border-radius:8px;padding:12px 14px;border:.5px solid var(--border1)">
-        <div style="font-size:13px;font-weight:700;color:var(--nv)">${existing?.company_name||newData.company_name}</div>
-        ${existing?.domain?`<div style="font-size:11px;color:var(--text3);margin-top:3px">🌐 ${existing.domain}</div>`:''}
+        <div style="font-size:13px;font-weight:700;color:var(--nv)">${escHtml(existing?.company_name||newData.company_name)}</div>
+        ${existing?.domain?`<div style="font-size:11px;color:var(--text3);margin-top:3px">🌐 ${escHtml(existing.domain)}</div>`:''}
         ${existing?.status?`<div style="font-size:11px;color:var(--text3);margin-top:2px">Status: ${existing.status}</div>`:''}
       </div>
       <div style="margin-top:14px;font-size:12px;color:var(--text2);line-height:1.6">
@@ -2112,12 +2196,12 @@ function openWibModal(wib=null){
   const statusOpts=['not_contacted','contacted','funding_available','follow_up_needed','funding_not_available','network_member'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${wib?.state===s?' selected':''}>${s}</option>`).join('')
-  showModal(wib?`Edit: ${wib.wib_name}`:'New Workforce Board',`
-    <div class="form-row"><div class="form-group"><div class="form-label">WIB Name <span class="form-req">*</span></div><input id="wib-name" value="${wib?.wib_name||''}"></div>
-    <div class="form-group"><div class="form-label">Short Name</div><input id="wib-short" value="${wib?.short_name||''}"></div></div>
+  showModal(wib?`Edit: ${escHtml(wib.wib_name)}`:'New Workforce Board',`
+    <div class="form-row"><div class="form-group"><div class="form-label">WIB Name <span class="form-req">*</span></div><input id="wib-name" value="${escHtml(wib?.wib_name||'')}"></div>
+    <div class="form-group"><div class="form-label">Short Name</div><input id="wib-short" value="${escHtml(wib?.short_name||'')}"></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">State</div><select id="wib-state">${stateOpts}</select></div>
     <div class="form-group"><div class="form-label">Status</div><select id="wib-status">${statusOpts}</select></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Email</div><input id="wib-email" type="email" value="${wib?.wib_email||''}"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Email</div><input id="wib-email" type="email" value="${escHtml(wib?.wib_email||'')}"></div>
     <div class="form-group"><div class="form-label">Phone</div><input id="wib-phone" type="tel" value="${wib?.wib_phone||''}"></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Website URL</div><input id="wib-url" value="${wib?.source_url||''}" placeholder="https://"></div>
     <div class="form-group"><div class="form-label">WIB Type</div><select id="wib-type">
@@ -2129,7 +2213,7 @@ function openWibModal(wib=null){
     <div class="form-group"><div class="form-label">Employer Match (%)</div><input id="wib-match" type="number" value="${wib?.employer_match_pct||''}"></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Call Priority Score</div><input id="wib-priority" type="number" value="${wib?.call_priority||''}"><div class="form-hint">Higher = more urgent</div></div>
     <div class="form-group"><div class="form-label">Owner</div><input id="wib-owner" value="${wib?.owner||''}"></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Application Process Notes</div><textarea id="wib-notes" rows="3">${wib?.notes||''}</textarea></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Application Process Notes</div><textarea id="wib-notes" rows="3">${escHtml(wib?.notes||'')}</textarea></div></div>
     <label class="chk-row"><input type="checkbox" id="wib-iwt"${wib?.iwt_program_active?' checked':''}> IWT Program Active</label>`,
   async()=>{
     const payload={
@@ -2294,13 +2378,13 @@ function renderCompaniesTable(companies){
         <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
         <td><div class="col-name-cell">
           <span class="col-icon" style="background:${coIconBg(c.status)};color:${coIconColor(c.status)}">${(c.company_name||'?').slice(0,1)}</span>
-          ${c.company_name}
+          ${escHtml(c.company_name)}
         </div></td>
         <td>${companyStatusPill(c.status)}</td>
         <td>${starRating(c.rating)}</td>
         <td style="text-align:center">${c.is_25_pct_operator?'<span style="color:var(--green-t)">✓</span>':'<span style="color:var(--text4)">□</span>'}</td>
-        <td>${c.domain?`<a href="https://${c.domain}" target="_blank" class="cell-link" onclick="event.stopPropagation()">${c.domain}</a>`:'<span class="cell-dim">—</span>'}</td>
-        <td class="cell-dim">${c.supported_by||'—'}</td>
+        <td>${c.domain?`<a href="https://${escHtml(c.domain)}" target="_blank" class="cell-link" onclick="event.stopPropagation()">${escHtml(c.domain)}</a>`:'<span class="cell-dim">—</span>'}</td>
+        <td class="cell-dim">${escHtml(c.supported_by||'—')}</td>
         <td class="cell-dim">${c.last_contact_date?fmtAgo(c.last_contact_date):'No contact'}</td>
         <td class="cell-dim">${fmtDate(c.created_at)}</td>
         <td class="cell-dim" style="max-width:120px">${
@@ -2313,7 +2397,7 @@ function renderCompaniesTable(companies){
             ? c._locations.slice(0,2).map(l=>`<span style="display:inline-flex;align-items:center;gap:3px;font-size:10.5px;margin-right:4px">⚙️ ${l}</span>`).join('')+(c._locations.length>2?` <span style="color:var(--text3);font-size:10px">+${c._locations.length-2}</span>`:'')
             : '<span class="cell-dim">—</span>'
         }</td>
-        <td class="cell-dim">${c.supported_by?`<div style="display:flex;align-items:center;gap:4px"><span style="width:18px;height:18px;border-radius:50%;background:var(--blue-bg);color:var(--blue-t);display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700">${(c.supported_by||'?').charAt(0).toUpperCase()}</span>${c.supported_by}</div>`:'<span class="cell-dim">—</span>'}</td>
+        <td class="cell-dim">${c.supported_by?`<div style="display:flex;align-items:center;gap:4px"><span style="width:18px;height:18px;border-radius:50%;background:var(--blue-bg);color:var(--blue-t);display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700">${(c.supported_by||'?').charAt(0).toUpperCase()}</span>${escHtml(c.supported_by)}</div>`:'<span class="cell-dim">—</span>'}</td>
         <td><div style="display:flex;align-items:center;gap:4px">
           <span style="width:18px;height:18px;border-radius:50%;background:var(--orange-bg);color:var(--orange-t);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">C</span>
           <span class="cell-dim">Claude</span>
@@ -2336,7 +2420,7 @@ async function openCompanyProfile(id){
   catch(e){if(window._companies?.length)currentCompany=window._companies.find(c=>c.id===id)}
   if(!currentCompany){document.getElementById('page-area').innerHTML='<div class="alert alert-error">Company not found</div>';return}
   const c=currentCompany
-  setTopbar(`<span class="topbar-crumb" onclick="loadPage('companies')">Companies</span><span class="topbar-crumb-sep">/</span>${c.company_name}`,'',`
+  setTopbar(`<span class="topbar-crumb" onclick="loadPage('companies')">Companies</span><span class="topbar-crumb-sep">/</span>${escHtml(c.company_name)}`,'',`
     <button class="btn" onclick="openCompanyModal(currentCompany)">✎ Edit</button>`)
   setTabs([
     {id:'overview',label:'Overview'},
@@ -2379,7 +2463,7 @@ function renderCompanyProfile(){
           <div class="profile-av-row">
             <div class="profile-av" style="background:${coIconBg(c.status)};color:${coIconColor(c.status)}">${(c.company_name||'?').slice(0,1)}</div>
             <div>
-              <div class="profile-name">${c.company_name}</div>
+              <div class="profile-name">${escHtml(c.company_name)}</div>
               <div class="profile-sub">${c.company_type||'Operator'}</div>
             </div>
           </div>
@@ -2394,11 +2478,11 @@ function renderCompanyProfile(){
 
         <div class="profile-section">
           <div class="profile-section-title">Contact Information</div>
-          <div class="field-row"><span class="field-key">Contact Name</span><span class="field-val">${c.primary_contact_name||'<span class="fv-empty">—</span>'}</span></div>
-          <div class="field-row"><span class="field-key">Email</span><span class="field-val">${c.primary_contact_email?`<a href="mailto:${c.primary_contact_email}" class="fv-link">${c.primary_contact_email}</a>`:'<span class="fv-empty">—</span>'}</span></div>
-          <div class="field-row"><span class="field-key">Phone</span><span class="field-val">${c.primary_contact_phone?`<a href="tel:${c.primary_contact_phone}" class="fv-link">${c.primary_contact_phone}</a>`:'<span class="fv-empty">—</span>'}</span></div>
-          <div class="field-row"><span class="field-key">Website</span><span class="field-val">${c.domain?`<a href="https://${c.domain}" target="_blank" class="fv-link">🔗 ${c.domain}</a>`:'<span class="fv-empty">—</span>'}</span></div>
-          <div class="field-row"><span class="field-key">Short Name</span><span class="field-val">${c.short_name||'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Contact Name</span><span class="field-val">${escHtml(c.primary_contact_name)||'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Email</span><span class="field-val">${c.primary_contact_email?`<a href="mailto:${escHtml(c.primary_contact_email)}" class="fv-link">${escHtml(c.primary_contact_email)}</a>`:'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Phone</span><span class="field-val">${c.primary_contact_phone?`<a href="tel:${escHtml(c.primary_contact_phone)}" class="fv-link">${escHtml(c.primary_contact_phone)}</a>`:'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Website</span><span class="field-val">${c.domain?`<a href="https://${escHtml(c.domain)}" target="_blank" class="fv-link">🔗 ${escHtml(c.domain)}</a>`:'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Short Name</span><span class="field-val">${escHtml(c.short_name)||'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Type</span><span class="field-val">${c.company_type||'<span class="fv-empty">—</span>'}</span></div>
         </div>
 
@@ -2416,8 +2500,8 @@ function renderCompanyProfile(){
 
         <div class="profile-section">
           <div class="profile-section-title">Address & Location</div>
-          <div class="field-row"><span class="field-key">Address</span><span class="field-val" style="white-space:pre-wrap">${c.address||'<span class="fv-empty">—</span>'}</span></div>
-          <div class="field-row"><span class="field-key">City</span><span class="field-val">${c.city||'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Address</span><span class="field-val" style="white-space:pre-wrap">${escHtml(c.address)||'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">City</span><span class="field-val">${escHtml(c.city)||'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">State</span><span class="field-val">${c.state||'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Zip</span><span class="field-val">${c.zip||'<span class="fv-empty">—</span>'}</span></div>
         </div>
@@ -2461,7 +2545,7 @@ function renderCompanyProfile(){
       const locs=r.data||[];const el=document.getElementById('co-sidebar-locs');if(!el)return
       if(!locs.length){el.innerHTML='<span class="fv-empty" style="font-size:11px">No locations linked</span>';return}
       el.innerHTML=locs.map(l=>`<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:.5px solid var(--gray2);font-size:11.5px">
-        <span>📍</span><span>${l.location_name}</span><span class="cell-dim">${l.state||''}</span>
+        <span>📍</span><span>${escHtml(l.location_name)}</span><span class="cell-dim">${l.state||''}</span>
       </div>`).join('')
     }).catch(()=>{})
   }
@@ -2539,7 +2623,7 @@ async function loadCompanyTabData(tab){
         const ar=await api('/api/applications?company_id='+cid+'&limit=5')
         const apps=ar.data||[]
         appsEl.innerHTML=apps.length?apps.map(a=>`<div class="stat-row">
-          <span class="stat-label">${a.wib?.wib_name||'Unknown WIB'}</span>
+          <span class="stat-label">${escHtml(a.wib?.wib_name||'Unknown WIB')}</span>
           <div style="display:flex;align-items:center;gap:6px">${appStatusPill(a.status)}</div>
         </div>`).join(''):'<div style="color:var(--text3);font-size:11px;text-align:center;padding:8px">No applications</div>'
       }catch(e){appsEl.innerHTML='<div style="font-size:11px;color:var(--text3)">Apps unavailable</div>'}
@@ -2579,7 +2663,7 @@ async function loadCompanyTabData(tab){
       el.innerHTML=locs.length?`<table class="att-tbl"><thead><tr>
         <th><div class="th-i">Location</div></th><th><div class="th-i">State</div></th><th><div class="th-i">Status</div></th><th><div class="th-i">Employees</div></th>
       </tr></thead><tbody>`+locs.map(l=>`<tr>
-        <td style="font-weight:500">${l.location_name}</td>
+        <td style="font-weight:500">${escHtml(l.location_name)}</td>
         <td class="cell-dim">${l.state||'—'}</td>
         <td>${locStatusPill(l.status)}</td>
         <td class="cell-dim">${l.employee_count||'—'}</td>
@@ -2595,11 +2679,11 @@ async function loadCompanyTabData(tab){
       el.innerHTML=apps.length?`<table class="att-tbl"><thead><tr>
         <th><div class="th-i">Application</div></th><th><div class="th-i">Funding Opportunity</div></th><th><div class="th-i">Status</div></th><th><div class="th-i">Award</div></th><th><div class="th-i">Latest Update</div></th>
       </tr></thead><tbody>`+apps.map(a=>`<tr onclick="openEditApplicationModal(${JSON.stringify(a).replace(/"/g,"'")})">
-        <td style="font-weight:500">${a.company?.company_name||'—'}</td>
-        <td class="cell-dim">${a.funding?.opportunity_name||'—'}</td>
+        <td style="font-weight:500">${escHtml(a.company?.company_name||'—')}</td>
+        <td class="cell-dim">${escHtml(a.funding?.opportunity_name||'—')}</td>
         <td>${appStatusPill(a.status)}</td>
         <td style="color:var(--green-t);font-weight:600">${a.award_amount_approved?fmtMoney(a.award_amount_approved):'—'}</td>
-        <td class="cell-dim">${a.notes?.split('\n')[0]||'—'}</td>
+        <td class="cell-dim">${escHtml(a.notes?.split('\n')[0]||'—')}</td>
       </tr>`).join('')+'</tbody></table><div class="att-footer"><span>'+apps.length+' count</span></div>'
       :'<div class="empty-state" style="padding:24px"><div class="empty-icon">📋</div><div class="empty-text">No applications</div></div>'
     }catch(e){el.innerHTML='<div class="alert alert-error">Failed: '+e.message+'</div>'}
@@ -2611,7 +2695,7 @@ async function loadCompanyTabData(tab){
       const acts=ar.data||[]
       el.innerHTML=acts.length?acts.map(a=>`<div class="act-row">
         <div class="act-icon">${{NOTE:'📝',TASK:'✅',CREATE_COMPANY:'🏢',UPDATE_COMPANY:'✏',AI_QUERY:'🤖'}[a.action]||'📌'}</div>
-        <div class="act-body"><div class="act-text">${a.details||a.action}</div><div class="act-meta">${a.user?.full_name||a.user?.email||'System'} · ${fmtAgo(a.created_at)}</div></div>
+        <div class="act-body"><div class="act-text">${escHtml(a.details||a.action)}</div><div class="act-meta">${escHtml(a.user?.full_name||a.user?.email||'System')} · ${fmtAgo(a.created_at)}</div></div>
       </div>`).join(''):'<div class="empty-state" style="padding:24px"><div class="empty-icon">⚡</div><div class="empty-text">No activity</div></div>'
     }catch(e){el.innerHTML='<div class="alert alert-error">'+e.message+'</div>'}
   }
@@ -2635,12 +2719,12 @@ function openCompanyModal(co=null){
   const statusOpts=['prospect','contacted','qualified','active_client','churned','dnc'].map(s=>`<option value="${s}"${co?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${co?.state===s?' selected':''}>${s}</option>`).join('')
-  showModal(co?`Edit: ${co.company_name}`:'New Company',`
-    <div class="form-row"><div class="form-group"><div class="form-label">Company Name <span class="form-req">*</span></div><input id="co-name" value="${co?.company_name||''}"></div>
+  showModal(co?`Edit: ${escHtml(co.company_name)}`:'New Company',`
+    <div class="form-row"><div class="form-group"><div class="form-label">Company Name <span class="form-req">*</span></div><input id="co-name" value="${escHtml(co?.company_name||'')}"></div>
     <div class="form-group"><div class="form-label">Status</div><select id="co-status">${statusOpts}</select></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Type / Industry</div><input id="co-type" value="${co?.company_type||''}" placeholder="Senior Living Operator"></div>
-    <div class="form-group"><div class="form-label">Short Name</div><input id="co-short" value="${co?.short_name||''}"></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Domain / Website</div><input id="co-domain" value="${co?.domain||''}" placeholder="example.com"></div>
+    <div class="form-group"><div class="form-label">Short Name</div><input id="co-short" value="${escHtml(co?.short_name||'')}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Domain / Website</div><input id="co-domain" value="${escHtml(co?.domain||'')}" placeholder="example.com"></div>
     <div class="form-group"><div class="form-label">FEIN / Tax ID</div><input id="co-fein" value="${co?.fein||''}"></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Rating</div><select id="co-rating">
       <option value="">No rating</option>${[1,2,3,4,5].map(n=>`<option value="${n}"${co?.rating==n?' selected':''}>${'★'.repeat(n)}</option>`).join('')}
@@ -2648,7 +2732,7 @@ function openCompanyModal(co=null){
     <div class="form-group"><div class="form-label">Call Priority</div><input id="co-priority" type="number" value="${co?.call_priority||''}"><div class="form-hint">Numeric score — higher = more urgent</div></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Employee Count</div><input id="co-emp" type="number" value="${co?.employee_count_total||''}"></div>
     <div class="form-group"><div class="form-label">Avg Hourly Wage ($)</div><input id="co-wage" type="number" value="${co?.avg_hourly_wage||''}"></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Contact Name</div><input id="co-contact" value="${co?.primary_contact_name||''}"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Contact Name</div><input id="co-contact" value="${escHtml(co?.primary_contact_name||'')}"></div>
     <div class="form-group"><div class="form-label">Contact Type</div><select id="co-contact-type">
       <option value="">Select...</option>
       <option value="HR Manager"${co?.contact_type==='HR Manager'?' selected':''}>HR Manager</option>
@@ -2657,14 +2741,14 @@ function openCompanyModal(co=null){
       <option value="Training Coordinator"${co?.contact_type==='Training Coordinator'?' selected':''}>Training Coordinator</option>
       <option value="CFO"${co?.contact_type==='CFO'?' selected':''}>CFO</option>
     </select></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Phone</div><input id="co-phone" type="tel" value="${co?.primary_contact_phone||''}"></div>
-    <div class="form-group"><div class="form-label">Email</div><input id="co-email" type="email" value="${co?.primary_contact_email||''}"></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Address</div><input id="co-addr" value="${co?.address||''}"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Phone</div><input id="co-phone" type="tel" value="${escHtml(co?.primary_contact_phone||'')}"></div>
+    <div class="form-group"><div class="form-label">Email</div><input id="co-email" type="email" value="${escHtml(co?.primary_contact_email||'')}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Address</div><input id="co-addr" value="${escHtml(co?.address||'')}"></div>
     <div class="form-group"><div class="form-label">State</div><select id="co-state">${stateOpts}</select></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">City</div><input id="co-city" value="${co?.city||''}"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">City</div><input id="co-city" value="${escHtml(co?.city||'')}"></div>
     <div class="form-group"><div class="form-label">Zip</div><input id="co-zip" value="${co?.zip||''}"></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Training Needs</div><textarea id="co-training" rows="2">${co?.training_needs||''}</textarea></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="co-notes" rows="3">${co?.notes||''}</textarea></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Training Needs</div><textarea id="co-training" rows="2">${escHtml(co?.training_needs||'')}</textarea></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="co-notes" rows="3">${escHtml(co?.notes||'')}</textarea></div></div>
     <label class="chk-row"><input type="checkbox" id="co-25pct"${co?.is_25_pct_operator?' checked':''}> Is 25% Operator</label>`,
   async()=>{
     const payload={
@@ -2778,7 +2862,7 @@ async function pageCompliance(){
       <th><div class="th-i">Risk Level</div></th><th><div class="th-i">Final Submitted</div></th>
     </tr></thead><tbody>
     ${(data.data||[]).map(c=>`<tr>
-      <td style="font-weight:500">${c.company_name}</td>
+      <td style="font-weight:500">${escHtml(c.company_name)}</td>
       <td class="cell-mono">${c.application_number}</td>
       <td>${c.final_report_due||'—'}</td>
       <td><span style="font-weight:600;color:${c.days_until_final_due<7?'var(--red)':c.days_until_final_due<14?'var(--amber)':'var(--text2)'}">${c.days_until_final_due!=null?(c.days_until_final_due>0?c.days_until_final_due+'d':'🔴 OVERDUE'):'—'}</span></td>
@@ -3001,15 +3085,15 @@ function renderUserRow(u){
   return`<tr>
     <td><div style="display:flex;align-items:center;gap:8px">
       <span style="width:26px;height:26px;border-radius:50%;background:var(--blue-bg);color:var(--blue-t);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">${initials}</span>
-      <div><div style="font-size:12px;font-weight:500">${u.full_name||'—'}</div><div class="cell-dim">${u.email}</div></div>
+      <div><div style="font-size:12px;font-weight:500">${escHtml(u.full_name||'—')}</div><div class="cell-dim">${escHtml(u.email)}</div></div>
     </div></td>
     <td><span class="pill p-blue">${roleLabels[u.role]||u.role}</span></td>
-    <td class="cell-dim">${u.title||'—'}</td>
+    <td class="cell-dim">${escHtml(u.title||'—')}</td>
     <td>${u.is_active!==false?'<span class="pill p-green">Active</span>':'<span class="pill p-red">Inactive</span>'}</td>
     <td class="cell-dim">${u.last_login?fmtAgo(u.last_login):'Never'}</td>
     <td><div class="action-btns">
       <button class="action-btn" onclick="openEditUserModal(${JSON.stringify(u).replace(/"/g,"'")})">Edit</button>
-      ${['super_admin','admin'].includes(currentUser?.role)?`<button class="action-btn del" onclick="deleteUserConfirm('${u.id}','${(u.full_name||u.email).replace(/'/g,'')}')">Delete</button>`:''}
+      ${['super_admin','admin'].includes(currentUser?.role)?`<button class="action-btn del" onclick="deleteUserConfirm('${u.id}','${escHtml(u.full_name||u.email)}')">Delete</button>`:''}
     </div></td>
   </tr>`
 }
@@ -3128,8 +3212,8 @@ function openUserModal(){
 }
 
 function openEditUserModal(u){
-  showModal(`Edit User: ${u.full_name||u.email}`,`
-    <div class="form-row"><div class="form-group"><div class="form-label">Full Name</div><input id="eu-name" value="${u.full_name||''}"></div>
+  showModal(`Edit User: ${escHtml(u.full_name||u.email)}`,`
+    <div class="form-row"><div class="form-group"><div class="form-label">Full Name</div><input id="eu-name" value="${escHtml(u.full_name||'')}"></div>
     <div class="form-group"><div class="form-label">Role</div><select id="eu-role">
       <option value="team_member"${u.role==='team_member'?' selected':''}>Sales Specialist</option>
       <option value="grant_coordinator"${u.role==='grant_coordinator'?' selected':''}>Grant Coordinator</option>
@@ -3138,7 +3222,7 @@ function openEditUserModal(u){
       <option value="external_partner"${u.role==='external_partner'?' selected':''}>Read-Only (External)</option>
       ${currentUser?.role==='super_admin'?`<option value="super_admin"${u.role==='super_admin'?' selected':''}>Super Admin</option>`:''}
     </select></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Title</div><input id="eu-title" value="${u.title||''}"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Title</div><input id="eu-title" value="${escHtml(u.title||'')}"></div>
     <div class="form-group"><div class="form-label">Phone</div><input id="eu-phone" value="${u.phone||''}"></div></div>
     <label class="chk-row" style="margin-top:8px"><input type="checkbox" id="eu-active"${u.is_active!==false?' checked':''}> Account Active</label>`,
   async()=>{
@@ -3181,8 +3265,8 @@ async function pageAuditLogs(){
           return`<div class="act-row">
             <div class="act-icon" style="background:var(--gray2)">${icons[action]||'⚪'}</div>
             <div class="act-body">
-              <div class="act-text">${action.replace(/_/g,' ')}: ${a.details||''}</div>
-              <div class="act-meta">${a.user?.email||''} · ${a.created_at?fmtAgo(a.created_at):''}</div>
+              <div class="act-text">${action.replace(/_/g,' ')}: ${escHtml(a.details||'')}</div>
+              <div class="act-meta">${escHtml(a.user?.email||'')} · ${a.created_at?fmtAgo(a.created_at):''}</div>
             </div>
             <div style="font-size:10px;color:var(--text3);white-space:nowrap">${a.created_at?new Date(a.created_at).toLocaleString():''}</div>
           </div>`
@@ -3311,7 +3395,7 @@ function pageChat(){
       <div style="padding:6px 12px;margin-top:8px;font-size:9px;color:var(--text3);letter-spacing:.9px;text-transform:uppercase;font-weight:600">Direct Messages</div>
       ${(window._users||[]).slice(0,5).map(u=>`<div class="sb-item">
         <span style="width:14px;height:14px;border-radius:50%;background:var(--green-bg);display:inline-block;margin-right:2px"></span>
-        ${u.full_name||u.email}
+        ${escHtml(u.full_name||u.email)}
       </div>`).join('')}
     </div>
     <div style="flex:1;display:flex;flex-direction:column">
@@ -3735,7 +3819,7 @@ function renderLocationsTable(locs){
       ${d.length===0?`<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📍</div><div class="empty-text">No locations yet</div><div class="empty-sub">Import a CSV or add locations individually</div><button class="btn btn-primary" onclick="openLocationModal()">+ New Location</button></div></td></tr>`:
       d.map(l=>`<tr onclick="openLocationModal(${JSON.stringify(l).replace(/"/g,"'")})">
         <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
-        <td><div class="col-name-cell"><span>📍</span><span style="font-weight:500">${l.location_name}</span>${l.city?`<span class="cell-dim" style="margin-left:6px;font-size:10px">${l.city}, ${l.state}</span>`:''}</div></td>
+        <td><div class="col-name-cell"><span>📍</span><span style="font-weight:500">${escHtml(l.location_name)}</span>${l.city?`<span class="cell-dim" style="margin-left:6px;font-size:10px">${l.city}, ${l.state}</span>`:''}</div></td>
         <td><div style="display:flex;align-items:center;gap:5px"><span style="font-size:11px">⊞</span><span class="cell-dim">${l.parent_company?.company_name||'Independent Oper...'}</span></div></td>
         <td>${locStatusPill(l.status)}</td>
         <td><b style="font-size:11px">${l.state||'—'}</b></td>
@@ -3756,15 +3840,15 @@ function openLocationModal(loc=null){
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${loc?.state===s?' selected':''}>${s}</option>`).join('')
   const statusOpts=['not_contacted','contacted','application_in_progress','client','network_member','dnc','open','stop_applications'].map(s=>`<option value="${s}"${loc?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
-  showModal(loc?`Edit: ${loc.location_name}`:'New Location',`
-    <div class="form-row"><div class="form-group"><div class="form-label">Location Name <span class="form-req">*</span></div><input id="loc-name" value="${loc?.location_name||''}"></div>
+  showModal(loc?`Edit: ${escHtml(loc.location_name)}`:'New Location',`
+    <div class="form-row"><div class="form-group"><div class="form-label">Location Name <span class="form-req">*</span></div><input id="loc-name" value="${escHtml(loc?.location_name||'')}"></div>
     <div class="form-group"><div class="form-label">State <span class="form-req">*</span></div><select id="loc-state">${stateOpts}</select></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">County</div><input id="loc-county" value="${loc?.county||''}"></div>
-    <div class="form-group"><div class="form-label">City</div><input id="loc-city" value="${loc?.city||''}"></div></div>
+    <div class="form-group"><div class="form-label">City</div><input id="loc-city" value="${escHtml(loc?.city||'')}"></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="loc-status">${statusOpts}</select></div>
     <div class="form-group"><div class="form-label">Employee Count</div><input id="loc-emp" type="number" value="${loc?.employee_count||''}"></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Address</div><input id="loc-addr" value="${loc?.address||''}"></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="loc-notes" rows="2">${loc?.notes||''}</textarea></div></div>`,
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Address</div><input id="loc-addr" value="${escHtml(loc?.address||'')}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="loc-notes" rows="2">${escHtml(loc?.notes||'')}</textarea></div></div>`,
   async()=>{
     const payload={location_name:document.getElementById('loc-name').value.trim(),state:document.getElementById('loc-state').value,county:document.getElementById('loc-county').value||null,city:document.getElementById('loc-city').value||null,status:document.getElementById('loc-status').value,employee_count:document.getElementById('loc-emp').value||null,address:document.getElementById('loc-addr').value||null,notes:document.getElementById('loc-notes').value||null}
     if(!payload.location_name){showToast('Location name required','error');return false}
@@ -3822,13 +3906,13 @@ function renderFundingTableInner(data){
       <tbody id="funding-tbody">
       ${data.map(f=>`<tr onclick="openFundingModal(${JSON.stringify(f).replace(/"/g,"'")})">
         <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
-        <td><div class="col-name-cell"><span>💰</span><span style="font-weight:500">${f.opportunity_name}</span></div></td>
-        <td>${f.source_url&&f.source_url.startsWith('http')?`<a href="${f.source_url}" target="_blank" class="cell-link" onclick="event.stopPropagation()">🔗 Drive</a>`:'<span class="cell-dim">—</span>'}</td>
+        <td><div class="col-name-cell"><span>💰</span><span style="font-weight:500">${escHtml(f.opportunity_name)}</span></div></td>
+        <td>${f.source_url&&f.source_url.startsWith('http')?`<a href="${escUrl(f.source_url)}" target="_blank" class="cell-link" onclick="event.stopPropagation()">🔗 Drive</a>`:'<span class="cell-dim">—</span>'}</td>
         <td>${fundingStatusPill(f.status)}</td>
-        <td class="cell-dim" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.wib?.wib_name||'—'}</td>
-        <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.application_process||'—'}</td>
+        <td class="cell-dim" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(f.wib?.wib_name||'—')}</td>
+        <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(f.application_process||'—')}</td>
         <td class="cell-dim">—</td>
-        <td>${f.blocked_reason?`<span style="color:var(--red-t);font-size:10px;font-weight:600;background:var(--red-bg);padding:2px 6px;border-radius:4px">${f.blocked_reason}</span>`:'<span class="cell-dim">—</span>'}</td>
+        <td>${f.blocked_reason?`<span style="color:var(--red-t);font-size:10px;font-weight:600;background:var(--red-bg);padding:2px 6px;border-radius:4px">${escHtml(f.blocked_reason)}</span>`:'<span class="cell-dim">—</span>'}</td>
         <td style="color:var(--green-t);font-weight:600">${f.max_award_per_ein?fmtMoney(f.max_award_per_ein):'<span class="cell-dim">—</span>'}</td>
         <td style="color:var(--green-t)">${f.max_award_per_employee?fmtMoney(f.max_award_per_employee):'<span class="cell-dim">—</span>'}</td>
         <td class="cell-dim">—</td>
@@ -3864,13 +3948,13 @@ function filterFundingTable(q){
   const tbody = document.getElementById('funding-tbody')
   if(tbody) tbody.innerHTML = d.map(f=>`<tr onclick="openFundingModal(${JSON.stringify(f).replace(/"/g,"'")})">
     <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
-    <td><div class="col-name-cell"><span>💰</span><span style="font-weight:500">${f.opportunity_name}</span></div></td>
-    <td>${f.source_url&&f.source_url.startsWith('http')?`<a href="${f.source_url}" target="_blank" class="cell-link" onclick="event.stopPropagation()">🔗 Drive</a>`:'<span class="cell-dim">—</span>'}</td>
+    <td><div class="col-name-cell"><span>💰</span><span style="font-weight:500">${escHtml(f.opportunity_name)}</span></div></td>
+    <td>${f.source_url&&f.source_url.startsWith('http')?`<a href="${escUrl(f.source_url)}" target="_blank" class="cell-link" onclick="event.stopPropagation()">🔗 Drive</a>`:'<span class="cell-dim">—</span>'}</td>
     <td>${fundingStatusPill(f.status)}</td>
-    <td class="cell-dim">${f.wib?.wib_name||'—'}</td>
-    <td class="cell-dim">${f.application_process||'—'}</td>
+    <td class="cell-dim">${escHtml(f.wib?.wib_name||'—')}</td>
+    <td class="cell-dim">${escHtml(f.application_process||'—')}</td>
     <td class="cell-dim">—</td>
-    <td>${f.blocked_reason?`<span style="color:var(--red-t);font-size:10px;font-weight:600;background:var(--red-bg);padding:2px 6px;border-radius:4px">${f.blocked_reason}</span>`:'<span class="cell-dim">—</span>'}</td>
+    <td>${f.blocked_reason?`<span style="color:var(--red-t);font-size:10px;font-weight:600;background:var(--red-bg);padding:2px 6px;border-radius:4px">${escHtml(f.blocked_reason)}</span>`:'<span class="cell-dim">—</span>'}</td>
     <td style="color:var(--green-t);font-weight:600">${f.max_award_per_ein?fmtMoney(f.max_award_per_ein):'<span class="cell-dim">—</span>'}</td>
     <td style="color:var(--green-t)">${f.max_award_per_employee?fmtMoney(f.max_award_per_employee):'<span class="cell-dim">—</span>'}</td>
     <td class="cell-dim">—</td>
@@ -3904,8 +3988,8 @@ async function pageFunding(){
   document.getElementById('page-area').innerHTML = renderFundingTableInner(window._funding||[])
 }
 function openFundingModal(f=null){
-  showModal(f?`Edit: ${f.opportunity_name}`:'New Funding Opportunity',`
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Opportunity Name <span class="form-req">*</span></div><input id="fo-name" value="${f?.opportunity_name||''}"></div></div>
+  showModal(f?`Edit: ${escHtml(f.opportunity_name)}`:'New Funding Opportunity',`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Opportunity Name <span class="form-req">*</span></div><input id="fo-name" value="${escHtml(f?.opportunity_name||'')}"></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="fo-status">
       <option value="open"${f?.status==='open'?' selected':''}>Open</option>
       <option value="pending"${f?.status==='pending'?' selected':''}>Pending</option>
@@ -3930,9 +4014,9 @@ function openFundingModal(f=null){
       <option value="Not needed"${f?.wage_increase_for_participants==='Not needed'?' selected':''}>Not needed</option>
       <option value="Required"${f?.wage_increase_for_participants==='Required'?' selected':''}>Required</option>
     </select></div>
-    <div class="form-group"><div class="form-label">Blocked Reason</div><input id="fo-blocked" value="${f?.blocked_reason||''}" placeholder="No WGN Locations..."></div></div>
+    <div class="form-group"><div class="form-label">Blocked Reason</div><input id="fo-blocked" value="${escHtml(f?.blocked_reason||'')}" placeholder="No WGN Locations..."></div></div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Application Link (Google Drive / Portal)</div><input id="fo-link" type="url" value="${f?.source_url||''}" placeholder="https://drive.google.com/..."></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Application Process Notes</div><textarea id="fo-notes" rows="3">${f?.application_process||''}</textarea></div></div>`,
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Application Process Notes</div><textarea id="fo-notes" rows="3">${escHtml(f?.application_process||'')}</textarea></div></div>`,
   async()=>{
     const payload={opportunity_name:document.getElementById('fo-name').value.trim(),status:document.getElementById('fo-status').value,program_type:document.getElementById('fo-type').value||null,max_award_per_ein:document.getElementById('fo-maxein').value||null,max_award_per_employee:document.getElementById('fo-maxemp').value||null,application_deadline:document.getElementById('fo-deadline').value||null,promotion_for_participants:document.getElementById('fo-promo').value||null,wage_increase_for_participants:document.getElementById('fo-wage').value||null,blocked_reason:document.getElementById('fo-blocked').value||null,source_url:document.getElementById('fo-link').value||null,application_process:document.getElementById('fo-notes').value||null}
     if(!payload.opportunity_name){showToast('Opportunity name required','error');return false}
@@ -4062,17 +4146,17 @@ function renderAppsRows(apps){
   if(!apps.length)return`<tr><td colspan="13"><div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><button class="btn btn-primary" onclick="openNewApplicationModal()">+ New Application</button></div></td></tr>`
   return apps.map(a=>`<tr onclick="openEditApplicationModal(${JSON.stringify(a).replace(/"/g,"'")})">
     <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
-    <td><div class="col-name-cell"><span>📋</span><span style="font-weight:500">${a.company?.company_name||'Unknown'}</span></div></td>
-    <td class="cell-dim" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.funding?.opportunity_name||'—'}</td>
-    <td class="cell-dim">${a.location?.location_name||'—'}</td>
+    <td><div class="col-name-cell"><span>📋</span><span style="font-weight:500">${escHtml(a.company?.company_name||'Unknown')}</span></div></td>
+    <td class="cell-dim" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.funding?.opportunity_name||'—')}</td>
+    <td class="cell-dim">${escHtml(a.location?.location_name||'—')}</td>
     <td style="text-align:center">${a.application_approved_date?`<span style="color:var(--green-t)">✓</span>`:'<span class="cell-dim">—</span>'}</td>
-    <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.notes?.split('\n')[0]||'—'}</td>
+    <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.notes?.split('\n')[0]||'—')}</td>
     <td>${appStatusPill(a.status)}</td>
     <td style="color:var(--green-t);font-weight:600">${a.award_amount_approved?fmtMoney(a.award_amount_approved):'—'}</td>
-    <td class="cell-dim">${a.location?.company?.company_name||a.company?.supported_by||'—'}</td>
-    <td class="cell-dim">${a.location?.state||'—'}</td>
-    <td class="cell-dim" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.wib?.wib_name||a.funding?.wib?.wib_name||'—'}</td>
-    <td class="cell-dim">${a.location?.location_name?`<span style="display:inline-flex;align-items:center;gap:2px;font-size:10.5px">⚙️ ${a.location.location_name}</span>`:'—'}</td>
+    <td class="cell-dim">${escHtml(a.location?.company?.company_name||a.company?.supported_by||'—')}</td>
+    <td class="cell-dim">${escHtml(a.location?.state||'—')}</td>
+    <td class="cell-dim" style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.wib?.wib_name||a.funding?.wib?.wib_name||'—')}</td>
+    <td class="cell-dim">${a.location?.location_name?`<span style="display:inline-flex;align-items:center;gap:2px;font-size:10.5px">⚙️ ${escHtml(a.location.location_name)}</span>`:'—'}</td>
   </tr>`).join('')
 }
 
@@ -4116,7 +4200,7 @@ function openNewApplicationModal(){
 function openEditApplicationModal(a){
   const appLink=a.notes?.match(/https?:\/\/[^\s]+/)?.[0]||''
   showModal('Edit Application',`
-    <div class="form-row"><div class="form-group"><div class="form-label">Company</div><input value="${a.company?.company_name||'—'}" disabled style="opacity:.6"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Company</div><input value="${escHtml(a.company?.company_name||'—')}" disabled style="opacity:.6"></div>
     <div class="form-group"><div class="form-label">Status</div><select id="eapp-status">
       <option value="draft"${a.status==='draft'?' selected':''}>Draft</option>
       <option value="submitted"${a.status==='submitted'?' selected':''}>Submitted</option>
@@ -4283,7 +4367,7 @@ function openTaskEdit(id){
   const t=(window._tasks||[]).find(t=>t.id===id);if(!t)return
   const m=getTaskMeta(t)
   showModal('Edit Task',`
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Title</div><input id="te-title" value="${(m.title||t.details||'').replace(/"/g,'&quot;')}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Title</div><input id="te-title" value="${escHtml(m.title||t.details||'')}"></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Due Date</div><input id="te-due" type="date" value="${m.due_date||''}"></div>
     <div class="form-group"><div class="form-label">Priority</div>
       <select id="te-pri">
@@ -4293,7 +4377,7 @@ function openTaskEdit(id){
       </select>
     </div></div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Assigned To</div><input id="te-assign" value="${m.assigned_to||''}"></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="te-notes" rows="3">${m.notes||''}</textarea></div></div>`,
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="te-notes" rows="3">${escHtml(m.notes||'')}</textarea></div></div>`,
   async()=>{
     try{
       await api('/api/tasks/'+id,'PUT',{title:document.getElementById('te-title').value,due_date:document.getElementById('te-due').value||null,priority:document.getElementById('te-pri').value,assigned_to:document.getElementById('te-assign').value||null,notes:document.getElementById('te-notes').value||null})
@@ -4363,7 +4447,7 @@ function renderNotesGrid(notes){
         <div class="card-hd" style="padding:8px 10px">
           <div style="display:flex;align-items:center;gap:6px">
             <span style="width:20px;height:20px;border-radius:50%;background:${bgCol};color:${textCol};display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">${isAircall?'A':initials}</span>
-            <span style="font-size:11px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${n.user?.full_name||n.record_type?.replace('_records','').replace('_',' ')||'Note'}</span>
+            <span style="font-size:11px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(n.user?.full_name||n.record_type?.replace('_records','').replace('_',' ')||'Note')}</span>
           </div>
           <span class="cell-dim">${fmtAgo(n.created_at)}</span>
         </div>
@@ -4383,7 +4467,7 @@ function renderNotesGrid(notes){
 
 function showNoteDetail(id){
   const n=window._globalNotes?.find(note=>note.id===id);if(!n)return
-  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${(n.user?.full_name||'?').slice(0,2).toUpperCase()}</div><div class="note-author">${n.user?.full_name||'System'}</div><div class="note-time">${fmtDate(n.created_at)}</div><span class="note-badge">${n.metadata?.note_type||'Note'}</span></div><div class="note-content">${getNoteContent(n).replace(/</g,'&lt;')}</div></div>`)
+  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${(n.user?.full_name||'?').slice(0,2).toUpperCase()}</div><div class="note-author">${escHtml(n.user?.full_name||'System')}</div><div class="note-time">${fmtDate(n.created_at)}</div><span class="note-badge">${n.metadata?.note_type||'Note'}</span></div><div class="note-content">${getNoteContent(n).replace(/</g,'&lt;')}</div></div>`)
 }
 
 function openNewNoteModal(){
@@ -4450,7 +4534,7 @@ function pageCalls(){
         <div style="font-size:11px;color:var(--text2);min-width:200px">${recordName}</div>
         <div style="display:flex;align-items:center;gap:6px;min-width:120px">
           <span style="width:22px;height:22px;border-radius:50%;background:var(--blue-bg);color:var(--blue-t);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">${(c.user?.full_name||'?').slice(0,1)}</span>
-          <span class="cell-dim" style="font-size:10.5px">${c.user?.full_name||'—'}</span>
+          <span class="cell-dim" style="font-size:10.5px">${escHtml(c.user?.full_name||'—')}</span>
         </div>
         <div class="call-meta"><div class="call-time">${fmtAgo(c.created_at)}</div></div>
       </div>`
@@ -4555,7 +4639,7 @@ function addAircallNote(recordId='',recordType=''){
     const dur=document.getElementById('aircall-dur').value
     const dir=document.getElementById('aircall-dir').value
     const url=document.getElementById('aircall-url').value
-    const fullNote=`Call (${dur||'?'}m) — ${dir}\n${notes}${url?'\nRecording: '+url:''}`
+    const fullNote=`Call (${dur||'?'}m) — ${dir}\n${escHtml(notes)}${url?'\nRecording: '+url:''}`
     try{
       await api('/api/notes','POST',{record_type:recordType||null,record_id:recordId||null,details:fullNote,metadata:{is_aircall:true,note_type:'Aircall',duration:dur,direction:dir,recording_url:url||null}})
       showToast('Call logged','success')
