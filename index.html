@@ -2103,13 +2103,20 @@ function importCSV(type){
         if(!r)throw lastErr
         totalCreated+=r.created||0
         if(r.errors?.length)totalErrors.push(...r.errors)
-        // Show column names detected on first batch for debugging
-        if(b===0 && r.first_row_keys?.length){
+        // Show column names and first error on batch 1
+        if(b===0){
           const colInfo=document.getElementById('import-prog-detail')
-          if(colInfo&&!totalCreated)colInfo.textContent='Columns detected: '+r.first_row_keys.join(', ')
+          if(r.first_row_keys?.length&&colInfo)
+            colInfo.textContent='Columns: '+r.first_row_keys.slice(0,6).join(', ')
+          if(r.errors?.length>0&&preview){
+            // Show first error live so user doesn't have to wait
+            const errDiv=document.getElementById('import-live-error')||document.createElement('div')
+            errDiv.id='import-live-error'
+            errDiv.style.cssText='margin-top:6px;padding:8px;background:#fff0f0;border:.5px solid #fca5a5;border-radius:6px;font-size:11px;color:#991b1b'
+            errDiv.innerHTML='⚠️ First error: '+r.errors[0]
+            if(!document.getElementById('import-live-error'))preview.appendChild(errDiv)
+          }
         }
-        // Use server's error_count for accurate total if truncated
-        if(r.error_count&&r.error_count>totalErrors.length)totalErrors.length=Math.min(r.error_count,totalErrors.length+50)
       }
 
       // Final progress update
