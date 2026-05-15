@@ -194,8 +194,7 @@ app.post('/api/debug-login', rateLimitLogin, async (req, res) => {
       error_code: result.error ? result.error.status : null
     })
   } catch (err) {
-    console.error('Debug login threw:', err.message, err.stack?.split('
-')[1])
+    console.error('Debug login threw:', err.message, err.stack?.split('\n')[1])
     return res.status(500).json({ threw: true, error: err.message, type: err.constructor.name })
   }
 })
