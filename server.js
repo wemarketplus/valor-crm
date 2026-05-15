@@ -825,20 +825,36 @@ app.post('/api/import/:type', auth, async (req, res) => {
 
     } else if (type === 'companies') {
       const valid = []
+      // Flexible column matching — find the name column regardless of header label
+      const nameKey = rows[0] ? Object.keys(rows[0]).find(k =>
+        /company.?name|^record$|^name$|^company$|^employer$/i.test(k.trim())
+      ) : null
       for (const row of rows) {
-        const name = row['Company Name']?.trim() || row['Record']?.trim() || row['Name']?.trim()
-        if (!name) { results.errors.push('Skipped row — Company Name required'); continue }
+        // Try many possible column names for company
+        const name = (nameKey ? row[nameKey] : null)?.trim()
+          || row['Company Name']?.trim() || row['company_name']?.trim()
+          || row['Record']?.trim() || row['Name']?.trim()
+          || row['Company']?.trim() || row['Employer']?.trim()
+          || row['Organization']?.trim()
+        if (!name) { results.errors.push('Skipped row — no company name found'); continue }
+        // Flexible status mapping
+        const rawStatus = row['Status'] || row['status'] || ''
+        const statusMap = { 'client': 'client', 'prospect': 'prospect', 'active': 'client',
+          'inactive': 'inactive', 'lead': 'prospect', 'network member': 'network_member',
+          'network_member': 'network_member', 'dnc': 'dnc', 'do not contact': 'dnc' }
+        const status = statusMap[rawStatus.toLowerCase()] || 'prospect'
         valid.push({
           company_name: name,
-          company_type: row['Type'] || row['Company Type'] || null,
-          status: row['Status'] || 'prospect',
-          fein: row['FEIN'] || null,
-          domain: row['Domain'] || null,
-          employee_count_total: row['Employee Count'] ? parseInt(row['Employee Count']) : null,
-          avg_hourly_wage: row['Avg Wage'] ? parseFloat(row['Avg Wage']) : null,
-          primary_contact_name: row['Contact Name'] || null,
-          primary_contact_email: row['Contact Email'] || null,
-          primary_contact_phone: row['Contact Phone'] || null
+          company_type: row['Type'] || row['Company Type'] || row['type'] || null,
+          status,
+          fein: row['FEIN'] || row['EIN'] || row['fein'] || null,
+          domain: row['Domain'] || row['Website'] || row['domain'] || null,
+          employee_count_total: (() => { const v = row['Employee Count'] || row['Employees'] || row['employee_count']; return v ? parseInt(v) : null })(),
+          avg_hourly_wage: (() => { const v = row['Avg Wage'] || row['Average Wage']; return v ? parseFloat(v) : null })(),
+          primary_contact_name: row['Contact Name'] || row['Primary Contact'] || row['Contact'] || null,
+          primary_contact_email: row['Contact Email'] || row['Email'] || row['contact_email'] || null,
+          primary_contact_phone: row['Contact Phone'] || row['Phone'] || row['contact_phone'] || null,
+          notes: row['Notes'] || row['Description'] || null,
         })
       }
       for (let i = 0; i < valid.length; i += 500) await bulkInsert('companies', valid.slice(i, i + 500))
