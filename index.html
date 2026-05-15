@@ -832,32 +832,154 @@ async function pageDashboard(){
 // WIB PROFILE PAGE
 // ═══════════════════════════════════════════════════════
 async function openWibProfile(id){
+  if(!id||id==='refresh'){if(currentWib)id=currentWib.id;else{loadPage('wibs');return}}
   currentWib=null
   document.getElementById('tab-area').innerHTML=''
   document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading WIB profile...</div>'
-  const wibs=await api('/api/wibs')
-  currentWib=(wibs.data||[]).find(w=>w.id===id)
+  // Use single-record endpoint instead of loading all 500 WIBs
+  try{
+    currentWib=await api('/api/wibs/'+id)
+  }catch(e){
+    // Fallback: search in cached list
+    if(window._wibs?.length){currentWib=window._wibs.find(w=>w.id===id)}
+  }
   if(!currentWib){document.getElementById('page-area').innerHTML='<div class="alert alert-error">WIB not found</div>';return}
   setTopbar(`<span onclick="loadPage('wibs')" style="cursor:pointer;color:var(--text2);font-weight:400">Workforce Boards</span> <span style="color:var(--text3)"> / </span> ${currentWib.wib_name}`,'','')
   setTabs([
     {id:'overview',icon:'📊 ',label:'Overview'},
     {id:'notes',icon:'📝 ',label:'Notes'},
-    {id:'tasks',icon:'✅ ',label:'Tasks',count:0},
+    {id:'tasks',icon:'✅ ',label:'Tasks'},
     {id:'funding',icon:'💰 ',label:'Funding'},
     {id:'contacts',icon:'👤 ',label:'Contacts'},
     {id:'files',icon:'📁 ',label:'Files'},
     {id:'activity',icon:'⚡ ',label:'Activity'},
   ],wibTab,'switchWibTab')
   renderWibTab()
+  // Load real data for the active tab
+  loadWibTabData(wibTab)
 }
 
 function switchWibTab(tab){
   wibTab=tab
   document.querySelectorAll('.record-tab').forEach(el=>el.classList.remove('active'))
-  document.querySelectorAll('.record-tab').forEach(el=>{if(el.textContent.trim().startsWith(tab.charAt(0).toUpperCase()||tab)){}})
   const tabs=document.querySelectorAll('.record-tab')
   tabs.forEach(t=>{if(t.getAttribute('onclick')?.includes(`'${tab}'`))t.classList.add('active')})
   renderWibTab()
+  // Load async data after render
+  loadWibTabData(tab)
+}
+
+// Load async data for current WIB tab
+async function loadWibTabData(tab){
+  const w=currentWib
+  if(!w)return
+  const wid=w.id
+  
+  if(tab==='overview'){
+    // Load real notes into overview panel
+    const notesEl=document.getElementById('wib-overview-notes')
+    const actEl=document.getElementById('wib-overview-activity')
+    if(notesEl){
+      try{
+        const nr=await api('/api/notes?record_type=wib_records&record_id='+wid+'&limit=3')
+        const notes=nr.data||[]
+        if(!notes.length) notesEl.innerHTML='<div style="color:var(--text3);font-size:11px;padding:6px;text-align:center">No notes yet — <button class="btn btn-sm" onclick="switchWibTab(&apos;notes&apos;)">+ Add one</button></div>'
+        else notesEl.innerHTML=notes.map(n=>renderDbNoteCard(n)).join('')
+      }catch(e){notesEl.innerHTML='<div style="font-size:11px;color:var(--text3);padding:6px">Notes unavailable</div>'}
+    }
+    if(actEl){
+      try{
+        const ar=await api('/api/activity?record_type=wib_records&record_id='+wid+'&limit=5')
+        const acts=ar.data||[]
+        if(!acts.length) actEl.innerHTML='<div style="color:var(--text3);font-size:11px;padding:6px;text-align:center">No activity yet</div>'
+        else actEl.innerHTML=acts.map(a=>`<div style="display:flex;gap:8px;padding:5px 0;border-bottom:.5px solid var(--gray2);font-size:11px">
+          <div style="color:var(--text3);min-width:24px">${{NOTE:'📝',TASK:'✅',CREATE_WIB:'🏛️',UPDATE_WIB:'✏️',AI_QUERY:'🤖',USER_LOGIN:'🔐'}[a.action]||'📌'}</div>
+          <div style="flex:1"><div>${a.details||a.action}</div><div style="color:var(--text3);font-size:10px">${a.user?.full_name||''} · ${formatTimeAgo(new Date(a.created_at))}</div></div>
+        </div>`).join('')
+      }catch(e){actEl.innerHTML='<div style="font-size:11px;color:var(--text3);padding:6px">Activity unavailable</div>'}
+    }
+  }
+  
+  if(tab==='notes'){
+    // Load notes tab
+    const el=document.getElementById('wib-notes-list')
+    if(el){
+      el.innerHTML='<div style="color:var(--text3);padding:12px">⏳ Loading notes...</div>'
+      try{
+        const nr=await api('/api/notes?record_type=wib_records&record_id='+wid+'&limit=50')
+        const notes=nr.data||[]
+        if(!notes.length) el.innerHTML='<div class="empty-state" style="padding:30px"><div class="empty-icon">📝</div><div class="empty-text">No notes yet</div><div class="empty-sub">Add a call note, meeting summary, or update above</div></div>'
+        else el.innerHTML=notes.map(n=>renderDbNoteCard(n)).join('')
+      }catch(e){el.innerHTML='<div class="alert alert-error">Failed to load: '+e.message+'</div>'}
+    }
+  }
+  
+  if(tab==='tasks'){
+    // Load tasks tab
+    const el=document.getElementById('wib-tasks-list')
+    if(el){
+      el.innerHTML='<div style="color:var(--text3);padding:12px">⏳ Loading tasks...</div>'
+      try{
+        const tr=await api('/api/tasks?record_id='+wid+'&limit=50')
+        const tasks=tr.data||[]
+        if(!tasks.length) el.innerHTML='<div class="empty-state" style="padding:30px"><div class="empty-icon">✅</div><div class="empty-text">No tasks for this WIB</div></div>'
+        else{
+          const now=new Date()
+          el.innerHTML=tasks.map(t=>{
+            const m=getTaskMeta(t)
+            const title=m.title||t.details||'Task'
+            const due=m.due_date?new Date(m.due_date):null
+            const overdue=due&&!m.done&&due<now
+            return`<div style="display:flex;align-items:center;gap:8px;padding:8px;border-bottom:.5px solid var(--gray2)">
+              <div class="task-check${m.done?' done':''}" onclick="toggleTaskDB('${t.id}',${!!m.done})" style="cursor:pointer;flex-shrink:0">✓</div>
+              <div style="flex:1"><div style="${m.done?'text-decoration:line-through;opacity:.5':''}">${title}</div>${due?`<div style="font-size:10px;color:${overdue?'var(--red-t)':'var(--text3)'}">${overdue?'⚠️ Overdue: ':'Due: '}${due.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>`:''}
+              </div>
+              <button class="action-btn" onclick="toggleTaskDB('${t.id}',${!!m.done})">${m.done?'Reopen':'Done'}</button>
+              <button class="action-btn del" onclick="deleteTask('${t.id}')">Del</button>
+            </div>`
+          }).join('')
+        }
+      }catch(e){el.innerHTML='<div class="alert alert-error">Failed to load: '+e.message+'</div>'}
+    }
+  }
+  
+  if(tab==='activity'){
+    const el=document.getElementById('wib-activity-list')
+    if(el){
+      el.innerHTML='<div style="color:var(--text3);padding:12px">⏳ Loading activity...</div>'
+      try{
+        const ar=await api('/api/activity?record_type=wib_records&record_id='+wid+'&limit=50')
+        const acts=ar.data||[]
+        if(!acts.length) el.innerHTML='<div class="empty-state" style="padding:30px"><div class="empty-icon">⚡</div><div class="empty-text">No activity yet</div></div>'
+        else el.innerHTML=acts.map(a=>`<div style="display:flex;gap:10px;padding:8px;border-bottom:.5px solid var(--gray2)">
+          <div style="font-size:18px;width:24px;flex-shrink:0">${{NOTE:'📝',TASK:'✅',CREATE_WIB:'🏛️',UPDATE_WIB:'✏️',AI_QUERY:'🤖'}[a.action]||'📌'}</div>
+          <div style="flex:1">
+            <div style="font-size:12px">${a.details||a.action}</div>
+            <div style="font-size:10px;color:var(--text3)">${a.user?.full_name||a.user?.email||'System'} · ${formatTimeAgo(new Date(a.created_at))}</div>
+          </div>
+        </div>`).join('')
+      }catch(e){el.innerHTML='<div class="alert alert-error">Failed to load: '+e.message+'</div>'}
+    }
+  }
+  
+  if(tab==='funding'){
+    const el=document.getElementById('wib-funding-list')
+    if(el){
+      el.innerHTML='<div style="color:var(--text3);padding:12px">⏳ Loading funding opportunities...</div>'
+      try{
+        const fr=await api('/api/funding?wib_id='+wid+'&limit=50')
+        const fops=fr.data||[]
+        if(!fops.length) el.innerHTML='<div class="empty-state" style="padding:30px"><div class="empty-icon">💰</div><div class="empty-text">No funding opportunities linked to this WIB</div><div class="empty-sub"><button class="btn btn-primary" onclick="openFundingModal()">+ Create Funding Opportunity</button></div></div>'
+        else el.innerHTML=`<table style="width:100%"><thead><tr><th>Opportunity</th><th>Status</th><th>Max/EIN</th><th>Deadline</th></tr></thead><tbody>`+
+          fops.map(f=>`<tr>
+            <td style="font-weight:500;font-size:12px">${f.opportunity_name}</td>
+            <td>${fundingStatusPill(f.status)}</td>
+            <td style="color:var(--green)">${f.max_award_per_ein?'$'+Number(f.max_award_per_ein).toLocaleString():'—'}</td>
+            <td style="font-size:11px">${f.application_deadline?new Date(f.application_deadline).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—'}</td>
+          </tr>`).join('')+`</tbody></table>`
+      }catch(e){el.innerHTML='<div class="alert alert-error">Failed to load: '+e.message+'</div>'}
+    }
+  }
 }
 
 function renderWibTab(){
@@ -895,7 +1017,7 @@ function renderWibTab(){
             ${fieldRow('Max Award/EIN',w.max_award_per_ein?'$'+Number(w.max_award_per_ein).toLocaleString():'—')}
             ${fieldRow('Match Required',w.match_requirement_pct?w.match_requirement_pct+'%':'—')}
             ${fieldRow('Source URL',w.source_url?`<a href="${w.source_url}" target="_blank" class="field-link">Public Source →</a>`:'—')}
-            ${fieldRow('Priority Score',`<div class="score-wrap"><div class="score-bar" style="width:80px"><div class="score-fill" style="width:${w.call_priority_score}%"></div></div><span class="score-n">${w.call_priority_score}/100</span></div>`)}
+            ${fieldRow('Call Priority',`<span style="font-weight:700;font-size:16px;color:${(w.call_priority_score||0)>2000?'var(--green)':(w.call_priority_score||0)>500?'var(--amber-t)':'var(--text2)'}">${(w.call_priority_score||0).toLocaleString()}</span><span style="font-size:10px;color:var(--text3)"> in-network locations</span>`)}
             ${fieldRow('Last Verified',w.last_verified_date||'—')}
             ${fieldRow('ICL',w.independent_creation_logged?'<span class="pill p-green">✓ Logged</span>':'<span class="pill p-red">Not logged</span>')}
           </div>
@@ -924,16 +1046,16 @@ function renderWibTab(){
               <button class="btn btn-sm btn-primary" onclick="switchWibTab('notes')">+ Add Note</button>
             </div>
           </div>
-          <div class="card-body" style="padding:10px 14px">
-            ${getDemoNotes(w.wib_name).slice(0,2).map(n=>renderNoteCard(n)).join('')}
+          <div class="card-body" style="padding:10px 14px" id="wib-overview-notes">
+            <div style="color:var(--text3);font-size:11px;padding:6px">⏳ Loading notes...</div>
           </div>
         </div>
         <div class="card" style="margin-top:10px">
           <div class="card-header">
-            <div class="card-title">⚡ Activity</div>
+            <div class="card-title">⚡ Recent Activity</div>
           </div>
-          <div class="card-body" style="padding:8px 14px">
-            ${getDemoActivity().map(a=>renderActivityRow(a)).join('')}
+          <div class="card-body" style="padding:8px 14px" id="wib-overview-activity">
+            <div style="color:var(--text3);font-size:11px;padding:6px">⏳ Loading...</div>
           </div>
         </div>
       </div>
@@ -966,7 +1088,7 @@ function renderWibTab(){
         <button class="btn btn-primary btn-sm" onclick="openTaskModal()">+ New Task</button>
       </div>
       <div class="card-body" style="padding:8px 14px">
-        ${getDemoTasks().map(t=>renderTaskRow(t)).join('')}
+        <div id="wib-tasks-list"><div style="color:var(--text3);font-size:11px;padding:8px">⏳ Loading tasks...</div></div>
       </div>
     </div>`
 
@@ -978,7 +1100,7 @@ function renderWibTab(){
         <button class="btn btn-primary btn-sm" onclick="openContactModal()">+ Add Contact</button>
       </div>
       <div class="card-body" style="padding:8px 14px">
-        ${getDemoContacts().map(c=>renderContactCard(c)).join('')}
+        <div id="wib-contacts-list"><div style="color:var(--text3);font-size:11px;padding:6px">Loading contacts from notes...</div></div>
       </div>
     </div>`
   } else if(wibTab==='files'){
@@ -993,16 +1115,14 @@ function renderWibTab(){
         </div>
       </div>
       <div class="card-body" style="padding:8px 14px">
-        ${getDemoFiles().map(f=>renderFileRow(f)).join('')}
+        ${w.google_drive_folder_url?`<div class="alert alert-info">📁 Files are stored in <a href="${w.google_drive_folder_url}" target="_blank" class="field-link">Google Drive →</a></div>`:'<div class="alert alert-info">📁 Link a Google Drive folder to this WIB to manage files. Click "Link Drive" above.</div>'}
       </div>
     </div>`
   } else if(wibTab==='activity'){
     pa.innerHTML=`
     <div class="card">
       <div class="card-header"><div class="card-title">⚡ Activity Log — ${w.wib_name}</div></div>
-      <div class="card-body" style="padding:8px 14px">
-        ${getDemoActivity().map(a=>renderActivityRow(a)).join('')}
-      </div>
+      <div id="wib-activity-list" style="padding:8px 14px"><div style="color:var(--text3);font-size:11px;padding:8px">⏳ Loading activity...</div></div>
     </div>`
   } else if(wibTab==='funding'){
     pa.innerHTML=`
