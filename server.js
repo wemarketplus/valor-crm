@@ -20,7 +20,7 @@ app.use((req, res, next) => {
   next()
 })
 
-app.use(express.json({ limit: '2mb' }))
+app.use(express.json({ limit: '50mb' }))
 
 // ─── RATE LIMITING ─────────────────────────────────────────────────────────────
 const loginAttempts = new Map()
@@ -774,74 +774,119 @@ app.get('/api/grant-awards', auth, async (req, res) => {
 // ─── CSV IMPORT ───────────────────────────────────────────────────────────────
 app.post('/api/import/:type', auth, async (req, res) => {
   const { type } = req.params
-  const { rows } = req.body // array of objects parsed from CSV
+  const { rows, batch, totalBatches } = req.body
   if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: 'No rows provided' })
-  if (rows.length > 500) return res.status(400).json({ error: 'Maximum 500 rows per import' })
+  // No row limit — process any size file via batching
 
-  const results = { created: 0, errors: [] }
+  const results = { created: 0, errors: [], batch: batch || 1, totalBatches: totalBatches || 1 }
+  const today = new Date().toISOString().split('T')[0]
+
+  // Helper: bulk insert with error collection
+  async function bulkInsert(table, records) {
+    if (!records.length) return
+    const { data, error } = await supabase.from(table).insert(records).select('id')
+    if (error) {
+      // On bulk error, retry individually to isolate bad rows
+      for (const rec of records) {
+        const { error: e2 } = await supabase.from(table).insert(rec)
+        if (e2) results.errors.push(`Row error: ${e2.message}`)
+        else results.created++
+      }
+    } else {
+      results.created += (data || records).length
+    }
+  }
 
   try {
     if (type === 'wibs') {
+      const valid = [], skipped = []
       for (const row of rows) {
-        if (!row['WIB Name'] || !row['Source URL']) { results.errors.push(`Skipped row — WIB Name and Source URL required`); continue }
-        const { error } = await supabase.from('wib_records').insert({
-          wib_name: row['WIB Name'], short_name: row['Short Name'] || null,
-          state: row['State'] || null, status: row['Status'] || 'no_reachout_complete',
-          wib_phone: row['Phone'] || null, wib_email: row['Email'] || null,
-          website: row['Website'] || null, source_url: row['Source URL'],
+        if (!row['WIB Name']?.trim()) { skipped.push('Skipped — WIB Name required'); continue }
+        valid.push({
+          wib_name: row['WIB Name'].trim(),
+          short_name: row['Short Name'] || null,
+          state: row['State'] || null,
+          status: row['Status'] || 'no_reachout_complete',
+          wib_phone: row['Phone'] || null,
+          wib_email: row['Email'] || null,
+          website: row['Website'] || null,
+          source_url: row['Source URL'] || row['WIB Name'], // fallback if no URL
           max_award_per_ein: row['Max Award'] ? parseFloat(row['Max Award']) : null,
           match_requirement_pct: row['Match %'] ? parseFloat(row['Match %']) : null,
-          iwt_program_active: row['IWT Active']?.toLowerCase() === 'yes',
-          owner_id: req.user.id, independent_creation_logged: true,
-          last_verified_date: new Date().toISOString().split('T')[0]
+          iwt_program_active: (row['IWT Active'] || '').toLowerCase() === 'yes',
+          owner_id: req.user.id,
+          independent_creation_logged: true,
+          last_verified_date: today
         })
-        if (error) results.errors.push(`${row['WIB Name']}: ${error.message}`)
-        else results.created++
       }
+      results.errors.push(...skipped)
+      // Bulk insert in chunks of 500
+      for (let i = 0; i < valid.length; i += 500) await bulkInsert('wib_records', valid.slice(i, i + 500))
+
     } else if (type === 'companies') {
+      const valid = []
       for (const row of rows) {
-        if (!row['Company Name']) { results.errors.push('Skipped — Company Name required'); continue }
-        const { error } = await supabase.from('companies').insert({
-          company_name: row['Company Name'], company_type: row['Type'] || null,
-          status: row['Status'] || 'prospect', fein: row['FEIN'] || null,
-          domain: row['Domain'] || null, employee_count_total: row['Employee Count'] ? parseInt(row['Employee Count']) : null,
+        const name = row['Company Name']?.trim() || row['Record']?.trim() || row['Name']?.trim()
+        if (!name) { results.errors.push('Skipped row — Company Name required'); continue }
+        valid.push({
+          company_name: name,
+          company_type: row['Type'] || row['Company Type'] || null,
+          status: row['Status'] || 'prospect',
+          fein: row['FEIN'] || null,
+          domain: row['Domain'] || null,
+          employee_count_total: row['Employee Count'] ? parseInt(row['Employee Count']) : null,
           avg_hourly_wage: row['Avg Wage'] ? parseFloat(row['Avg Wage']) : null,
-          primary_contact_name: row['Contact Name'] || null, primary_contact_email: row['Contact Email'] || null,
+          primary_contact_name: row['Contact Name'] || null,
+          primary_contact_email: row['Contact Email'] || null,
           primary_contact_phone: row['Contact Phone'] || null
         })
-        if (error) results.errors.push(`${row['Company Name']}: ${error.message}`)
-        else results.created++
       }
+      for (let i = 0; i < valid.length; i += 500) await bulkInsert('companies', valid.slice(i, i + 500))
+
     } else if (type === 'locations') {
+      const valid = []
       for (const row of rows) {
-        if (!row['Location Name']) { results.errors.push('Skipped — Location Name required'); continue }
-        const { error } = await supabase.from('locations').insert({
-          location_name: row['Location Name'], state: row['State'] || null,
-          county: row['County'] || null, city: row['City'] || null,
-          status: row['Status'] || 'prospect', employee_count: row['Employee Count'] ? parseInt(row['Employee Count']) : null
+        const name = row['Location Name']?.trim()
+        if (!name) { results.errors.push('Skipped row — Location Name required'); continue }
+        valid.push({
+          location_name: name,
+          state: row['State'] || null,
+          county: row['County'] || null,
+          city: row['City'] || null,
+          status: row['Status'] || 'prospect',
+          employee_count: row['Employee Count'] ? parseInt(row['Employee Count']) : null
         })
-        if (error) results.errors.push(`${row['Location Name']}: ${error.message}`)
-        else results.created++
       }
+      for (let i = 0; i < valid.length; i += 500) await bulkInsert('locations', valid.slice(i, i + 500))
+
     } else if (type === 'funding') {
+      const valid = []
       for (const row of rows) {
-        if (!row['Opportunity Name'] || !row['Source URL']) { results.errors.push('Skipped — Opportunity Name and Source URL required'); continue }
-        const { error } = await supabase.from('funding_opportunities').insert({
-          opportunity_name: row['Opportunity Name'], status: row['Status'] || 'open',
-          program_type: row['Program Type'] || null, source_url: row['Source URL'],
+        const name = row['Opportunity Name']?.trim()
+        if (!name) { results.errors.push('Skipped row — Opportunity Name required'); continue }
+        valid.push({
+          opportunity_name: name,
+          status: row['Status'] || 'open',
+          program_type: row['Program Type'] || null,
+          source_url: row['Source URL'] || name,
           max_award_per_ein: row['Max Award/EIN'] ? parseFloat(row['Max Award/EIN']) : null,
-          application_deadline: row['Deadline'] || null, independent_creation_logged: true
+          application_deadline: row['Deadline'] || null,
+          independent_creation_logged: true
         })
-        if (error) results.errors.push(`${row['Opportunity Name']}: ${error.message}`)
-        else results.created++
       }
+      for (let i = 0; i < valid.length; i += 500) await bulkInsert('funding_opportunities', valid.slice(i, i + 500))
+
     } else {
       return res.status(400).json({ error: `Import not supported for type: ${type}` })
     }
 
-    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'IMPORT', details: `Imported ${results.created} ${type} records (${results.errors.length} errors)` }) } catch(_) {}
+    // Only log on the final batch
+    if (!batch || batch === totalBatches) {
+      try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'IMPORT', details: `Imported ${results.created} ${type} records (${results.errors.length} errors)` }) } catch(_) {}
+    }
     res.json({ ...results, total: rows.length })
   } catch(e) {
+    console.error('Import error:', e)
     res.status(500).json({ error: e.message })
   }
 })
