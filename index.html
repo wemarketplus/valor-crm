@@ -711,7 +711,7 @@ async function apiAI(prompt){
 let _sessionWarnTimer=null, _sessionLogoutTimer=null, _sessionWarned=false
 function startSessionTimer(){
   clearTimeout(_sessionWarnTimer);clearTimeout(_sessionLogoutTimer);_sessionWarned=false
-  // 58min → show warning modal
+  // 55min → show 5-minute warning modal (directive: 5-min warning before sign-out)
   _sessionWarnTimer=setTimeout(()=>{
     _sessionWarned=true
     const overlay=document.createElement('div')
@@ -720,13 +720,13 @@ function startSessionTimer(){
     overlay.innerHTML=`<div style="background:#fff;border-radius:14px;padding:28px 32px;max-width:380px;text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.3)">
       <div style="font-size:32px;margin-bottom:12px">⏱️</div>
       <div style="font-size:16px;font-weight:700;color:#111;margin-bottom:8px">Session Expiring Soon</div>
-      <div style="font-size:13px;color:#6b7280;margin-bottom:20px">You will be automatically signed out in <strong id="session-countdown">2:00</strong> due to inactivity.</div>
+      <div style="font-size:13px;color:#6b7280;margin-bottom:20px">You will be automatically signed out in <strong id="session-countdown">5:00</strong> due to inactivity.</div>
       <button onclick="extendSession()" style="background:#0B1E3C;color:#E8D9A8;border:none;border-radius:8px;padding:10px 24px;font-size:13px;font-weight:600;cursor:pointer;margin-right:8px">Stay Signed In</button>
       <button onclick="logout()" style="background:#fee2e2;color:#991b1b;border:none;border-radius:8px;padding:10px 20px;font-size:13px;cursor:pointer">Sign Out Now</button>
     </div>`
     document.body.appendChild(overlay)
     // Countdown
-    let secs=120
+    let secs=300
     const interval=setInterval(()=>{
       secs--
       const el=document.getElementById('session-countdown')
@@ -734,7 +734,7 @@ function startSessionTimer(){
       if(secs<=0)clearInterval(interval)
     },1000)
     overlay.dataset.interval=interval
-  }, 58*60*1000)
+  }, 55*60*1000)
   // 60min → force logout
   _sessionLogoutTimer=setTimeout(()=>{
     const ov=document.getElementById('session-warn-overlay')
@@ -1506,11 +1506,13 @@ function renderWibTable(wibs){
         <th onclick="sortWibBy('state')"><div class="th-i">🗺 Regional Zipcode › State ${sa('state',_wibSort)}</div></th>
         <th onclick="sortWibBy('call_priority')"><div class="th-i"># Call Priority ${sa('call_priority',_wibSort)}</div></th>
         <th><div class="th-i">👤 Contacts › Name</div></th>
+        <th><div class="th-i">🕐 Contacts › La... When</div></th>
+        <th><div class="th-i">📍 State Zipcode › State</div></th>
         <th><div class="th-i">📍 State Zipcode › Locations</div></th>
         <th><div class="th-i">💰 Funding Opportunities</div></th>
       </tr></thead>
       <tbody>
-      ${d.length===0?`<tr><td colspan="12"><div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">No workforce boards yet</div><div class="empty-sub">Import a CSV or add boards individually</div><button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button></div></td></tr>`:
+      ${d.length===0?`<tr><td colspan="14"><div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">No workforce boards yet</div><div class="empty-sub">Import a CSV or add boards individually</div><button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button></div></td></tr>`:
       d.map(w=>`<tr onclick="openWibProfile('${w.id}')">
         <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
         <td><div class="col-name-cell">
@@ -1529,6 +1531,8 @@ function renderWibTable(wibs){
             ? w._contacts.slice(0,2).map(name=>`<span style="display:inline-flex;align-items:center;gap:3px;font-size:10.5px;margin-right:3px"><span style="width:14px;height:14px;border-radius:50%;background:var(--orange-bg);color:var(--orange-t);display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700">${name.charAt(0)}</span>${name}</span>`).join('')+(w._contacts.length>2?` +${w._contacts.length-2}`:'')
             : '<span class="cell-dim">—</span>'
         }</td>
+        <td class="cell-dim">${w.last_contact_date?`<span style="display:inline-flex;align-items:center;gap:4px"><span style="width:16px;height:16px;border-radius:50%;background:var(--blue-bg);color:var(--blue-t);display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:700">${(w.state||'?').slice(0,1)}</span>${fmtAgo(w.last_contact_date)}</span>`:'<span class="cell-dim">No contact</span>'}</td>
+        <td class="cell-dim">${w.state?`<b style="font-size:11px">${w.state}</b>`:'<span class="cell-dim">—</span>'}</td>
         <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${
           w._locations?.length
             ? w._locations.slice(0,3).map(l=>`<span style="display:inline-flex;align-items:center;gap:2px;font-size:10.5px;margin-right:3px">⚙️ ${l}</span>`).join('')+(w._locations.length>3?` +${w._locations.length-3}`:'')
@@ -2161,7 +2165,7 @@ function renderCompaniesTable(companies){
         <th><div class="th-i">👤 Created by</div></th>
       </tr></thead>
       <tbody>
-      ${d.length===0?`<tr><td colspan="12"><div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">No companies yet</div><div class="empty-sub">Import a CSV or add companies individually</div><button class="btn btn-primary" onclick="openCompanyModal()">+ New Company</button></div></td></tr>`:
+      ${d.length===0?`<tr><td colspan="13"><div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">No companies yet</div><div class="empty-sub">Import a CSV or add companies individually</div><button class="btn btn-primary" onclick="openCompanyModal()">+ New Company</button></div></td></tr>`:
       d.map(c=>`<tr onclick="openCompanyProfile('${c.id}')">
         <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
         <td><div class="col-name-cell">
@@ -2650,12 +2654,12 @@ async function pageCompliance(){
 ═══════════════════════════════════════════════════ */
 async function pageReports(){
   setTopbar('Reports','',`
-    <div class="topbar-icon">🔍</div>
-    <button class="btn btn-sm btn-ghost">⊞ View settings</button>
-    <button class="btn btn-primary">+ New dashboard</button>`)
+    <button class="btn btn-sm btn-ghost" onclick="showToast('Search reports','info')">🔍</button>
+    <button class="btn btn-sm btn-ghost" onclick="showToast('Sort & view options coming soon','info')">⊞ View settings ∨</button>
+    <button class="btn btn-primary" onclick="openNewDashboardModal()">+ New dashboard</button>`)
   document.getElementById('page-area').innerHTML=`
   <div style="margin-bottom:8px">
-    <div class="vb-sort">☰ Sorted by Creation date</div>
+    <span class="vb-sort" style="cursor:pointer" onclick="showToast('Sorted by creation date','info')">☰ Sorted by Creation date</span>
   </div>
   <div class="card" style="margin-bottom:10px">
     <div class="card-hd"><div class="card-title">⭐ Favorites</div></div>
@@ -2664,28 +2668,55 @@ async function pageReports(){
       Dashboards that you favorite will appear here
     </div>
   </div>
-  <div style="font-size:10.5px;color:var(--text3);margin-bottom:6px">Dashboard &nbsp;&nbsp;&nbsp;&nbsp; Reports &nbsp;&nbsp;&nbsp;&nbsp; Created at</div>
-  <div style="font-size:10.5px;color:var(--text3);margin-bottom:6px">Created last month 2</div>
+  <div style="display:grid;grid-template-columns:1fr 3fr 1fr;font-size:10.5px;font-weight:600;color:var(--text3);padding:4px 8px;border-bottom:.5px solid var(--border);margin-bottom:4px">
+    <span>Dashboard</span><span>Reports</span><span style="text-align:right">Created at</span>
+  </div>
+  <div style="font-size:10.5px;color:var(--text3);margin:4px 0 6px;padding:0 8px;font-weight:500">Created last month 2</div>
   ${[
-    {name:'Weekly Snapshot',tags:['Applications A...','Applicatio...','Funding Opportu...','Applicatio... +4'],date:'April 9, 2026'},
-    {name:'Funding Opportunities',tags:['# of Funding Opportu...','Open Fundi...','Funding Opp...','Total Fundi...'],date:'April 3, 2026'},
-  ].map(r=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:.5px solid var(--border)">
-    <span style="width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#f472b6,#818cf8);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff">⊞</span>
-    <div style="flex:1">
-      <div style="font-size:12px;font-weight:500;margin-bottom:3px">${r.name}</div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${r.tags.map(t=>`<span style="font-size:10px;background:var(--gray2);color:var(--text2);padding:2px 7px;border-radius:4px">☰ ${t}</span>`).join('')}</div>
+    {name:'Weekly Snapshot',tags:['Applications A...','Applicatio...','Funding Opportu...','Applicatio... +4'],date:'April 9, 2026',page:'applications'},
+    {name:'Funding Opportunities',tags:['# of Funding Opportu...','Open Fundi...','Funding Opp...','Total Fundi...'],date:'April 3, 2026',page:'funding'},
+  ].map(r=>`<div class="report-row" onclick="loadPage('${r.page}')">
+    <div style="display:flex;align-items:center;gap:10px;flex:1">
+      <span style="width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#f472b6,#818cf8);display:inline-flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">📊</span>
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:500;margin-bottom:3px">${r.name}</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">${r.tags.map(t=>'<span style="font-size:10px;background:var(--gray2);color:var(--text2);padding:1px 6px;border-radius:4px">☰ '+t+'</span>').join('')}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+        <button onclick="event.stopPropagation();this.style.opacity=1;showToast(r.name+' added to favorites','success')" style="background:none;border:none;cursor:pointer;font-size:13px;opacity:.35;transition:.15s" title="Favorite">⭐</button>
+        <span style="font-size:10.5px;color:var(--text3)">${r.date}</span>
+        <button onclick="event.stopPropagation()" style="background:none;border:none;cursor:pointer;color:var(--text3);font-size:14px" title="Options">⋮</button>
+      </div>
     </div>
-    <span style="font-size:10.5px;color:var(--text3)">${r.date}</span>
   </div>`).join('')}
-  <div style="font-size:10.5px;color:var(--text3);margin:10px 0 6px">Created this year 1</div>
-  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:.5px solid var(--border)">
-    <span style="width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#f472b6,#818cf8);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff">⊞</span>
-    <div style="flex:1">
-      <div style="font-size:12px;font-weight:500;margin-bottom:3px">Applications In Progress</div>
-      <div style="display:flex;gap:6px">${['Apps by Owner','Time in Sta...','Applications Su...','Applications... +1'].map(t=>`<span style="font-size:10px;background:var(--gray2);color:var(--text2);padding:2px 7px;border-radius:4px">☰ ${t}</span>`).join('')}</div>
+  <div style="font-size:10.5px;color:var(--text3);margin:10px 0 6px;padding:0 8px;font-weight:500">Created this year 1</div>
+  <div class="report-row" onclick="loadPage('applications')">
+    <div style="display:flex;align-items:center;gap:10px;flex:1">
+      <span style="width:28px;height:28px;border-radius:6px;background:linear-gradient(135deg,#f472b6,#818cf8);display:inline-flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0">📊</span>
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:500;margin-bottom:3px">Applications In Progress</div>
+        <div style="display:flex;gap:5px">${['Apps by Owner','Time in Sta...','Applications Su...','Applications... +1'].map(t=>'<span style="font-size:10px;background:var(--gray2);color:var(--text2);padding:1px 6px;border-radius:4px">☰ '+t+'</span>').join('')}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+        <button onclick="event.stopPropagation();showToast('Added to favorites','success')" style="background:none;border:none;cursor:pointer;font-size:13px;opacity:.35" title="Favorite">⭐</button>
+        <span style="font-size:10.5px;color:var(--text3)">March 25, 2026</span>
+        <button onclick="event.stopPropagation()" style="background:none;border:none;cursor:pointer;color:var(--text3);font-size:14px">⋮</button>
+      </div>
     </div>
-    <span style="font-size:10.5px;color:var(--text3)">March 25, 2026</span>
   </div>`
+}
+
+function openNewDashboardModal(){
+  showModal('New Dashboard',`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Dashboard Name <span class="form-req">*</span></div>
+      <input id="dash-name" placeholder="e.g. Q2 Pipeline Overview"></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Description</div>
+      <textarea id="dash-desc" rows="2" placeholder="What does this dashboard track?"></textarea></div></div>`,
+  ()=>{
+    const name=document.getElementById('dash-name')?.value?.trim()
+    if(!name){showToast('Dashboard name required','error');return false}
+    showToast('Dashboard "'+name+'" created','success');loadPage('reports')
+  })
 }
 
 /* ═══════════════════════════════════════════════════
@@ -2699,7 +2730,7 @@ function toggleNotif(){
       <div class="notif-hd">
         <div class="notif-title">Notifications</div>
         <div style="display:flex;gap:5px">
-          <button class="btn btn-xs">✓ Mark all read</button>
+          <button class="btn btn-xs" onclick="document.querySelectorAll('.notif-item.unread').forEach(el=>el.classList.remove('unread'));showToast('All marked read','success')">✓ Mark all read</button>
           <button class="btn btn-xs btn-ghost" onclick="toggleNotif()">✕</button>
         </div>
       </div>
@@ -2744,8 +2775,8 @@ function pageNotifications(){
     <div class="att-wrap">
       <div class="att-toolbar"><div class="card-title">🔔 Notifications & Requests</div></div>
       <div style="display:flex;border-bottom:.5px solid var(--border)">
-        <button class="rtab" style="padding:8px 14px">Notifications (0)</button>
-        <button class="rtab active">Requests (3)</button>
+        <button class="rtab" style="padding:8px 14px" onclick="document.querySelectorAll('.rtab').forEach(t=>t.classList.remove('active'));this.classList.add('active')">Notifications (0)</button>
+        <button class="rtab active" onclick="document.querySelectorAll('.rtab').forEach(t=>t.classList.remove('active'));this.classList.add('active')">Requests (3)</button>
       </div>
       ${[
         {i:'S',c:'#3b82f6',t:'Samantha Orer is requesting access to the email Re: Incumbent Workforce Training.',tm:'about 20 hours ago'},
@@ -2756,7 +2787,7 @@ function pageNotifications(){
         <div><div class="notif-text">${n.t}</div><div class="notif-time">${n.tm}</div>
         <div style="display:flex;gap:5px;margin-top:6px">
           <button class="btn btn-xs btn-blue" onclick="showToast('Access granted','success')">Accept</button>
-          <button class="btn btn-xs">Deny</button>
+          <button class="btn btn-xs" onclick="showToast('Access denied','warn');this.closest('.notif-item').style.opacity='0.4'">Deny</button>
         </div></div>
       </div>`).join('')}
     </div>
@@ -3831,7 +3862,7 @@ async function pageApplications(){
 }
 
 function renderAppsRows(apps){
-  if(!apps.length)return`<tr><td colspan="12"><div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><button class="btn btn-primary" onclick="openNewApplicationModal()">+ New Application</button></div></td></tr>`
+  if(!apps.length)return`<tr><td colspan="13"><div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><button class="btn btn-primary" onclick="openNewApplicationModal()">+ New Application</button></div></td></tr>`
   return apps.map(a=>`<tr onclick="openEditApplicationModal(${JSON.stringify(a).replace(/"/g,"'")})">
     <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk"></td>
     <td><div class="col-name-cell"><span>📋</span><span style="font-weight:500">${a.company?.company_name||'Unknown'}</span></div></td>
@@ -4255,10 +4286,10 @@ function pageEmails(){
   document.getElementById('page-area').innerHTML=`
   <div class="att-wrap" style="margin-bottom:10px">
     <div style="display:flex;align-items:center;gap:0;border-bottom:.5px solid var(--border);padding:0 14px">
-      <button class="rtab active">✉ Drafts 4</button>
+      <button class="rtab active" onclick="switchEmailTab('drafts',this)">✉ Drafts 4</button>
       <button class="rtab" onclick="showToast('Outbox empty — connect email provider in Settings','info')">✉ Outbox 0</button>
       <button class="rtab" id="etab-templates" onclick="switchEmailTab('templates',this)">⊡ Templates 4</button>
-      <div style="margin-left:auto;padding:6px 0"><button class="btn btn-xs btn-ghost">❓ Help</button></div>
+      <div style="margin-left:auto;padding:6px 0"><button class="btn btn-xs btn-ghost" onclick="showToast('Email help: Use the Compose button to draft outreach emails. Templates are pre-built for common use cases.','info')">❓ Help</button></div>
     </div>
     <div style="display:grid;grid-template-columns:1fr auto;padding:7px 14px;border-bottom:.5px solid var(--border);font-size:10.5px;color:var(--text3)">
       <span>Draft</span><span>📅 Creation date</span>
