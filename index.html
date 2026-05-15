@@ -1983,29 +1983,100 @@ function closeIEMenu(){
 
 function importCSV(type){
   closeIEMenu()
-  showModal(`📥 Import ${type.charAt(0).toUpperCase()+type.slice(1)} from CSV`,`
-    <div class="alert alert-info">Download the CSV template, fill in your data, then upload. All records will be created immediately.</div>
-    <div style="margin:10px 0">
-      <button class="btn btn-sm" onclick="downloadTemplate('${type}')">⬇️ Download CSV Template for ${type}</button>
+  showModal(`📥 Import ${type.charAt(0).toUpperCase()+type.slice(1)}`,`
+    <div class="alert alert-info">
+      No row limit — import files of any size. Large files are automatically sent in batches.
+      Download the template to see the required column format.
     </div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Upload Completed CSV File</div>
-      <input type="file" accept=".csv" id="import-file-input" onchange="processCSVImport(this,'${type}')"></div></div>
+    <div style="margin:10px 0">
+      <button class="btn btn-sm" onclick="downloadTemplate('${type}')">⬇️ Download CSV Template</button>
+    </div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Upload CSV or Excel File (.csv, .xlsx, .xls)</div>
+      <input type="file" accept=".csv,.xlsx,.xls" id="import-file-input" onchange="processCSVImport(this,'${type}')"></div></div>
     <div id="import-preview" style="margin-top:10px"></div>`,
   async()=>{
     if(!window._importRows||!window._importRows.length){
       showToast('Please select and preview a CSV file first','warn');return false
     }
     const btn=document.getElementById('modal-ok-btn')
+    const preview=document.getElementById('import-preview')
     if(btn){btn.textContent='Importing...';btn.disabled=true}
+
+    const allRows=window._importRows
+    const type=window._importType
+    const CHUNK=500  // rows per API call
+    const totalBatches=Math.ceil(allRows.length/CHUNK)
+    let totalCreated=0, totalErrors=[]
+
+    // Show progress bar
+    if(preview){
+      preview.innerHTML=`
+        <div style="margin-top:10px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:4px">
+            <span id="import-prog-label">Starting import...</span>
+            <span id="import-prog-pct">0%</span>
+          </div>
+          <div style="height:8px;background:var(--gray2);border-radius:4px;overflow:hidden">
+            <div id="import-prog-bar" style="height:100%;width:0%;background:var(--nv);border-radius:4px;transition:width .3s"></div>
+          </div>
+          <div id="import-prog-detail" style="font-size:10px;color:var(--text3);margin-top:4px"></div>
+        </div>`
+    }
+
     try{
-      const r=await api('/api/import/'+window._importType,'POST',{rows:window._importRows})
-      showToast(`✅ Imported ${r.created} records${r.errors?.length?' ('+r.errors.length+' skipped)':''}`, r.errors?.length?'warn':'success')
+      for(let b=0;b<totalBatches;b++){
+        const chunk=allRows.slice(b*CHUNK,(b+1)*CHUNK)
+        const pct=Math.round(((b)/totalBatches)*100)
+
+        // Update progress
+        const label=document.getElementById('import-prog-label')
+        const pctEl=document.getElementById('import-prog-pct')
+        const bar=document.getElementById('import-prog-bar')
+        const detail=document.getElementById('import-prog-detail')
+        if(label)label.textContent=totalBatches>1?`Importing batch ${b+1} of ${totalBatches}...`:'Importing records...'
+        if(pctEl)pctEl.textContent=pct+'%'
+        if(bar)bar.style.width=pct+'%'
+        if(detail)detail.textContent=`${totalCreated} imported so far${totalErrors.length?' · '+totalErrors.length+' skipped':''}`
+        if(btn)btn.textContent=totalBatches>1?`Batch ${b+1}/${totalBatches}...`:'Importing...'
+
+        const r=await api('/api/import/'+type,'POST',{
+          rows:chunk,
+          batch:b+1,
+          totalBatches
+        })
+        totalCreated+=r.created||0
+        if(r.errors?.length)totalErrors.push(...r.errors)
+      }
+
+      // Final progress update
+      const bar=document.getElementById('import-prog-bar')
+      const label=document.getElementById('import-prog-label')
+      const pctEl=document.getElementById('import-prog-pct')
+      if(bar)bar.style.width='100%'
+      if(label)label.textContent='Import complete!'
+      if(pctEl)pctEl.textContent='100%'
+
+      const msg=`✅ Imported ${totalCreated.toLocaleString()} records${totalErrors.length?' ('+totalErrors.length+' skipped)':''}`
+      showToast(msg,totalErrors.length?'warn':'success')
       window._importRows=null
-      // Reload the relevant page
-      if(currentPage===window._importType||currentPage===window._importType.replace('-',''))loadPage(currentPage)
+
+      // Show error summary if any
+      if(totalErrors.length&&preview){
+        const detail=document.getElementById('import-prog-detail')
+        if(detail)detail.innerHTML=`<span style="color:var(--amber-t)">${totalErrors.length} rows skipped — ${totalErrors.slice(0,3).join('; ')}${totalErrors.length>3?' ...':''}</span>`
+      }
+
+      // Close modal after a short delay then reload
+      setTimeout(()=>{
+        closeModal()
+        if(currentPage===type||currentPage===type.replace('-',''))loadPage(currentPage)
+      },1500)
+
     }catch(e){
       showToast('Import failed: '+e.message,'error')
       if(btn){btn.textContent='Save';btn.disabled=false}
+      const bar=document.getElementById('import-prog-bar')
+      if(bar){bar.style.background='var(--red)';bar.style.width='100%'}
       return false
     }
   })
@@ -2048,41 +2119,100 @@ async function exportPDF(type){
 
 async function processCSVImport(input,type){
   const file=input.files[0]
-  if(!file){return}
+  if(!file)return
   const preview=document.getElementById('import-preview')
-  preview.innerHTML='<div class="loading">📂 Reading file...</div>'
+  preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📂 Reading file...</div>'
+
+  const isExcel=file.name.match(/\.xlsx?$/i)
+
+  if(isExcel){
+    // Excel: use SheetJS loaded from CDN
+    preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📊 Loading Excel reader...</div>'
+    try{
+      // Dynamically load SheetJS if not already loaded
+      if(!window.XLSX){
+        await new Promise((res,rej)=>{
+          const s=document.createElement('script')
+          s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+          s.onload=res; s.onerror=rej
+          document.head.appendChild(s)
+        })
+      }
+      const buf=await file.arrayBuffer()
+      const wb=XLSX.read(buf,{type:'array'})
+      const ws=wb.Sheets[wb.SheetNames[0]]
+      const dataRows=XLSX.utils.sheet_to_json(ws,{defval:''})
+      if(!dataRows.length){preview.innerHTML='<div class="alert alert-error">No data found in Excel file</div>';return}
+      renderImportPreview(dataRows,type,preview,file.name)
+    }catch(err){
+      preview.innerHTML=`<div class="alert alert-error">Failed to read Excel file: ${err.message}</div>`
+    }
+    return
+  }
+
+  // CSV: built-in parser
   const reader=new FileReader()
   reader.onload=async e=>{
     try{
       const text=e.target.result
-      const lines=text.split('\n').filter(l=>l.trim())
+      const lines=text.split(/\r?\n/).filter(l=>l.trim())
       if(lines.length<2){preview.innerHTML='<div class="alert alert-error">File is empty or has no data rows</div>';return}
-      const headers=lines[0].split(',').map(h=>h.replace(/^"|"$/g,'').trim())
-      const dataRows=lines.slice(1).map(l=>{
-        // Handle quoted CSV values
-        const vals=[]
-        let cur='',inQ=false
-        for(let c of l){if(c==='"'){inQ=!inQ}else if(c===','&&!inQ){vals.push(cur.trim());cur=''}else{cur+=c}}
-        vals.push(cur.trim())
-        return Object.fromEntries(headers.map((h,i)=>[h,vals[i]||'']))
-      }).filter(r=>Object.values(r).some(v=>v))
-      const previewRows=dataRows.slice(0,5)
-      preview.innerHTML=`
-        <div class="alert alert-success">✅ File loaded: ${dataRows.length} data rows ready to import</div>
-        <div style="font-size:11px;font-weight:500;margin-bottom:5px">Preview (first ${previewRows.length} rows):</div>
-        <div style="overflow-x:auto;margin-bottom:10px"><table style="font-size:10px;width:100%;border-collapse:collapse">
-          <thead><tr>${headers.map(h=>`<th style="padding:3px 6px;border:.5px solid var(--border);background:var(--gray);text-align:left;white-space:nowrap">${h}</th>`).join('')}</tr></thead>
-          <tbody>${previewRows.map(r=>`<tr>${headers.map(h=>`<td style="padding:3px 6px;border:.5px solid var(--border);white-space:nowrap">${r[h]||''}</td>`).join('')}</tr>`).join('')}</tbody>
-        </table></div>
-        <div style="font-size:11px;color:var(--text2);margin-bottom:8px">Click <strong>Save</strong> to import all ${dataRows.length} rows into ${type}.</div>`
-      // Store parsed rows for the confirm handler
-      window._importRows=dataRows
-      window._importType=type
+      const headers=parseCSVLine(lines[0])
+      const dataRows=lines.slice(1)
+        .map(l=>{
+          const vals=parseCSVLine(l)
+          return Object.fromEntries(headers.map((h,i)=>[h,vals[i]||'']))
+        })
+        .filter(r=>Object.values(r).some(v=>String(v).trim()))
+      renderImportPreview(dataRows,type,preview,file.name)
     }catch(err){
-      preview.innerHTML=`<div class="alert alert-error">Failed to parse CSV: ${err.message}</div>`
+      preview.innerHTML=`<div class="alert alert-error">Failed to parse file: ${err.message}</div>`
     }
   }
   reader.readAsText(file)
+}
+
+function parseCSVLine(line){
+  // RFC 4180 compliant CSV parser
+  const vals=[]
+  let cur='',inQ=false,i=0
+  while(i<line.length){
+    const c=line[i]
+    if(c==='"'){
+      if(inQ&&line[i+1]==='"'){cur+='"';i+=2}  // escaped quote
+      else{inQ=!inQ;i++}
+    }else if(c===','&&!inQ){
+      vals.push(cur.trim());cur='';i++
+    }else{cur+=c;i++}
+  }
+  vals.push(cur.trim())
+  return vals
+}
+
+function renderImportPreview(dataRows,type,preview,filename){
+  if(!dataRows.length){preview.innerHTML='<div class="alert alert-error">No data rows found</div>';return}
+  const headers=Object.keys(dataRows[0])
+  const previewRows=dataRows.slice(0,5)
+  const CHUNK=500
+  const batches=Math.ceil(dataRows.length/CHUNK)
+  const batchNote=batches>1?` <span style="color:var(--text3)">(will send in ${batches} batches of up to ${CHUNK} rows each)</span>`:''
+  preview.innerHTML=`
+    <div class="alert alert-success" style="margin-bottom:8px">
+      ✅ <strong>${dataRows.length.toLocaleString()} rows</strong> ready to import from <em>${filename}</em>${batchNote}
+    </div>
+    <div style="font-size:11px;font-weight:500;color:var(--text2);margin-bottom:5px">Preview — first ${previewRows.length} rows:</div>
+    <div style="overflow-x:auto;margin-bottom:10px;max-height:180px;overflow-y:auto">
+      <table style="font-size:10px;width:100%;border-collapse:collapse">
+        <thead style="position:sticky;top:0"><tr>${headers.map(h=>`<th style="padding:4px 8px;border:.5px solid var(--border);background:var(--gray);text-align:left;white-space:nowrap;font-weight:600">${h}</th>`).join('')}</tr></thead>
+        <tbody>${previewRows.map(r=>`<tr>${headers.map(h=>`<td style="padding:3px 8px;border:.5px solid var(--border);white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis">${r[h]||''}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+    </div>
+    <div style="font-size:11px;color:var(--text2)">
+      Click <strong>Save</strong> to import all <strong>${dataRows.length.toLocaleString()}</strong> rows into ${type}.
+      ${dataRows.length>CHUNK?`Large file will import automatically in ${batches} batches with a progress bar.`:''}
+    </div>`
+  window._importRows=dataRows
+  window._importType=type
 }
 
 async function downloadTemplate(type){
