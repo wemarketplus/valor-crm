@@ -482,11 +482,11 @@ function renderLogin(){
         <div id="login-err"></div>
         <div style="margin-bottom:12px">
           <div style="font-size:11px;color:rgba(255,255,255,.45);margin-bottom:5px">Email address</div>
-          <input type="email" id="le" placeholder="Enter your email address" style="background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:9px 12px;width:100%;font-family:inherit;outline:none;font-size:12px">
+          <input type="email" id="le" placeholder="Enter your email address" autocomplete="username" style="background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:9px 12px;width:100%;font-family:inherit;outline:none;font-size:12px">
         </div>
         <div style="margin-bottom:18px">
           <div style="font-size:11px;color:rgba(255,255,255,.45);margin-bottom:5px">Password</div>
-          <input type="password" id="lp" placeholder="••••••••" style="background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:9px 12px;width:100%;font-family:inherit;outline:none;font-size:12px">
+          <input type="password" id="lp" placeholder="••••••••" autocomplete="current-password" style="background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:9px 12px;width:100%;font-family:inherit;outline:none;font-size:12px">
         </div>
         <button onclick="doLogin()" id="lbtn" style="width:100%;background:var(--gd);color:var(--nv);border:none;border-radius:8px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">Sign in</button>
       </div>
@@ -2368,13 +2368,27 @@ function closeModal(){
 // ═══════════════════════════════════════════════════════
 // NOTE HELPERS
 // ═══════════════════════════════════════════════════════
-function addNote(){
-  const text=document.getElementById('new-note-text')?.value
-  if(!text?.trim())return
-  const list=document.getElementById('notes-list')
-  const note={author:currentUser?.full_name||'You',text,time:'Just now',type:'Note',color:'#3b82f6'}
-  if(list)list.insertAdjacentHTML('afterbegin',renderNoteCard(note))
-  if(document.getElementById('new-note-text'))document.getElementById('new-note-text').value=''
+async function addNote(){
+  const textarea=document.getElementById('new-note-text')
+  const text=textarea?.value
+  if(!text?.trim()){showToast('Please enter a note before saving','warn');return}
+  const btn=document.querySelector('.note-compose-foot .btn-primary')||document.querySelector('[onclick="addNote()"]')
+  if(btn){btn.disabled=true;btn.textContent='Saving...'}
+  try{
+    const noteType=document.getElementById('note-type-select')?.value||'Note'
+    const payload={content:text.trim(),note_type:noteType,is_aircall:false}
+    if(currentWib){payload.record_type='wib_records';payload.record_id=currentWib.id}
+    const saved=await api('/api/notes','POST',payload)
+    const list=document.getElementById('notes-list')
+    const noteCard={author:saved.user?.full_name||currentUser?.full_name||'You',text:saved.details,time:'Just now',type:noteType,color:'#3b82f6'}
+    if(list)list.insertAdjacentHTML('afterbegin',renderNoteCard(noteCard))
+    textarea.value=''
+    showToast('Note saved','success')
+  }catch(e){
+    showToast('Failed to save note: '+e.message,'error')
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent='💾 Save Note'}
+  }
 }
 
 function addAircallNote(){
@@ -2390,7 +2404,7 @@ function addAircallNote(){
       <textarea id="ac-tasks" rows="2" placeholder="1. Send intake form\n2. Schedule follow-up call"></textarea></div></div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Additional Notes</div>
       <textarea id="ac-notes" rows="2"></textarea></div></div>`
-  showModal('📱 Log Aircall Note',modal_body,()=>{
+  showModal('📱 Log Aircall Note',modal_body,async()=>{
     const now=new Date()
     const dateStr=now.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
     const timeStr=now.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',timeZoneName:'short'})
@@ -2399,19 +2413,33 @@ function addAircallNote(){
     const contact=document.getElementById('ac-contact').value||'Unknown contact'
     const summary=document.getElementById('ac-summary').value||'No summary provided'
     const tasks=document.getElementById('ac-tasks').value||'No follow-up tasks logged'
+    const addlNotes=document.getElementById('ac-notes').value
     const header=`AIRCALL NOTE — ${dateStr} — ${timeStr} — ${dir} Call — Duration: ${dur}`
+    const fullContent=`${header}\nContact: ${contact}\n\nSummary:\n${summary}\n\nFollow-up Tasks:\n${tasks}${addlNotes?'\n\nAdditional Notes:\n'+addlNotes:''}\n\nLogged by: ${currentUser?.full_name||currentUser?.email}`
     const noteHtml=`<div class="aircall-note">
       <div class="aircall-header">${header}</div>
       <div class="aircall-body">
         <div><strong>Contact:</strong> ${contact}</div>
-        <div class="aircall-section"><div class="aircall-section-title">📊 AI-Generated Summary</div>${summary}</div>
+        <div class="aircall-section"><div class="aircall-section-title">📊 Summary</div>${summary}</div>
         <div class="aircall-section"><div class="aircall-section-title">✅ Follow-Up Tasks</div>${tasks}</div>
-        ${document.getElementById('ac-notes').value?`<div class="aircall-section"><div class="aircall-section-title">📝 Additional Notes</div>${document.getElementById('ac-notes').value}</div>`:''}
+        ${addlNotes?`<div class="aircall-section"><div class="aircall-section-title">📝 Additional Notes</div>${addlNotes}</div>`:''}
         <div style="margin-top:8px;font-size:10px;color:var(--text3)">Logged by: ${currentUser?.full_name||currentUser?.email} · Valor Workforce Funding CRM</div>
       </div>
     </div>`
-    const list=document.getElementById('notes-list')
-    if(list)list.insertAdjacentHTML('afterbegin',noteHtml)
+    // Save to database
+    try{
+      const payload={content:fullContent,note_type:'Aircall',is_aircall:true}
+      if(currentWib){payload.record_type='wib_records';payload.record_id=currentWib.id}
+      await api('/api/notes','POST',payload)
+      const list=document.getElementById('notes-list')
+      if(list)list.insertAdjacentHTML('afterbegin',noteHtml)
+      showToast('Aircall note saved to database','success')
+    }catch(e){
+      // If save fails, still render locally
+      const list=document.getElementById('notes-list')
+      if(list)list.insertAdjacentHTML('afterbegin',noteHtml)
+      showToast('Note logged locally (DB save failed: '+e.message+')','warn')
+    }
   })
 }
 
