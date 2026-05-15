@@ -806,7 +806,18 @@ app.post('/api/import/:type', auth, async (req, res) => {
           wib_name: row['WIB Name'].trim(),
           short_name: row['Short Name'] || null,
           state: row['State'] || null,
-          status: row['Status'] || 'no_reachout_complete',
+          status: (() => {
+            const rawS = (row['Status'] || '').toLowerCase().trim()
+            const m = {
+              'funding available':'funding_available','funding_available':'funding_available','active':'funding_available','open':'funding_available',
+              'follow up needed':'follow_up_needed','follow_up_needed':'follow_up_needed','follow up':'follow_up_needed',
+              'pending employer':'pending_employer','pending_employer':'pending_employer','pending':'pending_employer',
+              'no reachout':'no_reachout_complete','no_reachout_complete':'no_reachout_complete','new':'no_reachout_complete',
+              'funding not available':'funding_not_available','funding_not_available':'funding_not_available','closed':'funding_not_available',
+              'stop applications':'stop_applications','stop_applications':'stop_applications',
+            }
+            return m[rawS] || 'no_reachout_complete'
+          })(),
           wib_phone: row['Phone'] || null,
           wib_email: row['Email'] || null,
           website: row['Website'] || null,
@@ -837,12 +848,19 @@ app.post('/api/import/:type', auth, async (req, res) => {
           || row['Company']?.trim() || row['Employer']?.trim()
           || row['Organization']?.trim()
         if (!name) { results.errors.push('Skipped row — no company name found'); continue }
-        // Flexible status mapping
-        const rawStatus = row['Status'] || row['status'] || ''
-        const statusMap = { 'client': 'client', 'prospect': 'prospect', 'active': 'client',
-          'inactive': 'inactive', 'lead': 'prospect', 'network member': 'network_member',
-          'network_member': 'network_member', 'dnc': 'dnc', 'do not contact': 'dnc' }
-        const status = statusMap[rawStatus.toLowerCase()] || 'prospect'
+        // Map to valid DB company statuses: prospect, contacted, qualified, active_client, churned, dnc
+        const rawStatus = (row['Status'] || row['status'] || '').toLowerCase().trim()
+        const statusMap = {
+          'prospect': 'prospect', 'lead': 'prospect', 'potential': 'prospect',
+          'contacted': 'contacted', 'outreach': 'contacted', 'in progress': 'contacted',
+          'qualified': 'qualified', 'qualifying': 'qualified',
+          'client': 'active_client', 'active': 'active_client', 'active client': 'active_client',
+          'active_client': 'active_client', 'partner': 'active_client', 'customer': 'active_client',
+          'network member': 'active_client', 'network_member': 'active_client', 'member': 'active_client',
+          'churned': 'churned', 'inactive': 'churned', 'lost': 'churned', 'cancelled': 'churned',
+          'dnc': 'dnc', 'do not contact': 'dnc', 'do_not_contact': 'dnc',
+        }
+        const status = statusMap[rawStatus] || 'prospect'
         valid.push({
           company_name: name,
           company_type: row['Type'] || row['Company Type'] || row['type'] || null,
@@ -869,7 +887,11 @@ app.post('/api/import/:type', auth, async (req, res) => {
           state: row['State'] || null,
           county: row['County'] || null,
           city: row['City'] || null,
-          status: row['Status'] || 'prospect',
+          status: (() => {
+            const rawS = (row['Status'] || '').toLowerCase().trim()
+            // Locations valid: prospect, active, inactive (text field, less strict)
+            return rawS || 'prospect'
+          })(),
           employee_count: row['Employee Count'] ? parseInt(row['Employee Count']) : null
         })
       }
@@ -882,7 +904,18 @@ app.post('/api/import/:type', auth, async (req, res) => {
         if (!name) { results.errors.push('Skipped row — Opportunity Name required'); continue }
         valid.push({
           opportunity_name: name,
-          status: row['Status'] || 'open',
+          status: (() => {
+            const rawS = (row['Status'] || '').toLowerCase().trim()
+            const fundingStatusMap = {
+              'open': 'open', 'active': 'open', 'available': 'open',
+              'pending': 'pending', 'pending_employer': 'pending_employer',
+              'blocked': 'blocked', 'on hold': 'blocked',
+              'stop': 'stop_applications', 'stop applications': 'stop_applications', 'stop_applications': 'stop_applications',
+              'closed': 'closed_deadline', 'closed deadline': 'closed_deadline', 'closed_deadline': 'closed_deadline',
+              'out of funds': 'closed_out_of_funds', 'closed_out_of_funds': 'closed_out_of_funds',
+            }
+            return fundingStatusMap[rawS] || 'open'
+          })(),
           program_type: row['Program Type'] || null,
           source_url: row['Source URL'] || name,
           max_award_per_ein: row['Max Award/EIN'] ? parseFloat(row['Max Award/EIN']) : null,
