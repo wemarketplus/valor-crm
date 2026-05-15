@@ -835,47 +835,72 @@ app.post('/api/import/:type', auth, async (req, res) => {
       for (let i = 0; i < valid.length; i += 500) await bulkInsert('wib_records', valid.slice(i, i + 500))
 
     } else if (type === 'companies') {
-      const valid = []
-      // Flexible column matching — find the name column regardless of header label
+      // Use same allowed fields as POST /api/companies to guarantee DB compatibility
+      const ALLOWED = ['company_name','company_type','status','fein','domain',
+        'employee_count_total','avg_hourly_wage','primary_contact_name',
+        'primary_contact_email','primary_contact_phone','training_needs','notes','rating']
+
+      // Flexible status mapping to valid DB values
+      const companyStatusMap = {
+        'prospect':'prospect','lead':'prospect','potential':'prospect','new':'prospect',
+        'contacted':'contacted','outreach':'contacted','in progress':'contacted','in_progress':'contacted',
+        'qualified':'qualified','qualifying':'qualified',
+        'client':'active_client','active':'active_client','active client':'active_client',
+        'active_client':'active_client','partner':'active_client','customer':'active_client',
+        'network member':'active_client','network_member':'active_client','member':'active_client',
+        'churned':'churned','inactive':'churned','lost':'churned','cancelled':'churned',
+        'dnc':'dnc','do not contact':'dnc','do_not_contact':'dnc',
+      }
+
+      // Find name column from headers
       const nameKey = rows[0] ? Object.keys(rows[0]).find(k =>
-        /company.?name|^record$|^name$|^company$|^employer$/i.test(k.trim())
+        /^(company.?name|record|name|company|employer|organization)$/i.test(k.trim())
       ) : null
+
+      // Process in chunks of 100 using individual inserts for reliable error capture
       for (const row of rows) {
-        // Try many possible column names for company
         const name = (nameKey ? row[nameKey] : null)?.trim()
           || row['Company Name']?.trim() || row['company_name']?.trim()
           || row['Record']?.trim() || row['Name']?.trim()
           || row['Company']?.trim() || row['Employer']?.trim()
           || row['Organization']?.trim()
-        if (!name) { results.errors.push('Skipped row — no company name found'); continue }
-        // Map to valid DB company statuses: prospect, contacted, qualified, active_client, churned, dnc
+
+        if (!name) { results.errors.push('Skipped — no company name in row'); continue }
+
         const rawStatus = (row['Status'] || row['status'] || '').toLowerCase().trim()
-        const statusMap = {
-          'prospect': 'prospect', 'lead': 'prospect', 'potential': 'prospect',
-          'contacted': 'contacted', 'outreach': 'contacted', 'in progress': 'contacted',
-          'qualified': 'qualified', 'qualifying': 'qualified',
-          'client': 'active_client', 'active': 'active_client', 'active client': 'active_client',
-          'active_client': 'active_client', 'partner': 'active_client', 'customer': 'active_client',
-          'network member': 'active_client', 'network_member': 'active_client', 'member': 'active_client',
-          'churned': 'churned', 'inactive': 'churned', 'lost': 'churned', 'cancelled': 'churned',
-          'dnc': 'dnc', 'do not contact': 'dnc', 'do_not_contact': 'dnc',
-        }
-        const status = statusMap[rawStatus] || 'prospect'
-        valid.push({
+        const status = companyStatusMap[rawStatus] || 'prospect'
+
+        // Build insert object with ONLY allowed fields (mirrors POST endpoint)
+        const insertRow = {
           company_name: name,
-          company_type: row['Type'] || row['Company Type'] || row['type'] || null,
           status,
-          fein: row['FEIN'] || row['EIN'] || row['fein'] || null,
-          domain: row['Domain'] || row['Website'] || row['domain'] || null,
-          employee_count_total: (() => { const v = row['Employee Count'] || row['Employees'] || row['employee_count']; return v ? parseInt(v) : null })(),
-          avg_hourly_wage: (() => { const v = row['Avg Wage'] || row['Average Wage']; return v ? parseFloat(v) : null })(),
-          primary_contact_name: row['Contact Name'] || row['Primary Contact'] || row['Contact'] || null,
-          primary_contact_email: row['Contact Email'] || row['Email'] || row['contact_email'] || null,
-          primary_contact_phone: row['Contact Phone'] || row['Phone'] || row['contact_phone'] || null,
+          company_type: row['Type'] || row['Company Type'] || row['type'] || null,
+          fein: row['FEIN'] || row['EIN'] || null,
+          domain: row['Domain'] || row['Website'] || null,
+          primary_contact_name: row['Contact Name'] || row['Primary Contact'] || null,
+          primary_contact_email: row['Contact Email'] || row['Email'] || null,
+          primary_contact_phone: row['Contact Phone'] || row['Phone'] || null,
+          avg_hourly_wage: (() => { const v = row['Avg Wage'] || row['Average Wage']; return v ? parseFloat(String(v).replace(/[^0-9.]/g,'')) : null })(),
+          employee_count_total: (() => { const v = row['Employee Count'] || row['Employees']; return v ? parseInt(String(v).replace(/[^0-9]/g,'')) : null })(),
           notes: row['Notes'] || row['Description'] || null,
-        })
+          training_needs: row['Training Needs'] || null,
+        }
+
+        // Remove null values to let DB use column defaults
+        const cleanRow = Object.fromEntries(Object.entries(insertRow).filter(([,v]) => v !== null && v !== ''))
+
+        const { error: insertErr } = await supabase.from('companies').insert(cleanRow)
+        if (insertErr) {
+          results.errors.push(`"${name}": ${insertErr.message}`)
+          // Log first error in detail for debugging
+          if (results.errors.length === 1) {
+            console.error('First import error:', insertErr.code, insertErr.message, insertErr.details, insertErr.hint)
+            console.error('Row that failed:', JSON.stringify(cleanRow))
+          }
+        } else {
+          results.created++
+        }
       }
-      for (let i = 0; i < valid.length; i += 500) await bulkInsert('companies', valid.slice(i, i + 500))
 
     } else if (type === 'locations') {
       const valid = []
