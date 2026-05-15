@@ -363,27 +363,79 @@ let notifOpen = false
 let chatChannel = 'general'
 let ieMenuOpen = null
 let sessionTimer = null
-const SESSION_TIMEOUT_MS = 8 * 60 * 60 * 1000 // 8 hours
+const SESSION_TIMEOUT_MS = 60 * 60 * 1000  // 1 hour of inactivity
+const SESSION_WARN_MS     = 55 * 60 * 1000  // warn 5 min before logout
 
 const COLORS = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444','#6366f1','#14b8a6','#f97316']
 function colorFor(s){return COLORS[(s||'').charCodeAt(0)%COLORS.length]}
 
 // ═══════════════════════════════════════════════════════
-// SESSION MANAGEMENT
+// SESSION MANAGEMENT — 1-hour inactivity timeout
 // ═══════════════════════════════════════════════════════
+let sessionWarnTimer = null
+let sessionWarnBanner = null
+
 function startSessionTimer(){
   clearTimeout(sessionTimer)
-  sessionTimer=setTimeout(()=>{
-    showToast('Session expired — please sign in again','warn')
-    setTimeout(()=>logout(),2000)
-  },SESSION_TIMEOUT_MS)
+  clearTimeout(sessionWarnTimer)
+  dismissSessionWarning()
+
+  // 5-minute warning at 55 minutes
+  sessionWarnTimer = setTimeout(showSessionWarning, SESSION_WARN_MS)
+
+  // Hard logout at 60 minutes
+  sessionTimer = setTimeout(()=>{
+    dismissSessionWarning()
+    showToast('Signed out — 1 hour of inactivity reached.','warn')
+    setTimeout(()=>logout(), 2500)
+  }, SESSION_TIMEOUT_MS)
 }
+
+function showSessionWarning(){
+  if(sessionWarnBanner || !token) return
+  const banner = document.createElement('div')
+  banner.id = 'session-warn-banner'
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#b45309;color:#fff;padding:10px 20px;display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:500;box-shadow:0 3px 12px rgba(0,0,0,.25);gap:12px'
+  banner.innerHTML = `<span>⏱️ <strong>Session expiring</strong> — You will be signed out in <span id="session-countdown">5:00</span> due to inactivity.</span>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button onclick="extendSession()" style="background:#fff;color:#b45309;border:none;border-radius:6px;padding:5px 14px;font-size:11.5px;font-weight:700;cursor:pointer">Stay Signed In</button>
+      <button onclick="logout()" style="background:rgba(0,0,0,.25);color:#fff;border:none;border-radius:6px;padding:5px 12px;font-size:11px;cursor:pointer">Sign Out</button>
+    </div>`
+  document.body.prepend(banner)
+  sessionWarnBanner = banner
+
+  let secsLeft = 5 * 60
+  const tick = setInterval(()=>{
+    secsLeft--
+    const el = document.getElementById('session-countdown')
+    if(!el || secsLeft <= 0){ clearInterval(tick); return }
+    el.textContent = Math.floor(secsLeft/60)+':'+(secsLeft%60).toString().padStart(2,'0')
+  }, 1000)
+  banner._tick = tick
+}
+
+function dismissSessionWarning(){
+  if(sessionWarnBanner){
+    clearInterval(sessionWarnBanner._tick)
+    sessionWarnBanner.remove()
+    sessionWarnBanner = null
+  }
+}
+
+function extendSession(){
+  dismissSessionWarning()
+  startSessionTimer()
+  showToast('Session extended — 1 hour of inactivity before auto sign-out.','success')
+}
+
 function resetSessionTimer(){
-  if(token)startSessionTimer()
+  if(token) startSessionTimer()
 }
-// Reset timer on any user interaction
-document.addEventListener('click',resetSessionTimer,{passive:true})
-document.addEventListener('keydown',resetSessionTimer,{passive:true})
+// Reset on any real user interaction — mousemove throttled to avoid constant calls
+let _lastMouseReset = 0
+document.addEventListener('click', e=>{ if(!e.target.closest('#session-warn-banner')) resetSessionTimer() },{passive:true})
+document.addEventListener('keydown', resetSessionTimer,{passive:true})
+document.addEventListener('mousemove', ()=>{ const now=Date.now(); if(now-_lastMouseReset>30000){_lastMouseReset=now;resetSessionTimer()} },{passive:true})
 
 function showToast(msg,type='info'){
   const colors={info:'var(--blue-bg)',warn:'var(--amber-bg)',error:'var(--red-bg)',success:'var(--green-bg)'}
@@ -759,9 +811,8 @@ async function openWibProfile(id){
   setTopbar(`<span onclick="loadPage('wibs')" style="cursor:pointer;color:var(--text2);font-weight:400">Workforce Boards</span> <span style="color:var(--text3)"> / </span> ${currentWib.wib_name}`,'','')
   setTabs([
     {id:'overview',icon:'📊 ',label:'Overview'},
-    {id:'notes',icon:'📝 ',label:'Notes',count:3},
+    {id:'notes',icon:'📝 ',label:'Notes'},
     {id:'tasks',icon:'✅ ',label:'Tasks',count:0},
-    {id:'calls',icon:'📞 ',label:'Calls',count:0},
     {id:'funding',icon:'💰 ',label:'Funding'},
     {id:'contacts',icon:'👤 ',label:'Contacts'},
     {id:'files',icon:'📁 ',label:'Files'},
@@ -860,14 +911,12 @@ function renderWibTab(){
   } else if(wibTab==='notes'){
     pa.innerHTML=`
     <div class="note-compose">
-      <textarea id="new-note-text" placeholder="Add a note about ${w.wib_name}... Use @mentions to tag teammates" rows="3"></textarea>
+      <textarea id="new-note-text" placeholder="Add a note about ${w.wib_name}..." rows="3"></textarea>
       <div class="note-compose-foot">
         <div class="note-actions">
-          <button class="btn btn-sm" onclick="addNote()">💾 Save Note</button>
-          <button class="btn btn-sm" onclick="addAircallNote()">📱 Log Aircall Note</button>
-          <button class="btn btn-sm" onclick="addAINote()">🤖 Generate AI Summary</button>
-          <button class="btn btn-sm" onclick="document.getElementById('note-file').click()">📎 Attach</button>
-          <input type="file" id="note-file" style="display:none" onchange="handleNoteFile(this)">
+          <button class="btn btn-sm btn-primary" onclick="addNote()">💾 Save Note</button>
+          <button class="btn btn-sm" onclick="addAircallNote()">📱 Log Aircall Call</button>
+          <button class="btn btn-sm" onclick="addAINote()">🤖 AI Summary</button>
         </div>
         <div style="display:flex;gap:5px;flex-wrap:wrap">
           <span class="tag" onclick="insertTag('Outreach Activity')" style="cursor:pointer">Outreach Activity</span>
@@ -877,10 +926,8 @@ function renderWibTab(){
         </div>
       </div>
     </div>
-    <div id="notes-list">
-      ${getDemoAircallNote(w.wib_name)}
-      ${getDemoNotes(w.wib_name).map(n=>renderNoteCard(n)).join('')}
-    </div>`
+    <div id="notes-list"><div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">⏳ Loading notes...</div></div>`
+    loadWibNotes(w.id)
   } else if(wibTab==='tasks'){
     pa.innerHTML=`
     <div class="card">
@@ -892,18 +939,7 @@ function renderWibTab(){
         ${getDemoTasks().map(t=>renderTaskRow(t)).join('')}
       </div>
     </div>`
-  } else if(wibTab==='calls'){
-    pa.innerHTML=`
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">📞 Call History — ${w.wib_name}</div>
-        <button class="btn btn-sm btn-primary" onclick="addAircallNote()">+ Log Call</button>
-      </div>
-      <div class="card-body" style="padding:8px 14px">
-        ${getDemoAircallNote(w.wib_name)}
-        <div class="empty-state"><div class="empty-text">No additional calls logged</div><div class="empty-sub">Calls logged via Aircall sync automatically</div></div>
-      </div>
-    </div>`
+
   } else if(wibTab==='contacts'){
     pa.innerHTML=`
     <div class="card">
@@ -1161,74 +1197,57 @@ function openTaskModal(recordType='',recordId=''){
 // NOTES PAGE
 // ═══════════════════════════════════════════════════════
 async function pageNotes(){
-  setTopbar('Notes','All Notes','')
+  setTopbar('Notes','All Notes & Aircall Calls','')
   document.getElementById('page-area').innerHTML=`
-  <div class="g2">
-    <div>
-      <div class="tbl-wrap">
-        <div class="tbl-head">
-          <div class="tbl-title">📝 Recent Notes</div>
-          <div class="search-inp">🔍<input placeholder="Search notes..." id="notes-search"></div>
-        </div>
-        <div style="padding:12px 14px">
-          <div class="alert alert-info" style="margin-bottom:10px">📌 Notes are attached to records. Open a WIB, Company, or Application to add notes to that record.</div>
-          ${getDemoAircallNote('TX — Demo Workforce Board')}
-          ${getDemoNotes('TX — Demo Workforce Board').map(n=>renderNoteCard(n)).join('')}
-        </div>
+  <div class="tbl-wrap">
+    <div class="tbl-head">
+      <div class="tbl-head-left">
+        <div class="tbl-title">📝 All Notes & Aircall Records</div>
+        <div class="search-inp">🔍<input placeholder="Search notes..." id="notes-search" oninput="filterGlobalNotes(this.value)"></div>
       </div>
     </div>
-    <div>
-      <div class="card">
-        <div class="card-header"><div class="card-title">🏷️ Note Types</div></div>
-        <div class="card-body">
-          ${[['📱 Aircall Notes','Auto-logged from calls','p-green'],['📝 Outreach Notes','Manual call notes','p-blue'],['🤖 AI Summaries','Generated by Claude AI','p-purple'],['🔔 Follow Up','Action items','p-amber'],['📊 Status Update','Progress updates','p-teal']].map(([t,s,c])=>`
-          <div class="stat-row"><span class="stat-label"><span class="pill ${c}">${t}</span></span><span class="stat-value">${s}</span></div>`).join('')}
-        </div>
+    <div style="padding:12px 14px">
+      <div class="alert alert-info" style="margin-bottom:12px;font-size:11px">
+        📌 Notes are attached to records. Open a WIB, Company, or Application profile to add notes. All Aircall calls are combined here.
       </div>
-      <div class="card" style="margin-top:10px">
-        <div class="card-header"><div class="card-title">🔗 Quick Links</div></div>
-        <div class="card-body">
-          <div style="display:flex;flex-direction:column;gap:6px">
-            <button class="btn" onclick="loadPage('wibs')" style="justify-content:flex-start">🏛️ Open WIB records → Add notes</button>
-            <button class="btn" onclick="loadPage('companies')" style="justify-content:flex-start">🏢 Open Companies → Add notes</button>
-            <button class="btn" onclick="loadPage('applications')" style="justify-content:flex-start">📋 Open Applications → Add notes</button>
-            <button class="btn" onclick="loadPage('aircall')" style="justify-content:flex-start">📱 View all Aircall logs</button>
-          </div>
-        </div>
-      </div>
+      <div id="global-notes-list"><div style="text-align:center;padding:30px;color:var(--text3)">⏳ Loading notes...</div></div>
     </div>
   </div>`
+  // Load all recent notes from DB
+  try{
+    const r = await api('/api/notes?limit=100')
+    window._globalNotes = r.data || []
+    renderGlobalNotes(window._globalNotes)
+  }catch(e){
+    document.getElementById('global-notes-list').innerHTML=`<div class="alert alert-error">Failed to load notes: ${e.message}</div>`
+  }
+}
+
+function renderGlobalNotes(notes){
+  const list = document.getElementById('global-notes-list')
+  if(!list) return
+  if(!notes.length){
+    list.innerHTML=`<div style="padding:30px;text-align:center;color:var(--text3);font-size:12px">
+      <div style="font-size:24px;margin-bottom:8px">📝</div>
+      No notes yet. Open a WIB or Company record and add the first note.
+    </div>`
+    return
+  }
+  list.innerHTML = notes.map(n => renderDbNoteCard(n)).join('')
+}
+
+function filterGlobalNotes(q){
+  if(!window._globalNotes) return
+  const filtered = q ? window._globalNotes.filter(n=>(n.details||'').toLowerCase().includes(q.toLowerCase())||(n.user?.full_name||'').toLowerCase().includes(q.toLowerCase())) : window._globalNotes
+  renderGlobalNotes(filtered)
 }
 
 // ═══════════════════════════════════════════════════════
 // AIRCALL LOGS PAGE
 // ═══════════════════════════════════════════════════════
 async function pageAircall(){
-  setTopbar('Aircall Logs','Synced with Aircall','<button class="btn btn-primary" onclick="addAircallNote()">+ Log Call</button>')
-  document.getElementById('page-area').innerHTML=`
-  <div class="alert alert-info">📱 Aircall Integration: Connect your Aircall account in Settings to auto-sync all inbound and outbound calls. AI summaries generated automatically.</div>
-  <div class="tbl-wrap">
-    <div class="tbl-head">
-      <div class="tbl-head-left">
-        <div class="search-inp">🔍<input placeholder="Search calls..."></div>
-        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All calls</option><option>Inbound</option><option>Outbound</option></select>
-        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All records</option><option>WIBs</option><option>Employers</option></select>
-      </div>
-    </div>
-    <table><thead><tr><th>Direction</th><th>Contact</th><th>Record</th><th>Duration</th><th>Date</th><th>AI Summary</th><th></th></tr></thead>
-    <tbody>
-    ${getDemoCallLogs().map(c=>`<tr>
-      <td><span class="pill ${c.dir==='Outbound'?'p-blue':'p-green'}">${c.dir==='Outbound'?'↗':'↙'} ${c.dir}</span></td>
-      <td><div style="font-weight:500">${c.contact}</div><div style="font-size:10px;color:var(--text3)">${c.phone}</div></td>
-      <td><span class="pill p-gray">${c.record}</span></td>
-      <td>${c.duration}</td>
-      <td style="font-size:11px;color:var(--text2)">${c.date}</td>
-      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--text2)">${c.summary}</td>
-      <td><button class="action-btn" onclick="viewCallNote(${JSON.stringify(c).replace(/"/g,"'")})">View Note</button></td>
-    </tr>`).join('')}
-    </tbody></table>
-    <div class="tbl-footer">Showing recent calls · All calls auto-logged from Aircall</div>
-  </div>`
+  // Aircall notes are now combined with the Notes tab — redirect there
+  loadPage('notes')
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1529,7 +1548,7 @@ async function pageUsers(){
     </tbody></table>
     <div class="tbl-footer">
       <span>${(data.data||[]).length} users</span>
-      <span>🔐 Role-based access · sessions expire after 8h inactivity</span>
+      <span>🔐 Role-based access · sessions expire after 1h inactivity</span>
     </div>
   </div>
   <div class="card" style="margin-top:12px">
@@ -1543,8 +1562,7 @@ async function pageUsers(){
     <div id="permissions-matrix-wrap" style="overflow-x:auto;padding:14px">
       <div class="loading" style="color:var(--text3);font-size:12px">Loading permissions...</div>
     </div>
-  </div>
-
+  </div>`
   window._users=data.data||[]
   // Load and render the live permissions matrix
   loadPermissionsMatrix()
@@ -2511,6 +2529,61 @@ function closeModal(){
 // ═══════════════════════════════════════════════════════
 // NOTE HELPERS
 // ═══════════════════════════════════════════════════════
+// ─── LOAD WIB NOTES FROM DB (notes + aircall combined, chronological) ───────
+async function loadWibNotes(wibId) {
+  const list = document.getElementById('notes-list')
+  if (!list) return
+  try {
+    const r = await api(`/api/notes?record_type=wib_records&record_id=${wibId}&limit=100`)
+    const notes = r.data || []
+    if (notes.length === 0) {
+      list.innerHTML = `<div style="padding:30px;text-align:center;color:var(--text3);font-size:12px">
+        <div style="font-size:24px;margin-bottom:8px">📝</div>
+        No notes yet — add the first note or log an Aircall call above.
+      </div>`
+      return
+    }
+    list.innerHTML = notes.map(n => renderDbNoteCard(n)).join('')
+  } catch(e) {
+    list.innerHTML = `<div class="alert alert-error">Failed to load notes: ${e.message}</div>`
+  }
+}
+
+function renderDbNoteCard(n) {
+  const isAircall = n.metadata?.is_aircall || n.metadata?.note_type === 'Aircall'
+  const author = n.user?.full_name || n.user?.email || 'Unknown'
+  const ts = new Date(n.created_at)
+  const dateStr = ts.toLocaleDateString('en-US', {month:'long', day:'numeric', year:'numeric'})
+  const timeStr = ts.toLocaleTimeString('en-US', {hour:'numeric', minute:'2-digit', timeZoneName:'short'})
+
+  if (isAircall) {
+    // Render as Aircall note card
+    const lines = (n.details || '').split('\n')
+    // Parse structured content if present
+    let headerLine = lines[0] || `AIRCALL NOTE — ${dateStr} — ${timeStr}`
+    let bodyLines = lines.slice(1).join('\n')
+    return `<div class="aircall-note" style="margin-bottom:10px">
+      <div class="aircall-header">${headerLine}</div>
+      <div class="aircall-body" style="white-space:pre-wrap">${bodyLines || n.details}</div>
+      <div style="margin-top:8px;font-size:10px;color:var(--text3)">Logged by: ${author} · ${dateStr} at ${timeStr}</div>
+    </div>`
+  }
+
+  // Regular note card
+  const initials = author.slice(0,2).toUpperCase()
+  const noteType = n.metadata?.note_type || 'Note'
+  const typeColors = {Note:'p-blue','AI Summary':'p-purple','Follow Up':'p-amber','Status Update':'p-teal','Outreach Activity':'p-green'}
+  return `<div class="note-card">
+    <div class="note-meta">
+      <div class="note-av" style="background:var(--blue-bg);color:var(--blue-t)">${initials}</div>
+      <div class="note-author">${author}</div>
+      <div class="note-time">${dateStr} at ${timeStr}</div>
+      <span class="pill ${typeColors[noteType]||'p-gray'} note-type">${noteType}</span>
+    </div>
+    <div class="note-content">${n.details || ''}</div>
+  </div>`
+}
+
 async function addNote(){
   const textarea=document.getElementById('new-note-text')
   const text=textarea?.value
@@ -2522,11 +2595,10 @@ async function addNote(){
     const payload={content:text.trim(),note_type:noteType,is_aircall:false}
     if(currentWib){payload.record_type='wib_records';payload.record_id=currentWib.id}
     const saved=await api('/api/notes','POST',payload)
-    const list=document.getElementById('notes-list')
-    const noteCard={author:saved.user?.full_name||currentUser?.full_name||'You',text:saved.details,time:'Just now',type:noteType,color:'#3b82f6'}
-    if(list)list.insertAdjacentHTML('afterbegin',renderNoteCard(noteCard))
     textarea.value=''
     showToast('Note saved','success')
+    // Reload full notes list from DB to show all notes in order
+    if(currentWib) await loadWibNotes(currentWib.id)
   }catch(e){
     showToast('Failed to save note: '+e.message,'error')
   }finally{
@@ -2574,14 +2646,11 @@ function addAircallNote(){
       const payload={content:fullContent,note_type:'Aircall',is_aircall:true}
       if(currentWib){payload.record_type='wib_records';payload.record_id=currentWib.id}
       await api('/api/notes','POST',payload)
-      const list=document.getElementById('notes-list')
-      if(list)list.insertAdjacentHTML('afterbegin',noteHtml)
-      showToast('Aircall note saved to database','success')
+      showToast('Aircall note saved','success')
+      // Reload notes list from DB so Aircall note appears combined with other notes
+      if(currentWib) await loadWibNotes(currentWib.id)
     }catch(e){
-      // If save fails, still render locally
-      const list=document.getElementById('notes-list')
-      if(list)list.insertAdjacentHTML('afterbegin',noteHtml)
-      showToast('Note logged locally (DB save failed: '+e.message+')','warn')
+      showToast('Save failed: '+e.message,'error')
     }
   })
 }
