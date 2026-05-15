@@ -1,0 +1,1981 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Valor Workforce Funding — Component 1: Nav + Session + Notifications</title>
+<style>
+/* ═══════════════════════════════════════════════════
+   CSS CUSTOM PROPERTIES — ORIGINAL VALOR PALETTE
+═══════════════════════════════════════════════════ */
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  /* Dark navy sidebar palette */
+  --nv:#0B1E3C;
+  --nv2:#152d54;
+  --nv3:#1e3d6e;
+  /* Gold accent */
+  --gd:#C9A84C;
+  --gd2:#E8C96A;
+  --cream:#E8D9A8;
+  /* Neutral surface */
+  --white:#ffffff;
+  --gray:#f8f7f6;
+  --gray2:#f3f2f1;
+  --gray3:#e8e6e3;
+  /* Borders */
+  --border:#e5e7eb;
+  --border2:#d1d5db;
+  /* Text */
+  --text:#111827;
+  --text2:#6b7280;
+  --text3:#9ca3af;
+  --text4:#c4c4c4;
+  /* Status colors */
+  --green:#16a34a;   --green-bg:#dcfce7;  --green-t:#166534;
+  --amber:#d97706;   --amber-bg:#fef3c7;  --amber-t:#92400e;
+  --red:#dc2626;     --red-bg:#fee2e2;    --red-t:#991b1b;
+  --blue:#2563eb;    --blue-bg:#dbeafe;   --blue-t:#1e40af;
+  --purple:#7c3aed;  --purple-bg:#ede9fe; --purple-t:#5b21b6;
+  --teal:#0d9488;    --teal-bg:#ccfbf1;   --teal-t:#134e4a;
+  --orange:#ea580c;  --orange-bg:#fff7ed; --orange-t:#9a3412;
+}
+
+body{
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:var(--gray);
+  color:var(--text);
+  height:100vh;
+  overflow:hidden;
+  font-size:13px;
+}
+
+/* ═══════════════════════════════════════════════════
+   APP SHELL — FLEXBOX LAYOUT
+═══════════════════════════════════════════════════ */
+.app{display:flex;height:100vh;overflow:hidden}
+
+/* ═══════════════════════════════════════════════════
+   SIDEBAR
+═══════════════════════════════════════════════════ */
+.sidebar{
+  width:208px;
+  background:var(--nv);
+  display:flex;
+  flex-direction:column;
+  flex-shrink:0;
+  overflow:hidden;
+  position:relative;
+  z-index:10;
+}
+
+/* Logo area */
+.sb-logo{
+  padding:13px 14px 10px;
+  border-bottom:1px solid rgba(255,255,255,.07);
+  flex-shrink:0;
+}
+.sb-logo-row{display:flex;align-items:center;gap:8px}
+.sb-logo-icon{
+  width:28px;height:28px;border-radius:7px;
+  background:rgba(201,168,76,.25);
+  border:.5px solid rgba(201,168,76,.4);
+  display:flex;align-items:center;justify-content:center;
+  font-size:14px;flex-shrink:0;
+}
+.sb-logo-text{font-size:11.5px;font-weight:600;color:var(--cream);line-height:1.25}
+.sb-logo-sub{font-size:8.5px;color:rgba(255,255,255,.28);margin-top:1px;letter-spacing:.6px;text-transform:uppercase}
+
+/* Quick search bar */
+.sb-search{
+  padding:6px 10px;
+  border-bottom:1px solid rgba(255,255,255,.07);
+  flex-shrink:0;
+}
+.sb-search-inner{
+  display:flex;align-items:center;gap:6px;
+  background:rgba(255,255,255,.07);
+  border:.5px solid rgba(255,255,255,.1);
+  border-radius:6px;padding:5px 8px;cursor:pointer;
+}
+.sb-search-inner:hover{background:rgba(255,255,255,.11)}
+.sb-search-icon{color:rgba(255,255,255,.3);font-size:11px}
+.sb-search-text{font-size:11px;color:rgba(255,255,255,.3);flex:1}
+.sb-search-kbd{
+  font-size:9px;color:rgba(255,255,255,.2);
+  background:rgba(255,255,255,.07);
+  padding:1px 4px;border-radius:3px;font-family:monospace;
+}
+
+/* Scrollable nav */
+.sb-nav{flex:1;overflow-y:auto;padding:4px 0}
+.sb-nav::-webkit-scrollbar{width:2px}
+.sb-nav::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px}
+
+/* Nav section header */
+.sb-section{
+  padding:8px 12px 2px;
+  font-size:9px;color:rgba(255,255,255,.22);
+  letter-spacing:1.1px;text-transform:uppercase;font-weight:600;
+}
+
+/* Nav item */
+.sb-item{
+  display:flex;align-items:center;gap:7px;
+  padding:6px 12px;
+  font-size:11.5px;
+  color:rgba(255,255,255,.5);
+  cursor:pointer;
+  border-left:2px solid transparent;
+  transition:all .1s;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  user-select:none;
+}
+.sb-item:hover{background:rgba(255,255,255,.06);color:rgba(255,255,255,.85)}
+.sb-item.active{
+  background:rgba(201,168,76,.14);
+  color:var(--gd2);
+  border-left-color:var(--gd);
+}
+.sb-item-icon{font-size:13px;width:15px;text-align:center;flex-shrink:0;opacity:.75}
+.sb-item.active .sb-item-icon{opacity:1}
+.sb-item-label{flex:1;overflow:hidden;text-overflow:ellipsis}
+
+/* Notification badge on nav item */
+.sb-badge{
+  margin-left:auto;
+  background:rgba(220,60,60,.9);
+  color:#fff;font-size:8px;font-weight:600;
+  padding:1px 5px;border-radius:8px;flex-shrink:0;
+}
+.sb-badge.green{background:#16a34a}
+.sb-badge.amber{background:#d97706}
+
+/* Sub-nav indented */
+.sb-sub{padding-left:8px}
+
+/* Horizontal divider */
+.sb-divider{height:.5px;background:rgba(255,255,255,.06);margin:5px 0}
+
+/* Automations expandable */
+.sb-group{cursor:pointer}
+.sb-group-header{
+  display:flex;align-items:center;gap:7px;
+  padding:6px 12px;font-size:11.5px;
+  color:rgba(255,255,255,.5);
+  transition:all .1s;
+}
+.sb-group-header:hover{color:rgba(255,255,255,.85)}
+.sb-group-chevron{
+  margin-left:auto;font-size:9px;
+  transition:transform .15s;
+}
+.sb-group.open .sb-group-chevron{transform:rotate(90deg)}
+
+/* Footer user area */
+.sb-footer{
+  padding:9px 12px;
+  border-top:1px solid rgba(255,255,255,.07);
+  flex-shrink:0;
+}
+.sb-user{display:flex;align-items:center;gap:8px}
+.sb-avatar{
+  width:26px;height:26px;border-radius:50%;
+  background:rgba(201,168,76,.22);
+  display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700;color:var(--gd);flex-shrink:0;
+}
+.sb-user-info{flex:1;min-width:0}
+.sb-user-name{font-size:10.5px;font-weight:500;color:rgba(255,255,255,.75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-user-role{font-size:8.5px;color:rgba(255,255,255,.3)}
+.sb-user-actions{display:flex;gap:2px;margin-left:4px}
+.sb-user-btn{
+  background:none;border:none;color:rgba(255,255,255,.25);
+  cursor:pointer;font-size:13px;padding:2px 3px;border-radius:4px;
+  transition:all .1s;
+}
+.sb-user-btn:hover{background:rgba(255,255,255,.08);color:rgba(255,255,255,.6)}
+
+/* ═══════════════════════════════════════════════════
+   MAIN CONTENT AREA
+═══════════════════════════════════════════════════ */
+.main{
+  flex:1;display:flex;flex-direction:column;
+  overflow:hidden;min-width:0;
+}
+
+/* ═══════════════════════════════════════════════════
+   TOPBAR
+═══════════════════════════════════════════════════ */
+.topbar{
+  height:44px;
+  background:var(--white);
+  border-bottom:.5px solid var(--border);
+  padding:0 16px;
+  display:flex;align-items:center;justify-content:space-between;
+  flex-shrink:0;gap:10px;
+}
+.topbar-left{display:flex;align-items:center;gap:8px;min-width:0}
+.page-title{
+  font-size:13px;font-weight:600;color:var(--text);
+  white-space:nowrap;display:flex;align-items:center;gap:6px;
+}
+.topbar-crumb{color:var(--text3);font-weight:400;cursor:pointer}
+.topbar-crumb:hover{color:var(--text2)}
+.topbar-crumb-sep{color:var(--text3);margin:0 2px;font-size:11px}
+.topbar-badge{
+  font-size:10.5px;padding:2px 8px;border-radius:20px;
+  font-weight:500;background:var(--gray2);color:var(--text2);
+  white-space:nowrap;
+}
+.topbar-right{display:flex;align-items:center;gap:5px;flex-shrink:0}
+.topbar-icon{
+  width:28px;height:28px;border-radius:6px;
+  border:.5px solid var(--border);background:var(--white);
+  color:var(--text2);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  font-size:12px;transition:all .1s;
+  white-space:nowrap;padding:0 6px;gap:4px;
+}
+.topbar-icon:hover{background:var(--gray2);color:var(--text)}
+.topbar-icon.has-label{width:auto;font-size:11px;font-weight:500}
+
+/* ═══════════════════════════════════════════════════
+   VIEWBAR (filter chips row below topbar)
+═══════════════════════════════════════════════════ */
+.viewbar{
+  background:var(--white);
+  border-bottom:.5px solid var(--border);
+  padding:0 14px;
+  display:flex;align-items:center;gap:0;
+  overflow-x:auto;flex-shrink:0;
+}
+.viewbar::-webkit-scrollbar{height:2px}
+.viewbar::-webkit-scrollbar-thumb{background:var(--border2)}
+.vb-view{
+  padding:7px 12px;font-size:11.5px;
+  color:var(--text2);cursor:pointer;
+  border-bottom:2px solid transparent;
+  white-space:nowrap;transition:all .1s;
+  display:flex;align-items:center;gap:5px;
+}
+.vb-view:hover{color:var(--text)}
+.vb-view.active{color:var(--nv);border-bottom-color:var(--nv);font-weight:500}
+.vc{
+  font-size:10px;background:var(--gray2);color:var(--text3);
+  padding:1px 5px;border-radius:10px;margin-left:3px;
+}
+.vb-view.active .vc{background:var(--blue-bg);color:var(--blue-t)}
+.vb-sep{width:.5px;background:var(--border);margin:8px 10px;height:20px;flex-shrink:0}
+.vb-chip{
+  display:flex;align-items:center;gap:0;
+  background:var(--orange-bg);border:.5px solid var(--orange);
+  border-radius:20px;overflow:hidden;font-size:11px;
+  height:24px;flex-shrink:0;
+}
+.vb-chip-key{padding:0 6px 0 8px;font-weight:500;color:var(--orange-t)}
+.vb-chip-val{padding:0 4px;color:var(--orange-t)}
+.vb-chip-x{
+  padding:0 7px;color:var(--orange-t);cursor:pointer;
+  background:rgba(234,88,12,.12);height:100%;
+  display:flex;align-items:center;transition:background .1s;
+}
+.vb-chip-x:hover{background:rgba(234,88,12,.25)}
+.vb-sort{font-size:11.5px;color:var(--text2);padding:7px 0;white-space:nowrap}
+
+/* ═══════════════════════════════════════════════════
+   PAGE AREA
+═══════════════════════════════════════════════════ */
+#page-area{
+  flex:1;overflow-y:auto;padding:14px 16px;
+}
+#page-area::-webkit-scrollbar{width:5px}
+#page-area::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* ═══════════════════════════════════════════════════
+   RECORD TABS (sub-navigation inside a profile page)
+═══════════════════════════════════════════════════ */
+.record-tabs{
+  display:flex;align-items:center;
+  border-bottom:.5px solid var(--border);
+  background:var(--white);
+  padding:0 16px;flex-shrink:0;
+  overflow-x:auto;
+}
+.record-tabs::-webkit-scrollbar{height:2px}
+.rtab{
+  padding:9px 14px;font-size:12px;
+  color:var(--text2);cursor:pointer;
+  border-bottom:2px solid transparent;
+  white-space:nowrap;transition:all .1s;
+  display:flex;align-items:center;gap:5px;
+  background:none;border-top:none;border-left:none;border-right:none;
+  font-family:inherit;
+}
+.rtab:hover{color:var(--text)}
+.rtab.active{color:var(--nv);border-bottom-color:var(--nv);font-weight:500}
+.tc{
+  font-size:10px;background:var(--gray2);color:var(--text2);
+  padding:1px 5px;border-radius:10px;
+}
+.rtab.active .tc{background:var(--blue-bg);color:var(--blue-t)}
+
+/* ═══════════════════════════════════════════════════
+   NOTIFICATION PANEL
+═══════════════════════════════════════════════════ */
+.notif-panel{
+  position:fixed;right:12px;top:52px;
+  width:360px;
+  background:var(--white);
+  border:.5px solid var(--border);
+  border-radius:12px;
+  box-shadow:0 12px 40px rgba(0,0,0,.14);
+  z-index:300;
+  overflow:hidden;
+}
+.notif-hd{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 14px;border-bottom:.5px solid var(--border);
+}
+.notif-title{font-size:14px;font-weight:700;color:var(--text)}
+.notif-tab-bar{display:flex;border-bottom:.5px solid var(--border)}
+.notif-tab{
+  flex:1;padding:8px 12px;
+  border:none;background:none;
+  font-size:11.5px;cursor:pointer;color:var(--text2);
+  border-bottom:2px solid transparent;
+  font-family:inherit;transition:all .1s;
+}
+.notif-tab:hover{color:var(--text)}
+.notif-tab.active{color:var(--blue-t);border-bottom-color:var(--blue);font-weight:600}
+.notif-body{max-height:380px;overflow-y:auto}
+.notif-body::-webkit-scrollbar{width:3px}
+.notif-body::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.notif-item{
+  display:flex;align-items:flex-start;gap:10px;
+  padding:12px 14px;border-bottom:.5px solid var(--gray2);
+  transition:background .1s;
+  position:relative;
+}
+.notif-item:hover{background:var(--gray)}
+.notif-item.unread::before{
+  content:'';position:absolute;left:6px;top:16px;
+  width:6px;height:6px;border-radius:50%;
+  background:var(--blue);
+}
+.notif-item.unread{padding-left:20px}
+.notif-item.read{opacity:.7}
+.notif-av{
+  width:36px;height:36px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:700;flex-shrink:0;
+}
+.notif-text{font-size:12px;color:var(--text);line-height:1.5;margin-bottom:3px}
+.notif-time{font-size:10.5px;color:var(--text3)}
+.notif-actions{display:flex;gap:6px;margin-top:7px}
+.notif-footer{
+  padding:9px 14px;border-top:.5px solid var(--border);
+  display:flex;justify-content:center;
+}
+
+/* ═══════════════════════════════════════════════════
+   IMPORT/EXPORT DROPDOWN MENU
+═══════════════════════════════════════════════════ */
+.ie-wrap{position:relative;display:inline-block}
+.ie-menu{
+  position:absolute;right:0;top:calc(100% + 4px);
+  background:var(--white);border:.5px solid var(--border);
+  border-radius:9px;min-width:220px;
+  box-shadow:0 8px 24px rgba(0,0,0,.12);
+  z-index:100;overflow:hidden;display:none;padding:4px 0;
+}
+.ie-menu.open{display:block}
+.ie-menu-hd{padding:9px 14px 5px;font-size:9.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.6px}
+.ie-group-label{padding:4px 14px 2px;font-size:9px;font-weight:600;color:var(--text3);letter-spacing:.3px;text-transform:uppercase}
+.ie-item{
+  display:flex;align-items:center;gap:9px;
+  padding:7px 14px;font-size:12px;
+  color:var(--text);cursor:pointer;transition:background .1s;
+}
+.ie-item:hover{background:var(--blue-bg);color:var(--blue-t)}
+.ie-icon{font-size:14px;width:18px;text-align:center}
+.ie-item-hint{font-size:9.5px;color:var(--text3);margin-left:auto}
+.ie-sep{height:.5px;background:var(--border);margin:3px 0}
+#ie-overlay{position:fixed;inset:0;z-index:40;display:none}
+
+/* ═══════════════════════════════════════════════════
+   PILLS & BADGES
+═══════════════════════════════════════════════════ */
+.pill{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 8px;border-radius:20px;
+  font-size:10.5px;font-weight:500;white-space:nowrap;
+}
+.p-green{background:var(--green-bg);color:var(--green-t)}
+.p-amber{background:var(--amber-bg);color:var(--amber-t)}
+.p-red{background:var(--red-bg);color:var(--red-t)}
+.p-blue{background:var(--blue-bg);color:var(--blue-t)}
+.p-gray{background:var(--gray2);color:var(--text2)}
+.p-teal{background:var(--teal-bg);color:var(--teal-t)}
+.p-purple{background:var(--purple-bg);color:var(--purple-t)}
+.sdot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.d-green{background:var(--green)}
+.d-amber{background:var(--amber)}
+.d-red{background:var(--red)}
+.d-blue{background:var(--blue)}
+.d-gray{background:var(--text3)}
+.d-teal{background:var(--teal)}
+
+/* ═══════════════════════════════════════════════════
+   MODAL SYSTEM
+═══════════════════════════════════════════════════ */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.35);
+  display:flex;align-items:center;justify-content:center;
+  z-index:200;padding:20px;backdrop-filter:blur(2px);
+}
+.modal{
+  background:var(--white);border-radius:14px;
+  width:100%;max-width:560px;max-height:90vh;
+  overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.18);
+}
+.modal-lg{max-width:720px}
+.modal-xl{max-width:960px}
+.modal-hd{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 20px;border-bottom:.5px solid var(--border);
+  position:sticky;top:0;background:var(--white);z-index:1;
+}
+.modal-title{font-size:13px;font-weight:600;color:var(--text)}
+.modal-close{
+  background:none;border:none;cursor:pointer;
+  color:var(--text2);font-size:18px;padding:2px 5px;
+  line-height:1;border-radius:5px;
+}
+.modal-close:hover{background:var(--gray2)}
+.modal-body{padding:18px 20px}
+.modal-foot{
+  padding:12px 20px;border-top:.5px solid var(--border);
+  display:flex;justify-content:flex-end;gap:8px;
+  position:sticky;bottom:0;background:var(--white);
+}
+
+/* ═══════════════════════════════════════════════════
+   ALERTS
+═══════════════════════════════════════════════════ */
+.alert{
+  padding:9px 12px;border-radius:8px;
+  font-size:11.5px;line-height:1.5;margin-bottom:10px;
+}
+.alert-error{background:var(--red-bg);color:var(--red-t);border:.5px solid #fca5a5}
+.alert-warn{background:var(--amber-bg);color:var(--amber-t);border:.5px solid #fde68a}
+.alert-info{background:var(--blue-bg);color:var(--blue-t);border:.5px solid #93c5fd}
+.alert-success{background:var(--green-bg);color:var(--green-t);border:.5px solid #86efac}
+
+/* ═══════════════════════════════════════════════════
+   BUTTONS
+═══════════════════════════════════════════════════ */
+.btn{
+  padding:5px 11px;border-radius:7px;font-size:11.5px;
+  cursor:pointer;border:.5px solid var(--border);
+  background:var(--white);color:var(--text);
+  font-family:inherit;transition:all .1s;
+  display:inline-flex;align-items:center;gap:5px;
+  white-space:nowrap;
+}
+.btn:hover{background:var(--gray2)}
+.btn-primary{background:var(--nv);color:var(--cream);border-color:var(--nv);font-weight:600}
+.btn-primary:hover{background:var(--nv2)}
+.btn-success{background:var(--green-bg);color:var(--green-t);border-color:transparent;font-weight:500}
+.btn-danger{background:var(--red-bg);color:var(--red-t);border-color:transparent}
+.btn-ghost{background:transparent;border-color:transparent;color:var(--text2)}
+.btn-ghost:hover{background:var(--gray2);color:var(--text)}
+.btn-blue{background:var(--blue);color:#fff;border-color:transparent;font-weight:500}
+.btn-sm{padding:4px 9px;font-size:11px}
+.btn-xs{padding:2px 7px;font-size:10px;border-radius:5px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ═══════════════════════════════════════════════════
+   FORM ELEMENTS
+═══════════════════════════════════════════════════ */
+input,select,textarea{
+  border:.5px solid var(--border2);border-radius:7px;
+  padding:7px 10px;font-size:11.5px;color:var(--text);
+  font-family:inherit;outline:none;transition:border .1s;
+  width:100%;background:var(--white);
+}
+input:focus,select:focus,textarea:focus{border-color:var(--nv)}
+textarea{resize:vertical;min-height:70px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.form-full{grid-template-columns:1fr}
+.form-group{display:flex;flex-direction:column;gap:4px}
+.form-label{font-size:11px;font-weight:500;color:var(--text2)}
+.form-req{color:var(--red)}
+.form-hint{font-size:10px;color:var(--text3);margin-top:2px}
+.chk-row{display:flex;align-items:center;gap:8px;font-size:11.5px;cursor:pointer}
+.chk-row input[type=checkbox]{width:14px;height:14px;accent-color:var(--nv)}
+
+/* ═══════════════════════════════════════════════════
+   LOADING STATE
+═══════════════════════════════════════════════════ */
+.loading{padding:20px;text-align:center;color:var(--text3);font-size:12px}
+
+/* ═══════════════════════════════════════════════════
+   SESSION TIMEOUT WARNING MODAL
+   (overlays everything at z-index 9999)
+═══════════════════════════════════════════════════ */
+#session-warn-overlay{
+  position:fixed;inset:0;
+  background:rgba(11,30,60,.65);
+  z-index:9999;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  backdrop-filter:blur(3px);
+}
+#session-warn-overlay.visible{display:flex}
+.session-warn-card{
+  background:var(--white);
+  border-radius:16px;
+  padding:32px 36px;
+  max-width:400px;
+  width:100%;
+  text-align:center;
+  box-shadow:0 24px 64px rgba(0,0,0,.3);
+}
+.session-warn-icon{font-size:40px;margin-bottom:14px}
+.session-warn-title{font-size:17px;font-weight:700;color:var(--text);margin-bottom:8px}
+.session-warn-body{font-size:12.5px;color:var(--text2);line-height:1.6;margin-bottom:22px}
+.session-warn-countdown{
+  font-size:36px;font-weight:800;color:var(--red-t);
+  font-variant-numeric:tabular-nums;
+  margin:10px 0 22px;
+  letter-spacing:-1px;
+}
+.session-warn-actions{display:flex;gap:10px;justify-content:center}
+
+/* ═══════════════════════════════════════════════════
+   DASHBOARD CONTENT (sample for preview)
+═══════════════════════════════════════════════════ */
+.rev-band{
+  background:var(--nv);border-radius:10px;
+  padding:14px 18px;display:flex;flex-wrap:wrap;margin-bottom:12px;
+}
+.rev-item{flex:1;min-width:110px;padding:0 14px;border-right:.5px solid rgba(255,255,255,.08)}
+.rev-item:first-child{padding-left:0}
+.rev-item:last-child{border-right:none}
+.rev-n{font-size:20px;font-weight:700;color:var(--cream)}
+.rev-l{font-size:9.5px;color:rgba(255,255,255,.4);margin-top:2px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.card{background:var(--white);border:.5px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:10px}
+.card-hd{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:.5px solid var(--border)}
+.card-title{font-size:12px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px}
+.card-body{padding:12px 14px}
+.metric{background:var(--white);border:.5px solid var(--border);border-radius:10px;padding:12px 14px}
+.metric-label{font-size:10px;color:var(--text2);margin-bottom:4px;font-weight:500;text-transform:uppercase;letter-spacing:.4px}
+.metric-value{font-size:22px;font-weight:700;color:var(--text);line-height:1}
+.metric-sub{font-size:10px;color:var(--text3);margin-top:3px}
+.stat-row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:.5px solid var(--gray2);font-size:11.5px}
+.stat-row:last-child{border-bottom:none}
+.stat-label{color:var(--text2)}
+.stat-value{font-weight:600;color:var(--text)}
+.empty-state{padding:40px 20px;text-align:center;color:var(--text3)}
+.empty-icon{font-size:32px;margin-bottom:8px}
+.empty-text{font-size:13px;font-weight:500;margin-bottom:4px;color:var(--text2)}
+.empty-sub{font-size:11.5px;margin-bottom:14px}
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════════════════════
+     SESSION TIMEOUT WARNING MODAL
+     (z-index 9999 — overlays all other UI)
+═══════════════════════════════════════════════════ -->
+<div id="session-warn-overlay">
+  <div class="session-warn-card">
+    <div class="session-warn-icon">⏱️</div>
+    <div class="session-warn-title">Session Expiring Soon</div>
+    <div class="session-warn-body">
+      You have been inactive. For your security, you will be automatically signed out in:
+    </div>
+    <div class="session-warn-countdown" id="session-countdown">2:00</div>
+    <div class="session-warn-body">
+      Click <strong>Stay Signed In</strong> to continue your session.
+    </div>
+    <div class="session-warn-actions">
+      <button class="btn btn-primary" style="padding:10px 28px;font-size:13px" onclick="extendSession()">Stay Signed In</button>
+      <button class="btn btn-danger" style="padding:10px 20px;font-size:13px" onclick="logout()">Sign Out Now</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal container -->
+<div id="modal-container"></div>
+<!-- Notification panel container -->
+<div id="notif-container"></div>
+<!-- IE dropdown overlay -->
+<div id="ie-overlay" onclick="closeAllIE()"></div>
+
+<!-- ═══════════════════════════════════════════════
+     APP ROOT
+═══════════════════════════════════════════════════ -->
+<div id="app"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════
+   ─── GLOBALS ───
+═══════════════════════════════════════════════════ */
+let token = localStorage.getItem('valor_token') || null
+let currentUser = null
+let currentPage = 'dashboard'
+let currentWib = null
+let wibTab = 'overview'
+let currentCompany = null
+let companyTab = 'overview'
+let notifOpen = false
+let chatChannel = 'general'
+
+// Notification state (in-memory read/unread tracking)
+window._notifications = [
+  {id:'n1',type:'request',unread:true,initials:'S',color:'#3b82f6',text:'Samantha Orer is requesting access to the email Re: Incumbent Workforce Training.',time:'about 20 hours ago',category:'requests'},
+  {id:'n2',type:'request',unread:true,initials:'S',color:'#3b82f6',text:'Samantha Orer is requesting access to the email RE: Incumbent Workforce Training.',time:'about 20 hours ago',category:'requests'},
+  {id:'n3',type:'request',unread:true,initials:'V',color:'#ec4899',text:'Virginia Webb is requesting access to the email IWT Training application - San Diego Workforce Partnership.',time:'4 days ago',category:'requests'},
+]
+window._notifBadgeCount = window._notifications.filter(n=>n.unread).length
+
+window._coFilters = { search:'', status:'', rating:'', state:'' }
+window._wibFilters = { search:'', status:'', state:'', type:'', owner:'' }
+window._locFilters = { search:'' }
+window._importRows = null
+window._importType = null
+window._importStep = 1
+window._importFieldMap = {}
+
+/* ═══════════════════════════════════════════════════
+   ─── SESSION TIMEOUT ENGINE ───
+   58 min: show warning modal with live 2-min countdown
+   60 min: auto-logout fires
+═══════════════════════════════════════════════════ */
+let _sessionWarnTimer = null
+let _sessionLogoutTimer = null
+let _sessionCountdownInterval = null
+let _sessionWarned = false
+
+function startSessionTimer() {
+  // Clear any existing timers
+  clearTimeout(_sessionWarnTimer)
+  clearTimeout(_sessionLogoutTimer)
+  clearInterval(_sessionCountdownInterval)
+  _sessionWarned = false
+
+  // 58 minutes → show blocking warning modal
+  _sessionWarnTimer = setTimeout(() => {
+    _sessionWarned = true
+    showSessionWarning()
+  }, 58 * 60 * 1000)
+
+  // 60 minutes → force logout regardless of modal state
+  _sessionLogoutTimer = setTimeout(() => {
+    clearInterval(_sessionCountdownInterval)
+    const overlay = document.getElementById('session-warn-overlay')
+    if (overlay) overlay.classList.remove('visible')
+    showToast('Session expired — you have been signed out automatically.', 'warn')
+    setTimeout(() => logout(), 900)
+  }, 60 * 60 * 1000)
+
+  // Reset on any user activity (click or keydown)
+  // Uses passive event listeners so they don't block UI thread
+  const resetHandler = () => {
+    if (!_sessionWarned) startSessionTimer()
+  }
+  document.addEventListener('click', resetHandler, { once: true, passive: true })
+  document.addEventListener('keydown', resetHandler, { once: true, passive: true })
+  document.addEventListener('mousemove', resetHandler, { once: true, passive: true })
+}
+
+function showSessionWarning() {
+  const overlay = document.getElementById('session-warn-overlay')
+  if (!overlay) return
+  overlay.classList.add('visible')
+
+  // Start 2-minute countdown
+  let secondsLeft = 120
+  updateCountdownDisplay(secondsLeft)
+
+  clearInterval(_sessionCountdownInterval)
+  _sessionCountdownInterval = setInterval(() => {
+    secondsLeft--
+    updateCountdownDisplay(secondsLeft)
+    if (secondsLeft <= 0) {
+      clearInterval(_sessionCountdownInterval)
+      // Logout timer will fire at exactly 60min; countdown is cosmetic sync
+    }
+  }, 1000)
+}
+
+function updateCountdownDisplay(secs) {
+  const el = document.getElementById('session-countdown')
+  if (!el) return
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  el.textContent = `${m}:${s < 10 ? '0' : ''}${s}`
+  // Turn red in final 30 seconds
+  el.style.color = secs <= 30 ? '#dc2626' : '#991b1b'
+}
+
+function extendSession() {
+  // Dismiss warning modal
+  const overlay = document.getElementById('session-warn-overlay')
+  if (overlay) overlay.classList.remove('visible')
+  clearInterval(_sessionCountdownInterval)
+  _sessionWarned = false
+  // Restart the full 60-minute clock
+  startSessionTimer()
+  showToast('Session extended — you are still signed in.', 'success')
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── API LAYER ───
+═══════════════════════════════════════════════════ */
+async function api(url, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    }
+  }
+  if (body) opts.body = JSON.stringify(body)
+  const r = await fetch(url, opts)
+  let d
+  try { d = await r.json() } catch (e) { throw new Error(`Server error (${r.status})`) }
+  if (r.status === 401) {
+    token = null
+    localStorage.removeItem('valor_token')
+    render()
+    throw new Error('Session expired')
+  }
+  if (r.status === 403) throw new Error(d.error || 'Permission denied')
+  if (!r.ok) throw new Error(d.error || `Request failed (${r.status})`)
+  return d
+}
+
+async function apiDownload(url) {
+  const r = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
+  if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.error || 'Export failed') }
+  const blob = await r.blob()
+  const cd = r.headers.get('content-disposition') || ''
+  const name = cd.match(/filename="([^"]+)"/)?.[1] || 'valor-export.csv'
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+async function apiAI(prompt) {
+  try {
+    const d = await api('/api/ai', 'POST', { prompt, context: '' })
+    if (d.error && !d.text) return 'AI Error: ' + (d.error || 'unknown')
+    return d.text || 'No response generated.'
+  } catch (e) { return '❌ AI failed: ' + e.message }
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── TOAST NOTIFICATIONS ───
+═══════════════════════════════════════════════════ */
+function showToast(msg, type = 'info') {
+  const colors = { success: '#166534', error: '#991b1b', warn: '#92400e', info: '#1e40af' }
+  const bgs = { success: '#dcfce7', error: '#fee2e2', warn: '#fef3c7', info: '#dbeafe' }
+  const t = document.createElement('div')
+  t.style.cssText = `position:fixed;bottom:18px;right:18px;padding:10px 16px;border-radius:9px;font-size:12px;font-weight:500;z-index:9998;max-width:340px;box-shadow:0 4px 16px rgba(0,0,0,.15);background:${bgs[type] || bgs.info};color:${colors[type] || colors.info};border:.5px solid currentColor;opacity:0;transition:opacity .2s`
+  t.textContent = msg
+  document.body.appendChild(t)
+  requestAnimationFrame(() => { t.style.opacity = '1' })
+  setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300) }, 3800)
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── MODAL SYSTEM ───
+═══════════════════════════════════════════════════ */
+function showModal(title, body, onSave = null, size = '') {
+  document.getElementById('modal-container').innerHTML = `
+  <div class="modal-overlay" onclick="handleOverlayClick(event)">
+    <div class="modal ${size}" onclick="event.stopPropagation()">
+      <div class="modal-hd">
+        <div class="modal-title">${title}</div>
+        <button class="modal-close" onclick="closeModal()">✕</button>
+      </div>
+      <div class="modal-body" id="modal-body">${body}</div>
+      <div class="modal-foot" id="modal-foot">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+        ${onSave ? '<button class="btn btn-primary" id="modal-ok-btn" onclick="modalSave()">Save</button>' : ''}
+      </div>
+    </div>
+  </div>`
+  window._modalSave = onSave
+}
+
+function handleOverlayClick(e) {
+  if (e.target.classList.contains('modal-overlay')) closeModal()
+}
+
+function closeModal() {
+  document.getElementById('modal-container').innerHTML = ''
+  window._modalSave = null
+}
+
+async function modalSave() {
+  const btn = document.getElementById('modal-ok-btn')
+  if (!btn || !window._modalSave) return
+  btn.disabled = true
+  btn.textContent = 'Saving...'
+  const result = await window._modalSave()
+  if (result === false) { btn.disabled = false; btn.textContent = 'Save' }
+  else closeModal()
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── IE DROPDOWN MENU ───
+═══════════════════════════════════════════════════ */
+function toggleIEMenu(id) {
+  closeAllIE()
+  const m = document.getElementById(id)
+  if (m) {
+    m.classList.toggle('open')
+    document.getElementById('ie-overlay').style.display = m.classList.contains('open') ? 'block' : 'none'
+  }
+}
+
+function closeAllIE() {
+  document.querySelectorAll('.ie-menu').forEach(m => m.classList.remove('open'))
+  const ol = document.getElementById('ie-overlay')
+  if (ol) ol.style.display = 'none'
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── UTILITY FORMATTERS ───
+═══════════════════════════════════════════════════ */
+function fmtDate(d) {
+  if (!d) return '—'
+  try { return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) } catch { return d }
+}
+
+function fmtMoney(n) { return n ? '$' + Number(n).toLocaleString() : '—' }
+
+function fmtAgo(d) {
+  const diff = Date.now() - new Date(d).getTime()
+  const m = Math.floor(diff / 60000), h = Math.floor(diff / 3600000), dy = Math.floor(diff / 86400000)
+  if (m < 1) return 'just now'
+  if (m < 60) return m + 'm ago'
+  if (h < 24) return h + 'h ago'
+  if (dy < 7) return dy + 'd ago'
+  return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+function getTaskMeta(t) {
+  if (t.metadata && typeof t.metadata === 'object') return t.metadata
+  try { const p = JSON.parse(t.details || '{}'); return typeof p === 'object' ? p : { title: t.details || '' } }
+  catch { return { title: t.details || '' } }
+}
+
+function getNoteContent(n) {
+  if (n.metadata && typeof n.metadata === 'object') return n.metadata.content || n.metadata.text || n.details || ''
+  return n.details || ''
+}
+
+function getNoteType(n) {
+  if (n.metadata && typeof n.metadata === 'object') return n.metadata.note_type || 'Note'
+  try { const p = JSON.parse(n.details || '{}'); return p.note_type || 'Note' } catch { return 'Note' }
+}
+
+function isAircallNote(n) {
+  if (n.metadata && typeof n.metadata === 'object') return !!(n.metadata.is_aircall || n.metadata.note_type === 'Aircall')
+  try { const p = JSON.parse(n.details || '{}'); return !!(p.is_aircall || p.note_type === 'Aircall') } catch { return false }
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── STATUS PILL RENDERERS ───
+═══════════════════════════════════════════════════ */
+function wibStatusPill(s) {
+  const map = {
+    funding_available: ['p-green', 'd-green', 'Funding Available - Have'],
+    follow_up_needed: ['p-amber', 'd-amber', 'Follow Up Needed'],
+    funding_not_available: ['p-red', 'd-red', 'Funding Not Available'],
+    no_reachout_complete: ['p-gray', 'd-gray', 'No Reachout Completed'],
+    no_reachout_completed: ['p-gray', 'd-gray', 'No Reachout Completed'],
+    network_member: ['p-teal', 'd-teal', 'Network Member'],
+    contacted: ['p-blue', 'd-blue', 'Contacted'],
+    stop_applications: ['p-red', 'd-red', 'Stop Applications'],
+    pending_employer: ['p-amber', 'd-amber', 'Pending Employer'],
+  }
+  const [pill, dot, label] = map[s] || ['p-gray', 'd-gray', s || '—']
+  return `<span class="pill ${pill}"><span class="sdot ${dot}"></span>${label}</span>`
+}
+
+function companyStatusPill(s) {
+  const map = { prospect: 'p-gray', contacted: 'p-blue', qualified: 'p-amber', active_client: 'p-green', churned: 'p-red', dnc: 'p-red' }
+  return `<span class="pill ${map[s] || 'p-gray'}">${s ? s.replace(/_/g, ' ') : '—'}</span>`
+}
+
+function locStatusPill(s) {
+  const map = {
+    not_contacted: ['p-gray', 'd-gray', 'Not Contacted'],
+    contacted: ['p-blue', 'd-blue', 'Contacted'],
+    application_in_progress: ['p-amber', 'd-amber', 'Application In Progress'],
+    client: ['p-green', 'd-green', 'Client'],
+    network_member: ['p-teal', 'd-teal', 'Network Member'],
+    dnc: ['p-red', 'd-red', 'DNC'],
+    open: ['p-green', 'd-green', 'Open'],
+    stop_applications: ['p-red', 'd-red', 'Stop Applications'],
+    prospect: ['p-gray', 'd-gray', 'Not Contacted'],
+  }
+  const [pill, dot, label] = map[s] || ['p-gray', 'd-gray', s || '—']
+  return `<span class="pill ${pill}"><span class="sdot ${dot}"></span>${label}</span>`
+}
+
+function fundingStatusPill(s) {
+  const map = {
+    open: ['p-green', 'd-green', 'Open'],
+    pending: ['p-amber', 'd-amber', 'Pending'],
+    pending_employer: ['p-amber', 'd-amber', 'Pending'],
+    blocked: ['p-red', 'd-red', 'Blocked'],
+    closed_deadline: ['p-gray', 'd-gray', 'Closed - Deadline'],
+    closed_out_of_funds: ['p-red', 'd-red', 'Closed - Out of Funds'],
+    stop_applications: ['p-red', 'd-red', 'Stop Applications'],
+  }
+  const [pill, dot, label] = map[s] || ['p-gray', 'd-gray', s || '—']
+  return `<span class="pill ${pill}"><span class="sdot ${dot}"></span>${label}</span>`
+}
+
+function appStatusPill(s) {
+  const map = {
+    intake: ['p-gray', 'Intake'],
+    in_progress: ['p-blue', 'In Progress'],
+    submitted: ['p-amber', 'Submitted'],
+    under_review: ['p-purple', 'Under Review'],
+    awarded: ['p-teal', 'Awarded'],
+    denied: ['p-red', 'Denied'],
+    withdrawn: ['p-gray', 'Withdrawn'],
+    active: ['p-green', 'Active'],
+    completed: ['p-green', 'Completed'],
+    // Screenshot blueprint status names:
+    needs_review: ['p-amber', 'Needs Review'],
+    ready_for_training: ['p-blue', 'Ready for Training'],
+    wont_apply: ['p-red', "Won't Apply"],
+    application_submitted: ['p-teal', 'Application Submitted'],
+    funding_closed: ['p-gray', 'Funding Closed'],
+  }
+  const [pill, label] = map[s] || ['p-gray', s ? s.replace(/_/g, ' ') : '—']
+  return `<span class="pill ${pill}">${label}</span>`
+}
+
+function invPill(s) {
+  const map = { not_invoiced: 'p-gray', invoiced: 'p-amber', paid: 'p-green', overdue: 'p-red' }
+  return `<span class="pill ${map[s] || 'p-gray'}">${s ? s.replace(/_/g, ' ') : '—'}</span>`
+}
+
+function promotionPill(s) {
+  const map = {
+    suggested: ['p-amber', 'Suggested'],
+    not_needed: ['p-gray', 'Not needed'],
+    promoted: ['p-green', 'Promoted'],
+  }
+  const [pill, label] = map[s] || ['p-gray', s || '']
+  if (!s) return ''
+  return `<span class="pill ${pill}" style="font-size:9.5px">${label}</span>`
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── CALL PRIORITY BARS ───
+═══════════════════════════════════════════════════ */
+function callPriority(n) {
+  if (!n) return '<span style="color:var(--text3)">—</span>'
+  const score = Number(n)
+  const filled = score >= 3000 ? 5 : score >= 2000 ? 4 : score >= 1200 ? 3 : score >= 600 ? 2 : 1
+  const level = score >= 2000 ? 'high' : score >= 800 ? 'med' : 'low'
+  const colorMap = { high: '#ef4444', med: '#f59e0b', low: '#22c55e' }
+  const bars = Array.from({ length: 5 }, (_, i) =>
+    `<div style="width:5px;height:${8 + i * 3}px;border-radius:1.5px;background:${i < filled ? colorMap[level] : 'var(--gray3)'}"></div>`
+  ).join('')
+  return `<div style="display:inline-flex;align-items:center;gap:5px">
+    <div style="display:flex;gap:2px;align-items:flex-end">${bars}</div>
+    <span style="font-size:10.5px;font-weight:600;color:var(--text2)">${score.toLocaleString()}</span>
+  </div>`
+}
+
+function starRating(r) {
+  if (!r) return '<span style="color:var(--text3)">—</span>'
+  const n = Math.min(Number(r), 5)
+  return '<span style="color:#f59e0b;font-size:12px;letter-spacing:1px">' + '★'.repeat(n) +
+    '<span style="color:var(--gray3)">' + '★'.repeat(5 - n) + '</span></span>'
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── LOGIN PAGE ───
+═══════════════════════════════════════════════════ */
+function renderLogin() {
+  document.getElementById('app').innerHTML = `
+  <div style="min-height:100vh;background:var(--nv);display:flex;align-items:center;justify-content:center;padding:20px">
+    <div style="width:100%;max-width:380px">
+      <div style="text-align:center;margin-bottom:28px">
+        <div style="width:56px;height:56px;border-radius:14px;background:rgba(201,168,76,.2);border:.5px solid rgba(201,168,76,.3);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:26px">🛡️</div>
+        <div style="font-size:22px;font-weight:700;color:var(--cream)">Valor Workforce Funding</div>
+        <div style="font-size:11.5px;color:rgba(255,255,255,.35);margin-top:5px">Grant Monetization Platform</div>
+      </div>
+      <div style="background:rgba(255,255,255,.06);border:.5px solid rgba(255,255,255,.1);border-radius:14px;padding:24px">
+        <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:16px">Sign in to your account</div>
+        <div id="login-err"></div>
+        <div style="margin-bottom:12px">
+          <div style="font-size:11px;color:rgba(255,255,255,.45);margin-bottom:5px">Email address</div>
+          <input type="email" id="le" placeholder="Enter your email" autocomplete="username"
+            style="background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:9px 12px;width:100%;font-family:inherit;outline:none;font-size:12px">
+        </div>
+        <div style="margin-bottom:18px">
+          <div style="font-size:11px;color:rgba(255,255,255,.45);margin-bottom:5px">Password</div>
+          <input type="password" id="lp" placeholder="••••••••" autocomplete="current-password"
+            style="background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.12);color:#fff;border-radius:8px;padding:9px 12px;width:100%;font-family:inherit;outline:none;font-size:12px">
+        </div>
+        <button onclick="doLogin()" id="lbtn"
+          style="width:100%;background:var(--gd);color:var(--nv);border:none;border-radius:8px;padding:10px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit">
+          Sign in
+        </button>
+      </div>
+      <div style="text-align:center;margin-top:14px;font-size:10px;color:rgba(255,255,255,.18)">
+        Valor Workforce Funding LLC · Secure Portal
+      </div>
+    </div>
+  </div>`
+  document.getElementById('lp').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin() })
+}
+
+async function doLogin() {
+  const email = document.getElementById('le').value
+  const password = document.getElementById('lp').value
+  const btn = document.getElementById('lbtn')
+  btn.disabled = true; btn.textContent = 'Signing in...'
+  document.getElementById('login-err').innerHTML = ''
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    })
+    const d = await r.json()
+    if (!r.ok) throw new Error(d.error)
+    token = d.token
+    localStorage.setItem('valor_token', token)
+    render()
+  } catch (e) {
+    document.getElementById('login-err').innerHTML = `<div class="alert alert-error">⚠️ ${e.message}</div>`
+    btn.disabled = false; btn.textContent = 'Sign in'
+  }
+}
+
+async function logout() {
+  clearTimeout(_sessionWarnTimer)
+  clearTimeout(_sessionLogoutTimer)
+  clearInterval(_sessionCountdownInterval)
+  const overlay = document.getElementById('session-warn-overlay')
+  if (overlay) overlay.classList.remove('visible')
+  try { await api('/api/logout', 'POST') } catch { }
+  token = null; currentUser = null
+  localStorage.removeItem('valor_token')
+  render()
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── RENDER ENGINE ───
+═══════════════════════════════════════════════════ */
+async function render() {
+  if (!token) { renderLogin(); return }
+  try {
+    const me = await api('/api/me')
+    currentUser = me
+    startSessionTimer()
+    renderApp()
+  } catch (e) {
+    token = null
+    localStorage.removeItem('valor_token')
+    renderLogin()
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── SIDEBAR ITEM BUILDER ───
+═══════════════════════════════════════════════════ */
+function sbi(page, icon, label, badge = '', badgeColor = '') {
+  return `<div class="sb-item" id="nav-${page}" onclick="loadPage('${page}')">
+    <span class="sb-item-icon">${icon}</span>
+    <span class="sb-item-label">${label}</span>
+    ${badge ? `<span class="sb-badge ${badgeColor}">${badge}</span>` : ''}
+  </div>`
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── FULL APP RENDER ───
+═══════════════════════════════════════════════════ */
+function renderApp() {
+  const isAdmin = ['super_admin', 'admin'].includes(currentUser?.role)
+  const initials = (currentUser?.full_name || currentUser?.email || '?').slice(0, 2).toUpperCase()
+  const roleLabels = {
+    super_admin: 'Super Admin', admin: 'Admin',
+    grant_coordinator: 'Grant Coordinator', compliance_mgr: 'Compliance Mgr',
+    team_member: 'Sales Specialist', external_partner: 'Read-Only'
+  }
+  const roleLabel = roleLabels[currentUser?.role] || (currentUser?.role || '').replace(/_/g, ' ')
+  const badgeCount = window._notifications.filter(n => n.unread).length
+
+  document.getElementById('app').innerHTML = `
+  <div class="app">
+
+    <!-- ═══ SIDEBAR ═══ -->
+    <div class="sidebar" id="sidebar">
+
+      <!-- Logo -->
+      <div class="sb-logo">
+        <div class="sb-logo-row">
+          <div class="sb-logo-icon">🛡️</div>
+          <div>
+            <div class="sb-logo-text">Valor Workforce Funding</div>
+            <div class="sb-logo-sub">CRM Platform</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick search -->
+      <div class="sb-search" onclick="focusSearch()">
+        <div class="sb-search-inner">
+          <span class="sb-search-icon">⌕</span>
+          <span class="sb-search-text">Qui...</span>
+          <span class="sb-search-kbd">CTRLK</span>
+          <span class="sb-search-kbd">/</span>
+        </div>
+      </div>
+
+      <!-- Navigation -->
+      <div class="sb-nav">
+        ${sbi('dashboard', '🏠', 'Home')}
+        ${sbi('notifications', '🔔', 'Notifications', badgeCount > 0 ? badgeCount : '', 'red')}
+        ${sbi('tasks', '☑', 'Tasks')}
+        ${sbi('notes', '📄', 'Notes')}
+        ${sbi('emails', '✉', 'Emails')}
+        ${sbi('calls', '📞', 'Calls')}
+        ${sbi('reports', '⊞', 'Reports')}
+
+        <!-- Automations expandable group -->
+        <div class="sb-group" id="automations-group" onclick="toggleAutomationsGroup()">
+          <div class="sb-group-header">
+            <span class="sb-item-icon">▷</span>
+            <span style="font-size:11.5px">Automations</span>
+            <span class="sb-group-chevron">›</span>
+          </div>
+        </div>
+        <div id="automations-sub" style="display:none">
+          <div class="sb-sub">
+            ${sbi('sequences', '▷', 'Sequences')}
+            ${sbi('workflows', '⟲', 'Workflows')}
+          </div>
+        </div>
+
+        <div class="sb-divider"></div>
+        <div class="sb-section">Records</div>
+        ${sbi('companies', '🏢', 'Companies')}
+        ${sbi('locations', '📍', 'Locations')}
+        ${sbi('wibs', '🏛', 'Workforce Boards')}
+        ${sbi('funding', '💰', 'Funding Opportuniti...')}
+        ${sbi('applications', '📋', 'Applications')}
+
+        ${isAdmin ? `
+        <div class="sb-divider"></div>
+        <div class="sb-section">Admin</div>
+        ${sbi('users', '👥', 'User Management')}
+        ${sbi('auditlogs', '🔍', 'Audit Logs')}
+        ${sbi('settings', '⚙', 'Settings')}
+        ` : ''}
+
+        <div class="sb-divider"></div>
+        ${sbi('revenue', '💵', 'Revenue Tracker')}
+        ${sbi('compliance', '🛡', 'Compliance')}
+        ${sbi('ai', '🤖', 'AI Assistant')}
+      </div>
+
+      <!-- User footer -->
+      <div class="sb-footer">
+        <div class="sb-user">
+          <div class="sb-avatar">${initials}</div>
+          <div class="sb-user-info">
+            <div class="sb-user-name">${currentUser?.full_name || currentUser?.email}</div>
+            <div class="sb-user-role">${roleLabel}</div>
+          </div>
+          <div class="sb-user-actions">
+            <button class="sb-user-btn" title="Notifications" onclick="toggleNotif()">🔔</button>
+            <button class="sb-user-btn" title="Change Password" onclick="openChangePasswordModal()">🔐</button>
+            <button class="sb-user-btn" title="Sign out" onclick="logout()">⇥</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ MAIN CONTENT ═══ -->
+    <div class="main" id="main-area">
+      <div id="topbar-area"></div>
+      <div id="viewbar-area"></div>
+      <div id="tab-area"></div>
+      <div id="page-area" style="flex:1;overflow-y:auto;padding:14px 16px"></div>
+    </div>
+  </div>`
+
+  loadPage('dashboard')
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── AUTOMATIONS GROUP TOGGLE ───
+═══════════════════════════════════════════════════ */
+function toggleAutomationsGroup() {
+  const sub = document.getElementById('automations-sub')
+  const grp = document.getElementById('automations-group')
+  if (!sub) return
+  const open = sub.style.display === 'none'
+  sub.style.display = open ? 'block' : 'none'
+  if (grp) grp.classList.toggle('open', open)
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── NAV STATE ───
+═══════════════════════════════════════════════════ */
+function setNav(page) {
+  document.querySelectorAll('.sb-item').forEach(e => e.classList.remove('active'))
+  const el = document.getElementById('nav-' + page)
+  if (el) el.classList.add('active')
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── TOPBAR BUILDER ───
+   NOTE: "Ask AI" — Attio name is scrubbed
+═══════════════════════════════════════════════════ */
+function setTopbar(titleHtml, badge = '', actions = '') {
+  document.getElementById('topbar-area').innerHTML = `
+  <div class="topbar">
+    <div class="topbar-left">
+      <div class="page-title">${titleHtml}</div>
+      ${badge ? `<span class="topbar-badge">${badge}</span>` : ''}
+    </div>
+    <div class="topbar-right">
+      <div class="topbar-icon" title="Share" onclick="showToast('Share link copied','success')">🔗</div>
+      <div class="topbar-icon" title="Search" onclick="focusSearch()">🔍</div>
+      <div class="topbar-icon" title="Help">❓</div>
+      <div class="topbar-icon has-label" title="Ask Claude AI" onclick="loadPage('ai')">🤖 Ask AI</div>
+      ${actions}
+    </div>
+  </div>`
+}
+
+function focusSearch() {
+  const s = document.querySelector('.search-box input')
+  if (s) s.focus()
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── VIEWBAR BUILDER ───
+═══════════════════════════════════════════════════ */
+function setViewbar(views = [], activeId = '', filterChips = [], sortLabel = '') {
+  const v = views.map(v =>
+    `<div class="vb-view${v.id === activeId ? ' active' : ''}" onclick="switchView('${v.id}')">
+      ${v.icon || '⊞'} ${v.label}
+      ${v.count != null ? `<span class="vc">${v.count}</span>` : ''}
+    </div>`
+  ).join('')
+
+  const chips = filterChips.map(c =>
+    `<div class="vb-chip">
+      <span class="vb-chip-key">${c.key}</span>
+      <span class="vb-chip-val">${c.val}</span>
+      <span class="vb-chip-x" onclick="${c.onRemove || ''}">✕</span>
+    </div>`
+  ).join('')
+
+  const sort = sortLabel ? `<div class="vb-sep"></div><div class="vb-sort">⇅ Sorted by <strong>${sortLabel}</strong></div>` : ''
+
+  document.getElementById('viewbar-area').innerHTML = `
+  <div class="viewbar">
+    ${v}
+    ${(chips || sort) && v ? '<div class="vb-sep"></div>' : ''}
+    ${chips}${sort}
+    ${filterChips.length ? `<button class="btn btn-xs btn-ghost" style="margin-left:8px" onclick="clearCurrentFilters()">✕ Clear</button>` : ''}
+  </div>`
+}
+
+function clearCurrentFilters() {
+  if (currentPage === 'companies') clearCoFilters()
+  else if (currentPage === 'wibs') { window._wibFilters = { search: '', status: '', state: '', type: '', owner: '' }; loadPage('wibs') }
+  else if (currentPage === 'locations') { window._locFilters = { search: '' }; loadPage('locations') }
+  else if (currentPage === 'funding') loadPage('funding')
+}
+
+function clearViewbar() { document.getElementById('viewbar-area').innerHTML = '' }
+function clearTabs() { document.getElementById('tab-area').innerHTML = '' }
+
+function setTabs(tabs, active, onSwitch) {
+  document.getElementById('tab-area').innerHTML = `
+  <div class="record-tabs">
+    ${tabs.map(t =>
+      `<div class="rtab${t.id === active ? ' active' : ''}" onclick="${onSwitch}('${t.id}')">
+        ${t.label}
+        ${t.count != null ? `<span class="tc">${t.count}</span>` : ''}
+      </div>`
+    ).join('')}
+  </div>`
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── VIEW SWITCHING ───
+═══════════════════════════════════════════════════ */
+let _currentView = 'all'
+
+function switchView(id) {
+  _currentView = id
+  document.querySelectorAll('.vb-view').forEach(el => {
+    el.classList.toggle('active', el.getAttribute('onclick')?.includes(`'${id}'`))
+  })
+  if (currentPage === 'wibs') applyWibView(id)
+  else if (currentPage === 'companies') applyCompanyView(id)
+  else if (currentPage === 'locations') applyLocationView(id)
+  else if (currentPage === 'funding') applyFundingView(id)
+  else if (currentPage === 'applications') applyApplicationView(id)
+  else showToast(`View: ${id}`, 'info')
+}
+
+function applyWibView(id) {
+  if (!window._wibs) return
+  let d = [...window._wibs]
+  const vf = {
+    all: () => true,
+    ashby: w => (w.owner || '').toLowerCase().includes('ashby'),
+    sam: w => (w.notes || '').toLowerCase().includes('sam'),
+    carly: w => (w.owner || '').toLowerCase().includes('carly'),
+    sarah_cannon: w => (w.owner || '').toLowerCase().includes('cannon'),
+    sarah_gantt: w => (w.owner || '').toLowerCase().includes('gantt'),
+    contacted: w => ['contacted', 'funding_available', 'follow_up_needed', 'network_member'].includes(w.status),
+    by_location: () => true,
+    by_state: () => true,
+    no_reachout: w => ['no_reachout_complete', 'no_reachout_completed', 'follow_up_needed'].includes(w.status),
+  }
+  d = d.filter(vf[id] || (() => true))
+  if (id === 'by_state') d.sort((a, b) => (a.state || '').localeCompare(b.state || ''))
+  if (id === 'by_location') d.sort((a, b) => (b.call_priority_score || 0) - (a.call_priority_score || 0))
+  renderWibTable(d)
+}
+
+function applyCompanyView(id) {
+  if (!window._companies) return
+  let d = [...window._companies]
+  if (id === 'funding') d = d.filter(c => c.status === 'active_client' || c.status === 'qualified')
+  if (id === 'by_status') d.sort((a, b) => (a.status || '').localeCompare(b.status || ''))
+  if (id === 'priority') d.sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0))
+  renderCompaniesTable(d)
+}
+
+function applyLocationView(id) {
+  if (!window._locations) return
+  let d = [...window._locations]
+  if (id === 'wib_network') d = d.filter(l => l.wib_id != null)
+  if (id === 'oh_wibs') d = d.filter(l => (l.state || '') === 'OH')
+  renderLocationsTable(d)
+}
+
+function applyFundingView(id) {
+  if (!window._funding) return
+  let d = [...window._funding]
+  if (id === 'open') d = d.filter(f => f.status === 'open')
+  if (id === 'pending') d = d.filter(f => f.status === 'pending' || f.status === 'pending_employer')
+  if (id === 'blocked') d = d.filter(f => f.status === 'blocked')
+  if (typeof renderFundingTableInner === 'function') {
+    document.getElementById('page-area').innerHTML = renderFundingTableInner(d)
+  }
+}
+
+function applyApplicationView(id) {
+  if (!window._applications) return
+  let d = [...window._applications]
+  if (id === 'in_progress') d = d.filter(a => ['submitted', 'under_review', 'in_progress'].includes(a.status))
+  if (id === 'awarded') d = d.filter(a => a.status === 'awarded')
+  const tbody = document.getElementById('apps-tbody')
+  if (tbody && typeof renderAppsRows === 'function') tbody.innerHTML = renderAppsRows(d)
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── PAGE ROUTER ───
+═══════════════════════════════════════════════════ */
+async function loadPage(page) {
+  currentPage = page
+  setNav(page)
+  clearTabs()
+  clearViewbar()
+  notifOpen = false
+  document.getElementById('notif-container').innerHTML = ''
+  closeAllIE()
+  const pa = document.getElementById('page-area')
+  pa.style.padding = '14px 16px'
+  pa.innerHTML = '<div class="loading">⏳ Loading...</div>'
+
+  try {
+    if (page === 'dashboard') await pageDashboard()
+    else if (page === 'notifications') pageNotifications()
+    else if (page === 'tasks') await pageTasks()
+    else if (page === 'notes') await pageNotes()
+    else if (page === 'emails') pageEmails()
+    else if (page === 'calls') pageCalls()
+    else if (page === 'reports') await pageReports()
+    else if (page === 'automations') pageAutomations()
+    else if (page === 'sequences') pageSequences()
+    else if (page === 'workflows') pageWorkflows()
+    else if (page === 'companies') await pageCompanies()
+    else if (page === 'locations') await pageLocations()
+    else if (page === 'wibs') await pageWibs()
+    else if (page === 'funding') await pageFunding()
+    else if (page === 'applications') await pageApplications()
+    else if (page === 'users') await pageUsers()
+    else if (page === 'auditlogs') await pageAuditLogs()
+    else if (page === 'settings') pageSettings()
+    else if (page === 'revenue') await pageRevenue()
+    else if (page === 'compliance') await pageCompliance()
+    else if (page === 'ai') pageAIAssistant()
+    else pa.innerHTML = `<div class="empty-state"><div class="empty-icon">🔍</div><div class="empty-text">Page not found: ${page}</div></div>`
+  } catch (e) {
+    const msg = e.message || 'Unknown error'
+    if (msg.includes('details') && msg.includes('not exist')) {
+      pa.innerHTML = `
+        <div class="alert alert-error">⚠️ Schema cache issue: ${msg}</div>
+        <div style="text-align:center;padding:20px">
+          <button class="btn btn-primary" onclick="refreshSchemaAndReload()">🔄 Refresh Schema & Reload</button>
+          <div style="font-size:10.5px;color:var(--text3);margin-top:8px">
+            Or run in Supabase SQL Editor: <code>SELECT pg_notify('pgrst', 'reload schema');</code>
+          </div>
+        </div>`
+    } else {
+      pa.innerHTML = `<div class="alert alert-error">⚠️ ${msg}</div>`
+    }
+  }
+}
+
+async function refreshSchemaAndReload() {
+  try {
+    showToast('Refreshing schema cache...', 'info')
+    const r = await api('/api/refresh-schema', 'POST')
+    showToast(r.message || 'Schema refreshed', 'success')
+    setTimeout(() => loadPage(currentPage), 1200)
+  } catch (e) { showToast('Refresh failed: ' + e.message, 'error') }
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── NOTIFICATION ENGINE ───
+   Full read/unread state tracking with Accept/Deny
+═══════════════════════════════════════════════════ */
+function updateNotifBadge() {
+  window._notifBadgeCount = window._notifications.filter(n => n.unread).length
+  // Update sidebar badge
+  const navNotif = document.getElementById('nav-notifications')
+  if (navNotif) {
+    const existing = navNotif.querySelector('.sb-badge')
+    if (existing) existing.remove()
+    if (window._notifBadgeCount > 0) {
+      const badge = document.createElement('span')
+      badge.className = 'sb-badge red'
+      badge.textContent = window._notifBadgeCount
+      navNotif.appendChild(badge)
+    }
+  }
+}
+
+function toggleNotif() {
+  notifOpen = !notifOpen
+  const container = document.getElementById('notif-container')
+  if (notifOpen) {
+    renderNotifPanel('requests', container)
+  } else {
+    container.innerHTML = ''
+  }
+}
+
+function renderNotifPanel(activePane, container) {
+  const allNotifs = window._notifications.filter(n => n.category === 'notifications' || !n.category)
+  const requests = window._notifications.filter(n => n.category === 'requests')
+  const unreadNotifs = allNotifs.filter(n => n.unread).length
+  const unreadReq = requests.filter(n => n.unread).length
+
+  container.innerHTML = `
+  <div class="notif-panel">
+    <div class="notif-hd">
+      <div class="notif-title">Notifications</div>
+      <div style="display:flex;gap:5px">
+        <button class="btn btn-xs" onclick="markAllNotifsRead()">✓ Mark all read</button>
+        <button class="btn btn-xs btn-ghost" onclick="toggleNotif()">✕</button>
+      </div>
+    </div>
+    <div class="notif-tab-bar">
+      <button class="notif-tab${activePane === 'notifications' ? ' active' : ''}" onclick="renderNotifPane('notifications')">
+        Notifications (${unreadNotifs})
+      </button>
+      <button class="notif-tab${activePane === 'requests' ? ' active' : ''}" onclick="renderNotifPane('requests')" style="color:${unreadReq > 0 ? 'var(--blue-t)' : ''}">
+        Requests (${unreadReq > 0 ? `<strong>${unreadReq}</strong>` : requests.length})
+      </button>
+    </div>
+    <div class="notif-body" id="notif-body">
+      ${renderNotifItems(activePane === 'requests' ? requests : allNotifs, activePane)}
+    </div>
+    <div class="notif-footer">
+      <button class="btn btn-xs btn-ghost" onclick="loadPage('notifications');toggleNotif()">View all notifications →</button>
+    </div>
+  </div>`
+
+  // Mark visible unread items as seen after 2 seconds
+  setTimeout(() => {
+    const items = activePane === 'requests' ? requests : allNotifs
+    items.forEach(n => { if (n.unread) n.unread = false })
+    updateNotifBadge()
+  }, 2000)
+}
+
+function renderNotifPane(pane) {
+  const container = document.getElementById('notif-container')
+  renderNotifPanel(pane, container)
+}
+
+function renderNotifItems(items, pane) {
+  if (!items.length) {
+    return `<div style="padding:24px;text-align:center;color:var(--text3);font-size:12px">
+      No ${pane === 'requests' ? 'pending requests' : 'notifications'} at this time.
+    </div>`
+  }
+  return items.map(n => `
+    <div class="notif-item${n.unread ? ' unread' : ' read'}" id="notif-${n.id}">
+      <div class="notif-av" style="background:${n.color}22;color:${n.color}">${n.initials}</div>
+      <div style="flex:1;min-width:0">
+        <div class="notif-text">${n.text}</div>
+        <div class="notif-time">${n.time}</div>
+        ${pane === 'requests' ? `
+        <div class="notif-actions">
+          <button class="btn btn-xs btn-blue" onclick="acceptNotifRequest('${n.id}')">Accept</button>
+          <button class="btn btn-xs" onclick="denyNotifRequest('${n.id}')">Deny</button>
+        </div>` : ''}
+      </div>
+    </div>`).join('')
+}
+
+function acceptNotifRequest(id) {
+  const notif = window._notifications.find(n => n.id === id)
+  if (notif) {
+    showToast('Access granted', 'success')
+    window._notifications = window._notifications.filter(n => n.id !== id)
+    updateNotifBadge()
+    renderNotifPane('requests')
+  }
+}
+
+function denyNotifRequest(id) {
+  const notif = window._notifications.find(n => n.id === id)
+  if (notif) {
+    showToast('Request denied', 'info')
+    window._notifications = window._notifications.filter(n => n.id !== id)
+    updateNotifBadge()
+    renderNotifPane('requests')
+  }
+}
+
+function markAllNotifsRead() {
+  window._notifications.forEach(n => { n.unread = false })
+  updateNotifBadge()
+  renderNotifPane('notifications')
+  showToast('All notifications marked as read', 'success')
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── NOTIFICATIONS FULL PAGE ───
+═══════════════════════════════════════════════════ */
+function pageNotifications() {
+  setTopbar('Notifications', '', `<button class="btn btn-sm" onclick="markAllNotifsRead()">✓ Mark all read</button>`)
+  clearViewbar()
+  const requests = window._notifications.filter(n => n.category === 'requests')
+  const allNotifs = window._notifications.filter(n => n.category === 'notifications' || !n.category)
+  document.getElementById('page-area').innerHTML = `
+  <div class="g2">
+    <div>
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">🔔 Notifications & Requests</div>
+          <button class="btn btn-xs btn-ghost" onclick="markAllNotifsRead()">✓ Mark all read</button>
+        </div>
+        <div>
+          <div style="display:flex;border-bottom:.5px solid var(--border)">
+            <button class="rtab" id="notif-page-tab-notifs" onclick="switchNotifPagePane('notifs')" style="font-size:11.5px;padding:8px 14px">Notifications (${allNotifs.filter(n=>n.unread).length})</button>
+            <button class="rtab active" id="notif-page-tab-reqs" onclick="switchNotifPagePane('reqs')" style="font-size:11.5px;padding:8px 14px">Requests (${requests.filter(n=>n.unread).length})</button>
+          </div>
+          <div id="notif-page-body">
+            ${renderFullPageNotifItems(requests, 'requests')}
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">📊 Activity Summary</div></div>
+        <div class="card-body">
+          <div class="stat-row"><span class="stat-label">Unread requests</span><span class="stat-value">${requests.filter(n=>n.unread).length}</span></div>
+          <div class="stat-row"><span class="stat-label">Total notifications</span><span class="stat-value">${window._notifications.length}</span></div>
+          <div class="stat-row"><span class="stat-label">System alerts</span><span class="stat-value">0</span></div>
+          <div class="stat-row"><span class="stat-label">Access requests pending</span><span class="stat-value">${requests.filter(n=>n.unread).length}</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">🔒 Security</div></div>
+        <div class="card-body">
+          <div class="stat-row"><span class="stat-label">Session timeout</span><span class="stat-value">60 min</span></div>
+          <div class="stat-row"><span class="stat-label">Warning shown at</span><span class="stat-value">58 min</span></div>
+          <div class="stat-row"><span class="stat-label">Role</span><span class="stat-value">${(currentUser?.role||'').replace(/_/g,' ')}</span></div>
+        </div>
+      </div>
+    </div>
+  </div>`
+}
+
+function switchNotifPagePane(pane) {
+  document.querySelectorAll('[id^="notif-page-tab"]').forEach(el => el.classList.remove('active'))
+  document.getElementById(`notif-page-tab-${pane}`)?.classList.add('active')
+  const requests = window._notifications.filter(n => n.category === 'requests')
+  const allNotifs = window._notifications.filter(n => n.category === 'notifications' || !n.category)
+  const body = document.getElementById('notif-page-body')
+  if (body) {
+    body.innerHTML = renderFullPageNotifItems(
+      pane === 'reqs' ? requests : allNotifs,
+      pane === 'reqs' ? 'requests' : 'notifications'
+    )
+  }
+}
+
+function renderFullPageNotifItems(items, pane) {
+  if (!items.length) return `<div style="padding:24px;text-align:center;color:var(--text3);font-size:12px">No ${pane} at this time.</div>`
+  return items.map(n => `
+    <div class="notif-item${n.unread ? ' unread' : ' read'}" id="full-notif-${n.id}">
+      <div class="notif-av" style="background:${n.color}22;color:${n.color}">${n.initials}</div>
+      <div style="flex:1">
+        <div class="notif-text">${n.text}</div>
+        <div class="notif-time">${n.time}</div>
+        ${pane === 'requests' ? `
+        <div class="notif-actions">
+          <button class="btn btn-xs btn-blue" onclick="acceptNotifRequest('${n.id}');switchNotifPagePane('reqs')">Accept</button>
+          <button class="btn btn-xs" onclick="denyNotifRequest('${n.id}');switchNotifPagePane('reqs')">Deny</button>
+        </div>` : ''}
+      </div>
+    </div>`).join('')
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── CHANGE PASSWORD MODAL ───
+═══════════════════════════════════════════════════ */
+function openChangePasswordModal() {
+  showModal('🔐 Change Password', `
+    <div id="pw-err"></div>
+    <div class="form-row form-full">
+      <div class="form-group">
+        <div class="form-label">Current Password <span class="form-req">*</span></div>
+        <input type="password" id="pw-current" placeholder="Current password">
+      </div>
+    </div>
+    <div class="form-row form-full">
+      <div class="form-group">
+        <div class="form-label">New Password <span class="form-req">*</span></div>
+        <input type="password" id="pw-new" placeholder="Min 8 characters">
+      </div>
+    </div>
+    <div class="form-row form-full">
+      <div class="form-group">
+        <div class="form-label">Confirm New Password <span class="form-req">*</span></div>
+        <input type="password" id="pw-confirm" placeholder="Repeat new password">
+      </div>
+    </div>`,
+  async () => {
+    const current = document.getElementById('pw-current').value
+    const newPw = document.getElementById('pw-new').value
+    const confirm = document.getElementById('pw-confirm').value
+    const err = document.getElementById('pw-err')
+    if (!current) { err.innerHTML = '<div class="alert alert-error">Current password required</div>'; return false }
+    if (!newPw || newPw.length < 8) { err.innerHTML = '<div class="alert alert-error">New password must be at least 8 characters</div>'; return false }
+    if (newPw !== confirm) { err.innerHTML = '<div class="alert alert-error">Passwords do not match</div>'; return false }
+    try {
+      await api('/api/change-password', 'POST', { current_password: current, new_password: newPw })
+      showToast('Password changed successfully', 'success')
+    } catch (e) { err.innerHTML = `<div class="alert alert-error">${e.message}</div>`; return false }
+  })
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── DASHBOARD PAGE ───
+═══════════════════════════════════════════════════ */
+async function pageDashboard() {
+  const [rev, apps, wibs] = await Promise.all([
+    api('/api/revenue/dashboard').catch(() => ({})),
+    api('/api/applications?limit=6').catch(() => ({ data: [] })),
+    api('/api/wibs?limit=8').catch(() => ({ data: [] }))
+  ])
+  const fmt = n => '$' + (Number(n) || 0).toLocaleString()
+  const hour = new Date().getHours()
+  const greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening'
+  const name = (currentUser?.full_name || '').split(' ')[0] || 'there'
+
+  setTopbar(`${greet}, ${name}.`, '', `<button class="btn btn-primary" onclick="openNewApplicationModal()">+ New Application</button>`)
+  clearViewbar()
+
+  document.getElementById('page-area').innerHTML = `
+  <!-- Revenue band -->
+  <div class="rev-band">
+    <div class="rev-item"><div class="rev-n">${fmt(rev.total_revenue_ytd)}</div><div class="rev-l">Revenue YTD · target $172K</div></div>
+    <div class="rev-item"><div class="rev-n">${fmt(rev.pipeline_value)}</div><div class="rev-l">Pipeline value</div></div>
+    <div class="rev-item"><div class="rev-n">${rev.total_awards || 0}</div><div class="rev-l">Grants awarded</div></div>
+    <div class="rev-item"><div class="rev-n">${rev.active_applications || 0}</div><div class="rev-l">Active applications</div></div>
+    <div class="rev-item"><div class="rev-n" style="${(rev.overdue_invoices || 0) > 0 ? 'color:#fca5a5' : ''}">${rev.overdue_invoices || 0}</div><div class="rev-l">Overdue invoices</div></div>
+  </div>
+
+  <!-- Meetings widget -->
+  <div class="card">
+    <div class="card-hd">
+      <div class="card-title">📅 Meetings</div>
+      <div style="display:flex;align-items:center;gap:4px">
+        <span style="font-size:11px;color:var(--text2)">Today, ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}</span>
+        <button class="btn btn-xs btn-ghost">‹</button>
+        <button class="btn btn-xs btn-ghost">›</button>
+        <button class="btn btn-xs btn-ghost">⋮</button>
+      </div>
+    </div>
+    <div class="card-body" style="text-align:center;padding:20px;color:var(--text3);font-size:12px">
+      <div style="font-size:13px;font-weight:500;color:var(--text2);margin-bottom:3px">No meetings</div>
+      Pick a different date to plan ahead or review past meetings
+    </div>
+  </div>
+
+  <!-- Tasks widget -->
+  <div class="g2">
+    <div>
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">✅ Tasks <span id="dash-task-badge" style="font-size:10px;background:var(--gray2);color:var(--text3);padding:1px 6px;border-radius:10px;font-weight:500">1</span></div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <span style="font-size:11px;color:var(--text3);cursor:pointer" onclick="loadPage('tasks')">View all</span>
+            <button class="btn btn-xs" onclick="openTaskModal()" style="font-size:11px">+</button>
+          </div>
+        </div>
+        <div style="padding:8px 14px" id="dash-tasks">
+          <div style="color:var(--text3);font-size:11px;text-align:center;padding:8px">⏳ Loading...</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">📋 Recent Applications</div>
+          <button class="btn btn-xs btn-ghost" onclick="loadPage('applications')">View all →</button>
+        </div>
+        <div style="padding:0">
+          ${(apps.data || []).length === 0
+            ? '<div class="card-body" style="text-align:center;color:var(--text3);font-size:12px">No applications yet</div>'
+            : (apps.data || []).map(a => `
+              <div style="padding:8px 14px;border-bottom:.5px solid var(--gray2);display:flex;align-items:center;gap:8px">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.company?.company_name || '—'}</div>
+                  <div style="font-size:10.5px;color:var(--text3)">${a.wib?.wib_name || '—'}</div>
+                </div>
+                ${appStatusPill(a.status)}
+              </div>`).join('')
+          }
+        </div>
+      </div>
+    </div>
+  </div>`
+
+  // Load tasks async
+  try {
+    const td = await api('/api/tasks?limit=20')
+    const tasks = td.data || []
+    const now = new Date()
+    document.getElementById('dash-task-badge').textContent = tasks.filter(t => !getTaskMeta(t).done).length
+    const taskEl = document.getElementById('dash-tasks')
+    if (taskEl) {
+      const upcoming = tasks.filter(t => !getTaskMeta(t).done).slice(0, 5)
+      taskEl.innerHTML = upcoming.length ? upcoming.map(t => {
+        const m = getTaskMeta(t)
+        const title = m.title || t.details || 'Task'
+        const due = m.due_date ? new Date(m.due_date) : null
+        const over = due && due < now
+        return `<div style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:.5px solid var(--gray2)">
+          <input type="checkbox" style="width:14px;height:14px;accent-color:var(--nv)" ${m.done ? 'checked' : ''} onclick="toggleTaskDB('${t.id}',${!!m.done})">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:11.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${title}</div>
+            ${due ? `<div style="font-size:10px;color:${over ? 'var(--red-t)' : 'var(--text3)'}">${over ? '⚠️ ' : ''}${due.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>` : ''}
+          </div>
+        </div>`
+      }).join('') : '<div style="padding:8px 0;color:var(--text3);font-size:11.5px;text-align:center">All caught up! 🎉</div>'
+    }
+  } catch (e) { /* tasks optional on dashboard */ }
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── AUTOMATIONS PAGE ───
+═══════════════════════════════════════════════════ */
+function pageAutomations() {
+  setTopbar('Automations', 'Automated workflows', `<button class="btn btn-primary" onclick="showToast('Automation builder coming soon','info')">+ New Automation</button>`)
+  clearViewbar()
+  document.getElementById('page-area').innerHTML = `
+  <div class="g2" style="margin-bottom:10px">
+    <div class="metric"><div class="metric-label">Active Automations</div><div class="metric-value">3</div><div class="metric-sub">Running</div></div>
+    <div class="metric"><div class="metric-label">Tasks Auto-Created</div><div class="metric-value">247</div><div class="metric-sub">Last 30 days</div></div>
+  </div>
+  <div class="card">
+    <div class="card-hd">
+      <div class="card-title">⚡ Automation Rules</div>
+      <button class="btn btn-xs btn-ghost">⊞ View settings</button>
+    </div>
+    ${[
+      { icon:'📅', name:'WIB Follow-up Reminder', trigger:'When WIB status = "Follow Up Needed" for 14 days', action:'Create task: Call WIB Director', status:'active', runs:89 },
+      { icon:'📧', name:'Application Submitted Alert', trigger:'When application status changes to "submitted"', action:'Send email notification to team', status:'active', runs:41 },
+      { icon:'⚠️', name:'Compliance Deadline Warning', trigger:'When final_report_due_date is 7 days away', action:'Create urgent compliance task', status:'active', runs:117 },
+      { icon:'🔔', name:'New Company Welcome Sequence', trigger:'When company status changes to "active_client"', action:'Enroll in onboarding sequence', status:'paused', runs:0 },
+      { icon:'📊', name:'Weekly Snapshot Report', trigger:'Every Monday at 9:00 AM', action:'Generate and email weekly summary', status:'active', runs:18 },
+    ].map(a => `
+      <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:.5px solid var(--gray2)">
+        <span style="font-size:20px">${a.icon}</span>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:600;margin-bottom:2px">${a.name}</div>
+          <div style="font-size:10.5px;color:var(--text2)">Trigger: ${a.trigger}</div>
+          <div style="font-size:10.5px;color:var(--text2)">Action: ${a.action}</div>
+        </div>
+        <div style="text-align:right;margin-right:8px">
+          <span class="pill ${a.status === 'active' ? 'p-green' : 'p-amber'}">${a.status}</span>
+          <div style="font-size:10px;color:var(--text3);margin-top:3px">${a.runs} runs</div>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-xs" onclick="showToast('Automation editor coming soon','info')">Edit</button>
+          <button class="btn btn-xs ${a.status === 'active' ? 'btn-danger' : 'btn-success'}" onclick="showToast('Automation ${a.status === 'active' ? 'paused' : 'activated'}','success')">${a.status === 'active' ? 'Pause' : 'Activate'}</button>
+        </div>
+      </div>`).join('')}
+    <div class="att-footer"><span>5 automations · 3 active</span></div>
+  </div>`
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── SEQUENCES PAGE ───
+═══════════════════════════════════════════════════ */
+function pageSequences() {
+  setTopbar('Sequences', 'Automated outreach sequences', `<button class="btn btn-primary" onclick="showToast('New sequence builder coming soon','info')">+ New Sequence</button>`)
+  clearViewbar()
+  document.getElementById('page-area').innerHTML = `
+  <div class="empty-state">
+    <div class="empty-icon">▷</div>
+    <div class="empty-text">Sequences</div>
+    <div class="empty-sub">Create automated multi-step outreach sequences for WIBs and employers.</div>
+    <button class="btn btn-primary" onclick="showToast('Sequence builder coming soon','info')">+ New Sequence</button>
+  </div>`
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── WORKFLOWS PAGE ───
+═══════════════════════════════════════════════════ */
+function pageWorkflows() {
+  setTopbar('Workflows', 'Process automation', `<button class="btn btn-primary" onclick="showToast('Workflow builder coming soon','info')">+ New Workflow</button>`)
+  clearViewbar()
+  document.getElementById('page-area').innerHTML = `
+  <div class="empty-state">
+    <div class="empty-icon">⟲</div>
+    <div class="empty-text">Workflows</div>
+    <div class="empty-sub">Automate multi-step processes across companies, WIBs, and applications.</div>
+    <button class="btn btn-primary" onclick="showToast('Workflow builder coming soon','info')">+ New Workflow</button>
+  </div>`
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── SETTINGS PAGE ───
+═══════════════════════════════════════════════════ */
+function pageSettings() {
+  setTopbar('Settings', '', '')
+  clearViewbar()
+  document.getElementById('page-area').innerHTML = `
+  <div class="g2">
+    <div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">⚙ General Settings</div></div>
+        <div class="card-body">
+          <div class="stat-row"><span class="stat-label">Platform Name</span><span class="stat-value">Valor Workforce Funding</span></div>
+          <div class="stat-row"><span class="stat-label">Session Timeout</span><span class="stat-value">60 minutes</span></div>
+          <div class="stat-row"><span class="stat-label">Warning at</span><span class="stat-value">58 minutes</span></div>
+          <div class="stat-row"><span class="stat-label">Max login attempts</span><span class="stat-value">10 / 15 min</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">🔐 Security</div></div>
+        <div class="card-body">
+          <div class="stat-row"><span class="stat-label">Your role</span><span class="stat-value">${(currentUser?.role || '').replace(/_/g, ' ')}</span></div>
+          <div class="stat-row"><span class="stat-label">Last login</span><span class="stat-value">${currentUser?.last_login_at ? fmtAgo(currentUser.last_login_at) : 'This session'}</span></div>
+          <div style="margin-top:12px">
+            <button class="btn btn-sm" onclick="openChangePasswordModal()">🔐 Change Password</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">📧 Email Integration</div></div>
+        <div class="card-body">
+          <div class="alert alert-info">Connect Gmail or Outlook to send and track emails directly from the CRM. All emails will be linked to company and contact records automatically.</div>
+          <button class="btn btn-sm" onclick="showToast('Configure email in Integrations tab','info')">Configure Email Integration</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">🔄 Schema Utilities</div></div>
+        <div class="card-body">
+          <div style="font-size:11.5px;color:var(--text2);margin-bottom:10px">
+            If you see "column does not exist" errors, refresh the PostgREST schema cache.
+          </div>
+          <button class="btn btn-sm btn-primary" onclick="refreshSchemaAndReload()">🔄 Refresh Schema Cache</button>
+        </div>
+      </div>
+    </div>
+  </div>`
+}
+
+/* ═══════════════════════════════════════════════════
+   ─── STUB FUNCTIONS (implemented in other components) ───
+   These prevent JS errors when router fires before other
+   component scripts are loaded.
+═══════════════════════════════════════════════════ */
+async function pageTasks() { document.getElementById('page-area').innerHTML = '<div class="loading">Tasks module (Component 2)</div>' }
+async function pageNotes() { document.getElementById('page-area').innerHTML = '<div class="loading">Notes module (Component 2)</div>' }
+function pageCalls() { document.getElementById('page-area').innerHTML = '<div class="loading">Calls module (Component 2)</div>' }
+function pageEmails() { document.getElementById('page-area').innerHTML = '<div class="loading">Email module (Component 4)</div>' }
+async function pageReports() { document.getElementById('page-area').innerHTML = '<div class="loading">Reports module</div>' }
+async function pageCompanies() { document.getElementById('page-area').innerHTML = '<div class="loading">Companies module (Component 2)</div>' }
+async function pageLocations() { document.getElementById('page-area').innerHTML = '<div class="loading">Locations module (Component 2)</div>' }
+async function pageWibs() { document.getElementById('page-area').innerHTML = '<div class="loading">WIB module (Component 2)</div>' }
+async function pageFunding() { document.getElementById('page-area').innerHTML = '<div class="loading">Funding module (Component 2)</div>' }
+async function pageApplications() { document.getElementById('page-area').innerHTML = '<div class="loading">Applications module (Component 2)</div>' }
+async function pageUsers() { document.getElementById('page-area').innerHTML = '<div class="loading">Users module (Component 4)</div>' }
+async function pageAuditLogs() { document.getElementById('page-area').innerHTML = '<div class="loading">Audit logs module</div>' }
+async function pageRevenue() { document.getElementById('page-area').innerHTML = '<div class="loading">Revenue module</div>' }
+async function pageCompliance() { document.getElementById('page-area').innerHTML = '<div class="loading">Compliance module</div>' }
+function pageAIAssistant() { document.getElementById('page-area').innerHTML = '<div class="loading">AI Assistant module</div>' }
+function openNewApplicationModal() { showToast('New Application — Component 2', 'info') }
+function openTaskModal() { showToast('New Task — Component 2', 'info') }
+async function toggleTaskDB(id, done) { showToast('Task toggle — Component 2', 'info') }
+function renderWibTable(d) { document.getElementById('page-area').innerHTML = '<div class="loading">WIB table — Component 2</div>' }
+function renderCompaniesTable(d) { document.getElementById('page-area').innerHTML = '<div class="loading">Companies table — Component 2</div>' }
+function renderLocationsTable(d) { document.getElementById('page-area').innerHTML = '<div class="loading">Locations table — Component 2</div>' }
+function clearCoFilters() { window._coFilters = { search: '', status: '', rating: '', state: '' }; renderCompaniesTable(window._companies || []) }
+function exportCSV(type) { apiDownload('/api/export/' + type).catch(e => showToast(e.message, 'error')) }
+
+/* ═══════════════════════════════════════════════════
+   ─── BOOT ───
+═══════════════════════════════════════════════════ */
+render()
+</script>
+</body>
+</html>
