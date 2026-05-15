@@ -588,6 +588,7 @@ function renderApp(){
           </div>
           <div class="user-actions">
             <button class="user-act-btn tooltip" data-tip="Notifications" onclick="toggleNotif()">🔔</button>
+            <button class="user-act-btn tooltip" data-tip="Change Password" onclick="openChangePasswordModal()">🔐</button>
             <button class="user-act-btn tooltip" data-tip="Sign out" onclick="logout()">⇥</button>
           </div>
         </div>
@@ -712,8 +713,7 @@ async function pageDashboard(){
       <div class="tbl-wrap">
         <div class="tbl-head"><div class="tbl-title">📋 Recent Applications</div>
           <span class="link" onclick="loadPage('applications')">View all →</span></div>
-        ${(apps.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div></div>`:
-        `<table><thead><tr><th>Company</th><th>Status</th><th>Award</th></tr></thead><tbody>
+        ${(apps.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div></div>`:`<table><thead><tr><th>Company</th><th>Status</th><th>Award</th></tr></thead><tbody>
         ${(apps.data||[]).map(a=>`<tr onclick="loadPage('applications')">
           <td><div style="font-weight:500">${a.company?.company_name||'—'}</div><div style="font-size:10px;color:var(--text3)">${a.application_number}</div></td>
           <td>${statusPill(a.status)}</td>
@@ -726,8 +726,7 @@ async function pageDashboard(){
       <div class="tbl-wrap">
         <div class="tbl-head"><div class="tbl-title">🏛️ Priority WIBs</div>
           <span class="link" onclick="loadPage('wibs')">View all →</span></div>
-        ${(wibs.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">Start building your WIB database</div></div>`:
-        `<table><thead><tr><th>Board</th><th>State</th><th>Status</th><th>Score</th></tr></thead><tbody>
+        ${(wibs.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">Start building your WIB database</div></div>`:`<table><thead><tr><th>Board</th><th>State</th><th>Status</th><th>Score</th></tr></thead><tbody>
         ${(wibs.data||[]).map(w=>`<tr onclick="openWibProfile('${w.id}')">
           <td style="font-weight:500">${w.short_name||w.wib_name.split(' ').slice(0,3).join(' ')}</td>
           <td><b>${w.state}</b></td>
@@ -1605,25 +1604,41 @@ function deleteUserConfirm(id,name){
 
 function openUserModal(){
   showModal('Add New User',`
+    <div class="alert alert-info" style="margin-bottom:12px">
+      <strong>Workflow:</strong> Set a temporary password, share it securely with the user.<br>
+      They log in with it and can change their password using the 🔐 button in the sidebar.
+    </div>
     <div id="user-err"></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Full Name</div><input id="u-name" placeholder="Jane Smith"></div>
-    <div class="form-group"><div class="form-label">Email <span class="form-req">*</span></div><input id="u-email" type="email" placeholder="jane@valorworkforce.com"></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Password <span class="form-req">*</span></div><input id="u-pass" type="password" placeholder="Min 8 chars"></div>
+    <div class="form-group"><div class="form-label">Email <span class="form-req">*</span></div><input id="u-email" type="email" placeholder="jane@example.com"></div></div>
+    <div class="form-row"><div class="form-group">
+      <div class="form-label">Temporary Password <span class="form-req">*</span></div>
+      <input id="u-pass" type="password" placeholder="Min 8 characters">
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">Share this securely — user changes it on first login</div>
+    </div>
     <div class="form-group"><div class="form-label">Role <span class="form-req">*</span></div><select id="u-role">
-      <option value="team_member">Sales Specialist (Team Member)</option>
+      <option value="team_member">Sales Specialist</option>
       <option value="admin">Admin</option>
       <option value="external_partner">Read-Only (External Partner)</option>
       <option value="super_admin">Super Admin</option>
     </select></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Title</div><input id="u-title" placeholder="Grant Coordinator"></div>
-    <div class="form-group"><div class="form-label">Phone</div><input id="u-phone" placeholder="+1 (555) 000-0000"></div></div>
-    <div class="alert alert-info" style="margin-top:8px">User will be created immediately with confirmed access. No email confirmation needed for admin-created accounts.</div>`,
+    <div class="form-group"><div class="form-label">Phone</div><input id="u-phone" placeholder="+1 (555) 000-0000"></div></div>`,
   async()=>{
     const err=document.getElementById('user-err')
-    const payload={email:document.getElementById('u-email').value,password:document.getElementById('u-pass').value,full_name:document.getElementById('u-name').value,role:document.getElementById('u-role').value,title:document.getElementById('u-title').value||null,phone:document.getElementById('u-phone').value||null}
-    if(!payload.email||!payload.password){err.innerHTML='<div class="alert alert-error">Email and password required</div>';return false}
-    if(payload.password.length<8){err.innerHTML='<div class="alert alert-error">Password must be at least 8 characters</div>';return false}
-    try{await api('/api/users','POST',payload);pageUsers()}catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
+    const email=document.getElementById('u-email').value.trim()
+    const password=document.getElementById('u-pass').value
+    const full_name=document.getElementById('u-name').value.trim()
+    const role=document.getElementById('u-role').value
+    if(!email){err.innerHTML='<div class="alert alert-error">Email is required</div>';return false}
+    if(!password||password.length<8){err.innerHTML='<div class="alert alert-error">Password must be at least 8 characters</div>';return false}
+    try{
+      await api('/api/users','POST',{email,password,full_name,role,
+        title:document.getElementById('u-title').value||null,
+        phone:document.getElementById('u-phone').value||null})
+      showToast(`User ${email} created. Share the temporary password securely.`,'success')
+      pageUsers()
+    }catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
   })
 }
 
@@ -2007,18 +2022,20 @@ async function pageLocations(){
         <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All states</option>${'TX,FL,OH,CA,NY'.split(',').map(s=>`<option>${s}</option>`).join('')}</select>
       </div>
     </div>
-    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📍</div><div class="empty-text">No locations yet</div></div>`:
-    `<table><thead><tr><th>Location</th><th>Parent Operator</th><th>State</th><th>WIB</th><th>Status</th><th>Employees</th><th></th></tr></thead><tbody>
-    ${(data.data||[]).map(l=>`<tr>
-      <td><div style="font-weight:500">${l.location_name}</div>${l.city?`<div style="font-size:10px;color:var(--text3)">${l.city}${l.county?', '+l.county:''}</div>`:''}</td>
-      <td style="color:var(--text2)">${l.parent_company?.company_name||'—'}</td>
-      <td><b>${l.state}</b></td>
-      <td style="font-size:11px;color:var(--text2)">${l.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
-      <td>${locationStatusPill(l.status)}</td>
-      <td>${l.employee_count||'—'}</td>
-      <td><button class="action-btn" onclick="openLocationModal(${JSON.stringify(l).replace(/"/g,"'")})">Edit</button></td>
-    </tr>`).join('')}
-    </tbody></table><div class="tbl-footer">${data.count||0} facilities</div>`}
+    ${(data.data||[]).length===0
+      ? '<div class="empty-state"><div class="empty-icon">📍</div><div class="empty-text">No locations yet</div></div>'
+      : '<table><thead><tr><th>Location</th><th>Parent Operator</th><th>State</th><th>WIB</th><th>Status</th><th>Employees</th><th></th></tr></thead><tbody>'
+        + (data.data||[]).map(l=>'<tr>'
+          + '<td><div style="font-weight:500">'+l.location_name+'</div>'+(l.city?'<div style="font-size:10px;color:var(--text3)">'+l.city+(l.county?', '+l.county:'')+'</div>':'')+'</td>'
+          + '<td style="color:var(--text2)">'+(l.parent_company?.company_name||'—')+'</td>'
+          + '<td><b>'+l.state+'</b></td>'
+          + '<td style="font-size:11px;color:var(--text2)">'+(l.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—')+'</td>'
+          + '<td>'+locationStatusPill(l.status)+'</td>'
+          + '<td>'+(l.employee_count||'—')+'</td>'
+          + '<td><button class="action-btn" onclick="openLocationModal('+JSON.stringify(l).replace(/"/g,"'")+')">'+'Edit</button></td>'
+          + '</tr>').join('')
+        + '</tbody></table><div class="tbl-footer">'+(data.count||0)+' facilities</div>'
+    }
   </div>`
 }
 
@@ -2065,8 +2082,7 @@ async function pageFunding(){
         <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All statuses</option><option value="open">Open</option><option value="pending">Pending</option><option value="blocked">Blocked</option><option value="closed_deadline">Closed</option></select>
       </div>
     </div>
-    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">💰</div><div class="empty-text">No funding opportunities yet</div><div class="empty-sub">Create opportunities linked to WIB records</div></div>`:
-    `<table><thead><tr><th>Opportunity</th><th>WIB</th><th>Status</th><th>Max Award</th><th>Deadline</th><th>Program</th><th></th></tr></thead><tbody>
+    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">💰</div><div class="empty-text">No funding opportunities yet</div><div class="empty-sub">Create opportunities linked to WIB records</div></div>`:`<table><thead><tr><th>Opportunity</th><th>WIB</th><th>Status</th><th>Max Award</th><th>Deadline</th><th>Program</th><th></th></tr></thead><tbody>
     ${(data.data||[]).map(f=>`<tr>
       <td><div style="font-weight:500">${f.opportunity_name}</div></td>
       <td style="font-size:11px;color:var(--text2)">${f.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
@@ -2129,8 +2145,7 @@ async function pageApplications(){
         <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All statuses</option><option>intake</option><option>submitted</option><option>awarded</option><option>denied</option></select>
       </div>
     </div>
-    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><div class="empty-sub">The money pipeline starts here. Add companies, WIBs, and funding opportunities first.</div></div>`:
-    `<table><thead><tr><th>App #</th><th>Company</th><th>WIB</th><th>Status</th><th>Award</th><th>Fee</th><th>Invoice</th><th>Days</th></tr></thead><tbody>
+    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><div class="empty-sub">The money pipeline starts here. Add companies, WIBs, and funding opportunities first.</div></div>`:`<table><thead><tr><th>App #</th><th>Company</th><th>WIB</th><th>Status</th><th>Award</th><th>Fee</th><th>Invoice</th><th>Days</th></tr></thead><tbody>
     ${(data.data||[]).map(a=>`<tr>
       <td style="font-family:monospace;font-size:10px;color:var(--text3)">${a.application_number}</td>
       <td style="font-weight:500">${a.company?.company_name||'—'}</td>
@@ -2170,8 +2185,7 @@ async function pageRevenue(){
   </div>
   <div class="tbl-wrap">
     <div class="tbl-head"><div class="tbl-title">💵 Revenue Records</div></div>
-    ${(records.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">💵</div><div class="empty-text">Revenue records are auto-created when grants are awarded</div></div>`:
-    `<table><thead><tr><th>Company</th><th>WIB</th><th>Fee Model</th><th>Grant Award</th><th>Valor Fee</th><th>Invoice</th><th></th></tr></thead><tbody>
+    ${(records.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">💵</div><div class="empty-text">Revenue records are auto-created when grants are awarded</div></div>`:`<table><thead><tr><th>Company</th><th>WIB</th><th>Fee Model</th><th>Grant Award</th><th>Valor Fee</th><th>Invoice</th><th></th></tr></thead><tbody>
     ${(records.data||[]).map(r=>`<tr>
       <td style="font-weight:500">${r.company?.company_name||'—'}</td>
       <td style="font-size:11px;color:var(--text2)">${r.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
@@ -2204,8 +2218,7 @@ async function pageCompliance(){
   <div class="alert alert-warn">🛡️ This is government money. Every compliance deadline is a legal obligation. Missed deadlines can trigger grant repayment demands.</div>
   <div class="tbl-wrap">
     <div class="tbl-head"><div class="tbl-title">🛡️ Active Compliance Alerts</div></div>
-    ${(data.data||[]).length===0?`<div class="empty-state" style="padding:40px"><div style="font-size:28px">✅</div><div class="empty-text" style="color:var(--green)">All clear — no compliance alerts</div></div>`:
-    `<table><thead><tr><th>Company</th><th>App #</th><th>Final Report Due</th><th>Days Until Due</th><th>Risk Level</th><th>Final Submitted</th></tr></thead><tbody>
+    ${(data.data||[]).length===0?`<div class="empty-state" style="padding:40px"><div style="font-size:28px">✅</div><div class="empty-text" style="color:var(--green)">All clear — no compliance alerts</div></div>`:`<table><thead><tr><th>Company</th><th>App #</th><th>Final Report Due</th><th>Days Until Due</th><th>Risk Level</th><th>Final Submitted</th></tr></thead><tbody>
     ${(data.data||[]).map(c=>`<tr>
       <td style="font-weight:500">${c.company_name}</td>
       <td style="font-family:monospace;font-size:10px;color:var(--text3)">${c.application_number}</td>
@@ -2434,8 +2447,8 @@ function viewCallNote(call){
     </div>`,()=>{},true)
 }
 
-function openContactModal(){
-// openContactModal defined in MISSING MODAL FUNCTIONS section above
+// openContactModal is defined in the MISSING MODAL FUNCTIONS section above
+// The duplicate stub below was removed to fix a syntax error
 
 // ═══════════════════════════════════════════════════════
 // DEMO DATA
@@ -2849,12 +2862,59 @@ function handleNoteFile(input){
 }
 
 function resetUserPassword(id,email){
-  showModal('🔐 Reset Password',`
-    <div class="alert alert-warn">This will send a password reset email to <strong>${email}</strong>.</div>
-    <div class="alert alert-info" style="margin-top:8px">The user will receive an email with a link to set a new password. Their current session will remain active until they reset.</div>
-    <div style="margin-top:10px;font-size:12px;color:var(--text2)">Make sure Supabase email settings are configured for reset emails to send.</div>`,
+  showModal(`🔐 Reset Password — ${email}`,`
+    <div class="alert alert-warn">You are setting a new temporary password for <strong>${email}</strong>.<br>Share it securely — they should change it on next login.</div>
+    <div id="rpw-err"></div>
+    <div class="form-row form-full" style="margin-top:12px"><div class="form-group">
+      <div class="form-label">New Temporary Password <span class="form-req">*</span></div>
+      <input id="rpw-new" type="password" placeholder="Min 8 characters...">
+      <div style="font-size:10px;color:var(--text3);margin-top:3px">Min 8 chars, share securely with user</div>
+    </div></div>
+    <div class="form-row form-full"><div class="form-group">
+      <div class="form-label">Confirm Password</div>
+      <input id="rpw-confirm" type="password" placeholder="Repeat password...">
+    </div></div>`,
   async()=>{
-    showToast(`Password reset email sent to ${email}`,'success')
+    const newPw = document.getElementById('rpw-new')?.value
+    const confirm = document.getElementById('rpw-confirm')?.value
+    const err = document.getElementById('rpw-err')
+    if(!newPw || newPw.length < 8){err.innerHTML='<div class="alert alert-error">Password must be at least 8 characters</div>';return false}
+    if(newPw !== confirm){err.innerHTML='<div class="alert alert-error">Passwords do not match</div>';return false}
+    try{
+      await api('/api/users/'+id+'/reset-password','POST',{new_password:newPw})
+      showToast(`Password reset for ${email}. Share the new password securely.`,'success')
+    }catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
+  })
+}
+
+function openChangePasswordModal(){
+  showModal('🔐 Change My Password',`
+    <div class="alert alert-info">Change your account password. You will stay logged in after changing.</div>
+    <div id="cpw-err"></div>
+    <div class="form-row form-full" style="margin-top:12px"><div class="form-group">
+      <div class="form-label">Current Password <span class="form-req">*</span></div>
+      <input id="cpw-current" type="password" placeholder="Your current password">
+    </div></div>
+    <div class="form-row form-full"><div class="form-group">
+      <div class="form-label">New Password <span class="form-req">*</span></div>
+      <input id="cpw-new" type="password" placeholder="Min 8 characters...">
+    </div></div>
+    <div class="form-row form-full"><div class="form-group">
+      <div class="form-label">Confirm New Password</div>
+      <input id="cpw-confirm" type="password" placeholder="Repeat new password...">
+    </div></div>`,
+  async()=>{
+    const current = document.getElementById('cpw-current')?.value
+    const newPw = document.getElementById('cpw-new')?.value
+    const confirm = document.getElementById('cpw-confirm')?.value
+    const err = document.getElementById('cpw-err')
+    if(!current){err.innerHTML='<div class="alert alert-error">Current password required</div>';return false}
+    if(!newPw || newPw.length < 8){err.innerHTML='<div class="alert alert-error">New password must be at least 8 characters</div>';return false}
+    if(newPw !== confirm){err.innerHTML='<div class="alert alert-error">New passwords do not match</div>';return false}
+    try{
+      await api('/api/change-password','POST',{current_password:current,new_password:newPw})
+      showToast('Password changed successfully','success')
+    }catch(e){err.innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`;return false}
   })
 }
 
