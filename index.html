@@ -1533,40 +1533,146 @@ async function pageUsers(){
     </div>
   </div>
   <div class="card" style="margin-top:12px">
-    <div class="card-header"><div class="card-title">🔐 Role Permissions Matrix</div></div>
-    <div class="card-body" style="overflow-x:auto">
-      <table style="font-size:11px;min-width:700px"><thead><tr>
-        <th style="min-width:160px">Permission</th>
-        <th style="text-align:center;color:var(--purple-t)">Super Admin</th>
-        <th style="text-align:center;color:var(--blue-t)">Admin</th>
-        <th style="text-align:center;color:var(--teal-t)">Grant Coordinator</th>
-        <th style="text-align:center;color:var(--orange-t)">Compliance Mgr</th>
-        <th style="text-align:center;color:var(--green-t)">Sales Specialist</th>
-        <th style="text-align:center;color:var(--text3)">Read-Only</th>
-      </tr></thead>
-      <tbody>
-        ${[
-          ['View all records',           '✅','✅','✅','✅','✅','✅'],
-          ['Create WIBs / Companies',    '✅','✅','✅','⬜','✅','⬜'],
-          ['Edit WIBs / Companies',      '✅','✅','✅','⬜','✅','⬜'],
-          ['Delete records',             '✅','✅','⬜','⬜','⬜','⬜'],
-          ['Create / Edit Applications', '✅','✅','✅','⬜','✅','⬜'],
-          ['View Revenue & Invoices',    '✅','✅','✅','⬜','✅','⬜'],
-          ['Manage Invoices & Payments', '✅','✅','✅','⬜','⬜','⬜'],
-          ['Compliance Tracking',        '✅','✅','✅','✅','⬜','⬜'],
-          ['Add / Edit Notes & Tasks',   '✅','✅','✅','✅','✅','⬜'],
-          ['AI Assistant',               '✅','✅','✅','✅','✅','⬜'],
-          ['Import / Export CSV',        '✅','✅','✅','✅','✅','⬜'],
-          ['Access Audit Logs',          '✅','✅','⬜','⬜','⬜','⬜'],
-          ['Manage Users',               '✅','✅','⬜','⬜','⬜','⬜'],
-          ['Assign / Change Roles',      '✅','✅','⬜','⬜','⬜','⬜'],
-          ['Assign Super Admin role',    '✅','⬜','⬜','⬜','⬜','⬜'],
-          ['System Settings',            '✅','✅','⬜','⬜','⬜','⬜'],
-        ].map(r=>`<tr style="border-bottom:.5px solid var(--gray2)">${r.map((c,i)=>`<td style="padding:7px 10px;${i===0?'font-weight:500;color:var(--text)':'text-align:center;font-size:13px'}">${c}</td>`).join('')}</tr>`).join('')}
-      </tbody></table>
+    <div class="card-header">
+      <div class="card-title">🔐 Role Permissions Matrix</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span id="perm-save-status" style="font-size:10px;color:var(--text3)"></span>
+        ${currentUser?.role==='super_admin'?'<span style="font-size:10px;background:var(--purple-bg);color:var(--purple-t);padding:2px 8px;border-radius:10px;font-weight:500">✏️ Click checkboxes to edit</span>':'<span style="font-size:10px;color:var(--text3)">Super Admin only can edit permissions</span>'}
+      </div>
     </div>
-  </div>`
+    <div id="permissions-matrix-wrap" style="overflow-x:auto;padding:14px">
+      <div class="loading" style="color:var(--text3);font-size:12px">Loading permissions...</div>
+    </div>
+  </div>
+
   window._users=data.data||[]
+  // Load and render the live permissions matrix
+  loadPermissionsMatrix()
+}
+
+// ─── PERMISSIONS MATRIX ──────────────────────────────────────────────────────
+
+const PERM_LABELS = {
+  view_records:          'View all records',
+  create_wibs_companies: 'Create WIBs / Companies',
+  edit_wibs_companies:   'Edit WIBs / Companies',
+  delete_records:        'Delete records',
+  create_edit_apps:      'Create / Edit Applications',
+  view_revenue:          'View Revenue & Invoices',
+  manage_invoices:       'Manage Invoices & Payments',
+  compliance_tracking:   'Compliance Tracking',
+  notes_tasks:           'Add / Edit Notes & Tasks',
+  ai_assistant:          'AI Assistant',
+  import_export:         'Import / Export CSV',
+  audit_logs:            'Access Audit Logs',
+  manage_users:          'Manage Users',
+  assign_roles:          'Assign / Change Roles',
+  assign_super_admin:    'Assign Super Admin role',
+  system_settings:       'System Settings',
+}
+
+const ROLE_COLS = [
+  { key:'super_admin',       label:'Super Admin',       color:'var(--purple-t)' },
+  { key:'admin',             label:'Admin',             color:'var(--blue-t)'   },
+  { key:'grant_coordinator', label:'Grant Coordinator', color:'var(--teal-t)'   },
+  { key:'compliance_mgr',    label:'Compliance Mgr',    color:'var(--orange-t)' },
+  { key:'team_member',       label:'Sales Specialist',  color:'var(--green-t)'  },
+  { key:'external_partner',  label:'Read-Only',         color:'var(--text3)'    },
+]
+
+async function loadPermissionsMatrix() {
+  const wrap = document.getElementById('permissions-matrix-wrap')
+  if (!wrap) return
+  try {
+    const { permissions, locked } = await api('/api/permissions')
+    window._permissions = permissions
+    window._permissionsLocked = locked || {}
+    renderPermissionsMatrix(permissions, locked || {})
+  } catch(e) {
+    if (wrap) wrap.innerHTML = `<div class="alert alert-error">Failed to load permissions: ${e.message}</div>`
+  }
+}
+
+function renderPermissionsMatrix(permissions, locked) {
+  const wrap = document.getElementById('permissions-matrix-wrap')
+  if (!wrap) return
+  const isSuper = currentUser?.role === 'super_admin'
+
+  const headerRow = `<tr style="background:var(--gray)">
+    <th style="text-align:left;padding:9px 12px;font-size:11px;font-weight:600;color:var(--text2);min-width:200px;border-bottom:.5px solid var(--border)">Permission</th>
+    ${ROLE_COLS.map(r=>`<th style="text-align:center;padding:9px 14px;font-size:11px;font-weight:600;color:${r.color};border-bottom:.5px solid var(--border);white-space:nowrap">${r.label}</th>`).join('')}
+  </tr>`
+
+  const rows = Object.entries(PERM_LABELS).map(([key, label]) => {
+    const cells = ROLE_COLS.map(role => {
+      const checked = permissions[key]?.[role.key] ?? false
+      const isLocked = locked[key]?.[role.key] !== undefined
+      const canEdit = isSuper && !isLocked
+
+      if (canEdit) {
+        return `<td style="text-align:center;padding:8px 14px;border-bottom:.5px solid var(--gray2)">
+          <label style="display:inline-flex;align-items:center;justify-content:center;cursor:pointer;width:28px;height:28px">
+            <input type="checkbox" 
+              data-perm="${key}" 
+              data-role="${role.key}"
+              ${checked ? 'checked' : ''}
+              onchange="togglePermission('${key}','${role.key}',this)"
+              style="width:16px;height:16px;cursor:pointer;accent-color:var(--nv)">
+          </label>
+        </td>`
+      } else if (isLocked) {
+        // Locked — always on, show lock icon
+        return `<td style="text-align:center;padding:8px 14px;border-bottom:.5px solid var(--gray2)" title="This permission is locked">
+          <span style="font-size:14px;opacity:.5">${checked ? '🔒' : '⬜'}</span>
+        </td>`
+      } else {
+        // Read-only view for non-super-admins
+        return `<td style="text-align:center;padding:8px 14px;border-bottom:.5px solid var(--gray2)">
+          <span style="font-size:16px">${checked ? '✅' : '<span style=\'opacity:.2;font-size:14px\'>⬜</span>'}</span>
+        </td>`
+      }
+    }).join('')
+
+    return `<tr style="transition:background .1s" onmouseover="this.style.background='#fafafa'" onmouseout="this.style.background=''">
+      <td style="padding:9px 12px;font-size:12px;font-weight:500;color:var(--text);border-bottom:.5px solid var(--gray2)">${label}</td>
+      ${cells}
+    </tr>`
+  }).join('')
+
+  wrap.innerHTML = `
+    ${isSuper ? `<div class="alert alert-info" style="margin-bottom:12px;font-size:11px">
+      ✏️ Click any checkbox to instantly update that role's access. 🔒 = locked (cannot be changed). Changes apply immediately to all active sessions.
+    </div>` : ''}
+    <table style="width:100%;border-collapse:collapse;min-width:750px">
+      <thead>${headerRow}</thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${isSuper ? `<div style="margin-top:10px;font-size:10px;color:var(--text3)">
+      Changes are saved instantly and logged to the audit trail. Locked permissions (🔒) protect core security rules.
+    </div>` : ''}
+  `
+}
+
+async function togglePermission(permKey, role, checkbox) {
+  const value = checkbox.checked
+  const status = document.getElementById('perm-save-status')
+  checkbox.disabled = true
+  if (status) { status.textContent = 'Saving...'; status.style.color = 'var(--text3)' }
+
+  try {
+    const { permissions } = await api('/api/permissions', 'PUT', { permission: permKey, role, value })
+    window._permissions = permissions
+    if (status) { status.textContent = '✓ Saved'; status.style.color = 'var(--green-t)' }
+    setTimeout(() => { if (status) status.textContent = '' }, 2000)
+    showToast(`${PERM_LABELS[permKey] || permKey} → ${role.replace(/_/g,' ')}: ${value ? 'Enabled' : 'Disabled'}`, value ? 'success' : 'warn')
+  } catch(e) {
+    checkbox.checked = !value  // revert
+    if (status) { status.textContent = '✗ Failed'; status.style.color = 'var(--red-t)' }
+    setTimeout(() => { if (status) status.textContent = '' }, 3000)
+    showToast('Permission update failed: ' + e.message, 'error')
+  } finally {
+    checkbox.disabled = false
+  }
 }
 
 function renderUserRow(u){
