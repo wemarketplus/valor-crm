@@ -953,10 +953,42 @@ app.post('/api/import/:type', auth, async (req, res) => {
     if (!batch || batch === totalBatches) {
       try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'IMPORT', details: `Imported ${results.created} ${type} records (${results.errors.length} errors)` }) } catch(_) {}
     }
-    res.json({ ...results, total: rows.length })
+    // Cap errors at 20 to avoid huge response payloads
+    const cappedErrors = results.errors.slice(0, 20)
+    const truncated = results.errors.length > 20
+    res.json({
+      created: results.created,
+      errors: cappedErrors,
+      error_count: results.errors.length,
+      truncated,
+      total: rows.length,
+      batch: results.batch,
+      totalBatches: results.totalBatches,
+      first_row_keys: rows[0] ? Object.keys(rows[0]).slice(0,8) : [],
+    })
   } catch(e) {
     console.error('Import error:', e)
     res.status(500).json({ error: e.message })
+  }
+})
+
+// ─── IMPORT DIAGNOSTICS ─────────────────────────────────────────────────────
+// Test endpoint: insert one company row and return exact DB error
+app.post('/api/import-test', auth, requireAdmin, async (req, res) => {
+  const { row } = req.body
+  if (!row) return res.status(400).json({ error: 'row required' })
+  try {
+    // Try inserting with minimal required fields
+    const { data, error } = await supabase.from('companies').insert({
+      company_name: row.company_name || 'Test Company ' + Date.now(),
+      status: row.status || 'prospect'
+    }).select('id,company_name,status').single()
+    if (error) return res.json({ success: false, db_error: error.message, db_code: error.code, db_details: error.details, db_hint: error.hint })
+    // Delete the test row
+    await supabase.from('companies').delete().eq('id', data.id)
+    return res.json({ success: true, message: 'Test insert worked — DB constraints OK', data })
+  } catch(e) {
+    return res.json({ success: false, threw: e.message })
   }
 })
 
