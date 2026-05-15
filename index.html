@@ -1062,18 +1062,18 @@ async function pageWibs(){
 function renderWibTable(data){
   if(!data.length)return`<div class="empty-state"><div class="empty-icon">🏛️</div><div class="empty-text">No WIB records yet</div><div class="empty-sub">Add from public sources: CareerOneStop.org, twc.texas.gov, etc.</div></div>`
   return`<table><thead><tr>
-    <th>Workforce Board</th><th>Short Name</th><th>State</th><th>Email</th><th>Website</th><th>Status</th><th>IWT</th><th>Score</th><th>Max Award</th><th></th>
+    <th>Workforce Board</th><th>Short Name</th><th>State</th><th>Email</th><th>Website</th><th>Status</th><th>IWT</th><th>Call Priority</th><th>Max Award</th><th></th>
   </tr></thead><tbody>
   ${data.map(w=>`<tr onclick="openWibProfile('${w.id}')" style="cursor:pointer">
-    <td><div style="font-weight:500">${w.wib_name}</div></td>
+    <td><div style="font-weight:500;font-size:12px">${w.wib_name}</div>${w.wib_type?`<div style="font-size:9px;color:var(--text3);text-transform:uppercase;margin-top:2px">${w.wib_type}</div>`:''}</td>
     <td style="font-size:11px;color:var(--text2)">${w.short_name||'—'}</td>
-    <td><b>${w.state||'—'}</b></td>
-    <td style="font-size:11px">${w.wib_email?`<a href="mailto:${w.wib_email}" class="field-link" onclick="event.stopPropagation()">${w.wib_email}</a>`:'—'}</td>
-    <td style="font-size:11px">${w.website?`<a href="https://${w.website}" target="_blank" class="field-link" onclick="event.stopPropagation()">${w.website}</a>`:'—'}</td>
+    <td><b style="font-size:11px">${w.state||'—'}</b></td>
+    <td style="font-size:10px">${w.wib_email?`<a href="mailto:${w.wib_email}" class="field-link" onclick="event.stopPropagation()">${w.wib_email}</a>`:'—'}</td>
+    <td style="font-size:10px">${w.website?`<a href="https://${w.website}" target="_blank" class="field-link" onclick="event.stopPropagation()">${w.website.replace(/^www\./,'')}</a>`:'—'}</td>
     <td>${wibStatusPill(w.status)}</td>
-    <td>${w.iwt_program_active?'<span class="pill p-green">Active</span>':'<span style="color:var(--text3)">—</span>'}</td>
-    <td><div class="score-wrap"><div class="score-bar"><div class="score-fill" style="width:${w.call_priority_score}%"></div></div><span class="score-n">${w.call_priority_score}</span></div></td>
-    <td>${w.max_award_per_ein?'<span style="color:var(--green);font-weight:500">$'+Number(w.max_award_per_ein).toLocaleString()+'</span>':'—'}</td>
+    <td style="text-align:center">${w.iwt_program_active?'<span class="pill p-green" style="font-size:9px">✓ IWT</span>':'<span style="color:var(--text3);font-size:10px">—</span>'}</td>
+    <td style="text-align:right"><span style="font-weight:600;font-size:13px;color:${w.call_priority_score>2000?'var(--green)':w.call_priority_score>500?'var(--amber-t)':'var(--text2)'}">${w.call_priority_score?.toLocaleString()||'—'}</span></td>
+    <td style="font-size:11px">${w.max_award_per_ein?'<span style="color:var(--green);font-weight:500">$'+Number(w.max_award_per_ein).toLocaleString()+'</span>':'—'}</td>
     <td onclick="event.stopPropagation()"><div class="action-btns">
       <button class="action-btn" onclick="openWibModal(${JSON.stringify(w).replace(/"/g,"'")})">Edit</button>
       <button class="action-btn" onclick="openWibProfile('${w.id}')">View</button>
@@ -2687,16 +2687,16 @@ async function pageCompanies(){
 function renderCompaniesTable(data){
   if(!data.length)return`<div class="empty-state"><div class="empty-icon">🏢</div><div class="empty-text">No companies yet</div></div>`
   return`<table><thead><tr>
-    <th>Company</th><th>Status</th><th>Contact</th><th>Phone</th><th>Email</th><th>Employees</th><th>Domain</th><th></th>
+    <th>Company</th><th>Status</th><th>Rating</th><th>Contact</th><th>Phone / Email</th><th>Employees</th><th>Domain</th><th></th>
   </tr></thead><tbody>
-  ${data.map(c=>`<tr>
-    <td><div style="font-weight:500">${c.company_name}</div><div style="font-size:10px;color:var(--text3)">${c.company_type||''}</div></td>
+  ${data.map(c=>`<tr onclick="openCompanyModal(${JSON.stringify(c).replace(/"/g,"'")})" style="cursor:pointer">
+    <td><div style="font-weight:500;font-size:12px">${c.company_name}</div><div style="font-size:10px;color:var(--text3)">${c.company_type||'operator'}</div></td>
     <td>${companyStatusPill(c.status)}</td>
+    <td style="white-space:nowrap">${c.rating?'⭐'.repeat(Math.min(c.rating,5)):'<span style="color:var(--text3);font-size:10px">—</span>'}</td>
     <td style="font-size:11px;color:var(--text2)">${c.primary_contact_name||'—'}</td>
-    <td style="font-size:11px">${c.primary_contact_phone?`<a href="tel:${c.primary_contact_phone}" class="field-link" onclick="event.stopPropagation()">${c.primary_contact_phone}</a>`:'—'}</td>
-    <td style="font-size:11px">${c.primary_contact_email?`<a href="mailto:${c.primary_contact_email}" class="field-link" onclick="event.stopPropagation()">${c.primary_contact_email}</a>`:'—'}</td>
+    <td style="font-size:10px"><div>${c.primary_contact_phone?`<a href="tel:${c.primary_contact_phone}" class="field-link" onclick="event.stopPropagation()">${c.primary_contact_phone}</a>`:'—'}</div><div style="color:var(--text3)">${c.primary_contact_email?`<a href="mailto:${c.primary_contact_email}" class="field-link" onclick="event.stopPropagation()" style="color:var(--text3)">${c.primary_contact_email}</a>`:'—'}</div></td>
     <td style="font-size:11px;color:var(--text2)">${c.employee_count_total||'—'}</td>
-    <td style="font-size:11px">${c.domain?`<a href="https://${c.domain}" target="_blank" class="field-link" onclick="event.stopPropagation()">${c.domain}</a>`:'—'}</td>
+    <td style="font-size:10px">${c.domain?`<a href="https://${c.domain}" target="_blank" class="field-link" onclick="event.stopPropagation()">${c.domain}</a>`:'—'}</td>
     <td onclick="event.stopPropagation()"><div class="action-btns">
       <button class="action-btn" onclick="openCompanyModal(${JSON.stringify(c).replace(/"/g,"'")})">Edit</button>
       ${['super_admin','admin'].includes(currentUser?.role)?`<button class="action-btn del" onclick="deleteCompany('${c.id}','${c.company_name.replace(/'/g,'')}')">Delete</button>`:''}
@@ -2781,14 +2781,15 @@ async function pageLocations(){
     </div>
     ${(data.data||[]).length===0
       ? '<div class="empty-state"><div class="empty-icon">📍</div><div class="empty-text">No locations yet</div></div>'
-      : '<table><thead><tr><th>Location</th><th>Parent Operator</th><th>State</th><th>WIB</th><th>Status</th><th>Employees</th><th></th></tr></thead><tbody>'
+      : '<table><thead><tr><th>Location</th><th>Parent Operator</th><th>State</th><th>WIB</th><th>Status</th><th>Employees</th><th>Address / Notes</th><th></th></tr></thead><tbody>'
         + (data.data||[]).map(l=>'<tr>'
-          + '<td><div style="font-weight:500">'+l.location_name+'</div>'+(l.city?'<div style="font-size:10px;color:var(--text3)">'+l.city+(l.county?', '+l.county:'')+'</div>':'')+'</td>'
-          + '<td style="color:var(--text2)">'+(l.parent_company?.company_name||'—')+'</td>'
-          + '<td><b>'+l.state+'</b></td>'
-          + '<td style="font-size:11px;color:var(--text2)">'+(l.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—')+'</td>'
+          + '<td><div style="font-weight:500;font-size:12px">'+l.location_name+'</div>'+(l.city?'<div style="font-size:10px;color:var(--text3)">'+l.city+(l.county?', '+l.county:'')+'</div>':'')+'</td>'
+          + '<td style="color:var(--text2);font-size:11px">'+(l.parent_company?.company_name||'—')+'</td>'
+          + '<td><b style="font-size:11px">'+l.state+'</b></td>'
+          + '<td style="font-size:10px;color:var(--text2)">'+(l.wib?.wib_name?.split(' - ').slice(1,2).join(' - ')||l.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—')+'</td>'
           + '<td>'+locationStatusPill(l.status)+'</td>'
-          + '<td>'+(l.employee_count||'—')+'</td>'
+          + '<td style="font-size:11px;text-align:center">'+(l.employee_count||'—')+'</td>'
+          + '<td style="font-size:10px;color:var(--text3);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+(l.notes||'').substring(0,200)+'">'+(l.address||(l.notes||'').split('\n')[0].substring(0,50)||'—')+'</td>'
           + '<td><div class="action-btns"><button class="action-btn" onclick="openLocationModal('+JSON.stringify(l).replace(/"/g,"'")+')">Edit</button>'          + (['super_admin','admin'].includes(currentUser?.role) ? '<button class="action-btn del" onclick="deleteLocation(\'' + l.id + '\')">Delete</button>' : '')          + '</div></td>'
           + '</tr>').join('')
         + '</tbody></table><div class="tbl-footer">'+(data.count||0)+' facilities</div>'
@@ -2845,15 +2846,18 @@ async function pageFunding(){
         <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All statuses</option><option value="open">Open</option><option value="pending">Pending</option><option value="blocked">Blocked</option><option value="closed_deadline">Closed</option></select>
       </div>
     </div>
-    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">💰</div><div class="empty-text">No funding opportunities yet</div><div class="empty-sub">Create opportunities linked to WIB records</div></div>`:`<table><thead><tr><th>Opportunity</th><th>WIB</th><th>Status</th><th>Max Award</th><th>Deadline</th><th>Program</th><th></th></tr></thead><tbody>
-    ${(data.data||[]).map(f=>`<tr>
-      <td><div style="font-weight:500">${f.opportunity_name}</div></td>
-      <td style="font-size:11px;color:var(--text2)">${f.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
+    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">💰</div><div class="empty-text">No funding opportunities yet</div><div class="empty-sub">Create opportunities linked to WIB records</div></div>`:`<table><thead><tr>
+  <th>Opportunity</th><th>WIB</th><th>Status</th><th>Max/EIN</th><th>Deadline</th><th>Program</th><th>App Link</th><th></th>
+</tr></thead><tbody>
+    ${(data.data||[]).map(f=>`<tr onclick="openFundingModal(${JSON.stringify(f).replace(/"/g,"'")})" style="cursor:pointer">
+      <td><div style="font-weight:500;font-size:12px">${f.opportunity_name}</div></td>
+      <td style="font-size:10px;color:var(--text2)">${(f.wib?.wib_name||'—').split(' - ').slice(1,3).join(' - ')||f.wib?.wib_name?.split(' ').slice(0,4).join(' ')||'—'}</td>
       <td>${fundingStatusPill(f.status)}</td>
-      <td>${f.max_award_per_ein?'<span style="color:var(--green);font-weight:500">$'+Number(f.max_award_per_ein).toLocaleString()+'</span>':'—'}</td>
-      <td style="font-size:11px">${f.application_deadline||'—'}</td>
-      <td><span class="pill p-blue">${f.program_type?.toUpperCase()||'IWT'}</span></td>
-      <td><div class="action-btns">
+      <td style="font-size:11px">${f.max_award_per_ein?'<span style="color:var(--green);font-weight:500">$'+Number(f.max_award_per_ein).toLocaleString()+'</span>':'—'}</td>
+      <td style="font-size:10px;color:var(--text2)">${f.application_deadline?new Date(f.application_deadline).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—'}</td>
+      <td><span class="pill p-blue" style="font-size:9px">${(f.program_type||'IWT').toUpperCase()}</span></td>
+      <td style="font-size:10px">${f.source_url&&f.source_url.startsWith('http')?`<a href="${f.source_url}" target="_blank" class="field-link" onclick="event.stopPropagation()">🔗</a>`:'—'}</td>
+      <td onclick="event.stopPropagation()"><div class="action-btns">
         <button class="action-btn" onclick="openFundingModal(${JSON.stringify(f).replace(/"/g,"'")})">Edit</button>
         <button class="action-btn del" onclick="deleteFunding('${f.id}')">Del</button>
       </div></td>
@@ -2912,26 +2916,50 @@ async function pageApplications(){
     <div class="tbl-head">
       <div class="tbl-head-left">
         <div class="search-inp">🔍<input placeholder="Search applications..."></div>
-        <select class="filter-btn" style="border-radius:6px;padding:5px 9px"><option>All statuses</option><option>intake</option><option>submitted</option><option>awarded</option><option>denied</option></select>
+        <select class="filter-btn" style="border-radius:6px;padding:5px 9px" onchange="filterApplicationsByStatus(this.value)">
+          <option value="">All statuses</option>
+          <option value="intake">Intake</option><option value="needs_review">Needs Review</option>
+          <option value="in_progress">In Progress</option><option value="application_submitted">App Submitted</option>
+          <option value="submitted">Submitted</option><option value="under_review">Under Review</option>
+          <option value="ready_for_training">Ready for Training</option>
+          <option value="awarded">Awarded</option><option value="wont_apply">Won't Apply</option>
+          <option value="denied">Denied</option><option value="funding_closed">Funding Closed</option>
+        </select>
       </div>
     </div>
-    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><div class="empty-sub">The money pipeline starts here. Add companies, WIBs, and funding opportunities first.</div></div>`:`<table><thead><tr><th>App #</th><th>Company</th><th>WIB</th><th>Status</th><th>Award</th><th>Fee</th><th>Invoice</th><th>Days</th><th>Actions</th></tr></thead><tbody>
-    ${(data.data||[]).map(a=>`<tr>
-      <td style="font-family:monospace;font-size:10px;color:var(--text3)">${a.application_number}</td>
-      <td style="font-weight:500">${a.company?.company_name||'—'}</td>
-      <td style="font-size:11px;color:var(--text2)">${a.wib?.wib_name?.split(' ').slice(0,3).join(' ')||'—'}</td>
-      <td>${statusPill(a.status)}</td>
-      <td style="color:var(--green);font-weight:500">${a.award_amount_approved?'$'+Number(a.award_amount_approved).toLocaleString():'—'}</td>
-      <td style="color:var(--green);font-weight:500">${a.revenue?.[0]?.calculated_success_fee?'$'+Number(a.revenue[0].calculated_success_fee).toLocaleString():'—'}</td>
-      <td>${a.revenue?.[0]?.invoice_status?invoicePill(a.revenue[0].invoice_status):'—'}</td>
-      <td style="text-align:center;color:var(--text2)">${a.time_in_stage_days||0}d</td>
-      <td><div class="action-btns">
-        <button class="action-btn" onclick="openEditApplicationModal(${JSON.stringify(a).replace(/"/g,"'")})">Edit</button>
-        ${['super_admin','admin'].includes(currentUser?.role)?`<button class="action-btn del" onclick="deleteApplication('${a.id}')">Del</button>`:''}
-      </div></td>
-    </tr>`).join('')}
-    </tbody></table><div class="tbl-footer">${data.count||0} applications</div>`}
+    ${(data.data||[]).length===0?`<div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><div class="empty-sub">The money pipeline starts here. Add companies, WIBs, and funding opportunities first.</div></div>`:`<table><thead><tr>
+      <th>Application</th><th>Company</th><th>Status</th><th>WIB</th><th>State</th>
+      <th>Award Requested</th><th>Award Approved</th><th>Valor Fee</th><th>Submitted</th><th>Actions</th>
+    </tr></thead><tbody>
+    ${(data.data||[]).map(a=>{
+      const appTitle=a.notes?.match(/Application: ([^\n]+)/)?.[1]||a.application_number
+      const stateMatch=a.wib?.wib_name?.match(/^([A-Z]{2})\s*-/)
+      const stateAbbr=stateMatch?stateMatch[1]:(a.wib?.state||'')
+      return`<tr onclick="openEditApplicationModal(${JSON.stringify(a).replace(/"/g,"'")})" style="cursor:pointer">
+        <td><div style="font-weight:500;font-size:12px">${appTitle||'—'}</div><div style="font-size:10px;font-family:monospace;color:var(--text3)">${a.application_number}</div></td>
+        <td style="font-size:11px">${a.company?.company_name||'—'}</td>
+        <td>${statusPill(a.status)}</td>
+        <td style="font-size:10px;color:var(--text2)">${a.wib?.wib_name?.split(' - ').slice(1,3).join(' - ')||a.wib?.wib_name?.split(' ').slice(0,4).join(' ')||'—'}</td>
+        <td><b style="font-size:11px">${stateAbbr||'—'}</b></td>
+        <td style="font-size:11px;color:var(--text2)">${a.award_amount_requested?'$'+Number(a.award_amount_requested).toLocaleString():'—'}</td>
+        <td style="color:var(--green);font-weight:500">${a.award_amount_approved?'$'+Number(a.award_amount_approved).toLocaleString():'—'}</td>
+        <td style="color:var(--green);font-weight:500">${a.revenue?.[0]?.calculated_success_fee?'$'+Number(a.revenue[0].calculated_success_fee).toLocaleString():'—'}</td>
+        <td style="font-size:10px;color:var(--text2)">${a.submission_date?new Date(a.submission_date).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—'}</td>
+        <td onclick="event.stopPropagation()"><div class="action-btns">
+          <button class="action-btn" onclick="openEditApplicationModal(${JSON.stringify(a).replace(/"/g,"'")})">Edit</button>
+          ${['super_admin','admin'].includes(currentUser?.role)?`<button class="action-btn del" onclick="deleteApplication('${a.id}')">Del</button>`:''}
+        </div></td>
+      </tr>`}).join('')}
+    </tbody></table><div class="tbl-footer">${data.count||0} applications · ${(data.data||[]).filter(a=>a.status==='awarded').length} awarded · $${(data.data||[]).reduce((s,a)=>s+Number(a.award_amount_approved||0),0).toLocaleString()} total</div>`}
   </div>`
+}
+
+function filterApplicationsByStatus(status){
+  window._appStatusFilter=status
+  const rows=document.querySelectorAll('#page-area table tbody tr')
+  if(!rows.length){loadPage('applications');return}
+  // If data is loaded, filter in-place; otherwise reload
+  loadPage('applications')
 }
 
 async function deleteApplication(id){
@@ -2940,17 +2968,40 @@ async function deleteApplication(id){
 }
 
 function openEditApplicationModal(a){
-  const statusOpts=[['intake','Intake'],['in_progress','In Progress'],['submitted','Submitted'],['under_review','Under Review'],['awarded','Awarded'],['denied','Denied'],['withdrawn','Withdrawn']]
-    .map(([v,l])=>`<option value="${v}"${a.status===v?' selected':''}>${l}</option>`).join('')
-  showModal(`📋 Edit Application ${a.application_number}`,`
+  const statusOpts=[
+    ['intake','Intake'],['in_progress','In Progress'],['needs_review','Needs Review'],
+    ['ready_for_training','Ready for Training'],['application_submitted','App Submitted'],
+    ['submitted','Submitted'],['under_review','Under Review'],
+    ['wont_apply',"Won't Apply"],['funding_closed','Funding Closed'],
+    ['awarded','Awarded'],['denied','Denied'],['withdrawn','Withdrawn']
+  ].map(([v,l])=>`<option value="${v}"${a.status===v?' selected':''}>${l}</option>`).join('')
+  const appTitle=a.notes?.match(/Application: ([^\n]+)/)?.[1]||''
+  const appLink=a.notes?.match(/Link: ([^\n]+)/)?.[1]||''
+  showModal(`📋 Application ${a.application_number}`,`
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Application Title</div><input id="eapp-title" value="${appTitle}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Company</div><div style="padding:6px;font-size:12px;font-weight:500;background:var(--gray2);border-radius:6px">${a.company?.company_name||'—'}</div></div>
+    <div class="form-group"><div class="form-label">WIB</div><div style="padding:6px;font-size:11px;background:var(--gray2);border-radius:6px">${a.wib?.wib_name||'—'}</div></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="eapp-status">${statusOpts}</select></div>
-    <div class="form-group"><div class="form-label">Award Amount ($)</div><input id="eapp-award" type="number" value="${a.award_amount_approved||''}"></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Decision Date</div><input id="eapp-decision" type="date" value="${a.decision_date||''}"></div>
+    <div class="form-group"><div class="form-label">Award Requested ($)</div><input id="eapp-requested" type="number" value="${a.award_amount_requested||''}"></div></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Award Approved ($)</div><input id="eapp-award" type="number" value="${a.award_amount_approved||''}"></div>
     <div class="form-group"><div class="form-label">Submission Date</div><input id="eapp-submit" type="date" value="${a.submission_date||''}"></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div><textarea id="eapp-notes" rows="2">${a.notes||''}</textarea></div></div>`,
+    <div class="form-row"><div class="form-group"><div class="form-label">Decision Date</div><input id="eapp-decision" type="date" value="${a.decision_date||''}"></div>
+    <div class="form-group"><div class="form-label">Application Link</div><input id="eapp-link" type="url" value="${appLink}" placeholder="https://drive.google.com/..."></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes / Next Steps</div><textarea id="eapp-notes" rows="3">${(a.notes||'').replace(/^Application:.*\n?/,'').replace(/^Link:.*\n?/,'').trim()}</textarea></div></div>`,
   async()=>{
     try{
-      await api('/api/applications/'+a.id,'PUT',{status:document.getElementById('eapp-status').value,award_amount_approved:document.getElementById('eapp-award').value||null,decision_date:document.getElementById('eapp-decision').value||null,submission_date:document.getElementById('eapp-submit').value||null,notes:document.getElementById('eapp-notes').value||null})
+      const eTitle=document.getElementById('eapp-title')?.value?.trim()
+      const eLink=document.getElementById('eapp-link')?.value?.trim()
+      const eNotes=document.getElementById('eapp-notes')?.value?.trim()
+      const fullNotes=[eTitle?'Application: '+eTitle:'',eLink?'Link: '+eLink:'',eNotes].filter(Boolean).join('\n')
+      await api('/api/applications/'+a.id,'PUT',{
+        status:document.getElementById('eapp-status').value,
+        award_amount_requested:document.getElementById('eapp-requested')?.value||null,
+        award_amount_approved:document.getElementById('eapp-award').value||null,
+        decision_date:document.getElementById('eapp-decision').value||null,
+        submission_date:document.getElementById('eapp-submit').value||null,
+        notes:fullNotes||null
+      })
       showToast('Application updated','success')
       loadPage('applications')
     }catch(e){showToast(e.message,'error');return false}
@@ -3959,8 +4010,25 @@ function fieldRow(key,value){
 // STATUS PILLS
 // ═══════════════════════════════════════════════════════
 function statusPill(s){
-  const m={intake:'p-blue',doc_collection:'p-purple',drafting:'p-purple',employer_review:'p-amber',submitted:'p-teal',approved:'p-green',awarded:'p-green',denied:'p-red'}
-  return`<span class="pill ${m[s]||'p-gray'}">${(s||'').replace(/_/g,' ')}</span>`
+  const m={
+    // Core pipeline statuses
+    intake:'p-gray','in_progress':'p-blue',submitted:'p-teal','under_review':'p-amber',
+    awarded:'p-green',denied:'p-red',withdrawn:'p-gray',active:'p-green',
+    // Attio-aligned statuses from screenshots
+    'needs_review':'p-blue','ready_for_training':'p-green','wont_apply':'p-gray',
+    'application_submitted':'p-purple','funding_closed':'p-red',
+    // Legacy  
+    'doc_collection':'p-purple',drafting:'p-purple','employer_review':'p-amber',
+    approved:'p-green',
+  }
+  const labels={
+    intake:'Intake','in_progress':'In Progress',submitted:'Submitted','under_review':'Under Review',
+    awarded:'Awarded',denied:'Denied',withdrawn:'Withdrawn',active:'Active',
+    'needs_review':'Needs Review','ready_for_training':'Ready for Training',
+    'wont_apply':"Won't Apply",'application_submitted':'App Submitted','funding_closed':'Funding Closed',
+  }
+  const key=(s||'').toLowerCase().replace(/[^a-z_]/g,'_').replace(/__+/g,'_').replace(/^_|_$/g,'')
+  return`<span class="pill ${m[key]||'p-gray'}">${labels[key]||(s||'').replace(/_/g,' ')}</span>`
 }
 function wibStatusPill(s){
   const m={funding_available:'p-green',follow_up_needed:'p-purple',pending_employer:'p-amber',no_reachout_complete:'p-gray',funding_not_available:'p-red',stop_applications:'p-orange'}
@@ -4037,19 +4105,29 @@ function openNewMessageModal(){
 
 function openApplicationModal(){
   showModal('📋 New Grant Application',`
-    <div class="alert alert-info">To create an application you need: a Company record, a WIB record, and a Funding Opportunity. Add those first if you haven't already.</div>
+    <div class="alert alert-info">To create an application, search for the Company and WIB below. Add them first if needed.</div>
     <div id="app-err"></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Application Name / Title</div>
+      <input id="app-title" placeholder="e.g. Heritage Senior - TX Permian Basin - IWT 2026"></div></div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Company <span class="form-req">*</span></div>
       <input id="app-company" placeholder="Start typing company name..." list="app-company-list">
       <datalist id="app-company-list"></datalist></div></div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Workforce Board (WIB) <span class="form-req">*</span></div>
       <input id="app-wib" placeholder="Start typing WIB name..." list="app-wib-list">
       <datalist id="app-wib-list"></datalist></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Award Requested ($)</div>
-      <input id="app-amount" type="number" placeholder="45000"></div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="app-status-new">
+      <option value="intake">Intake</option><option value="needs_review">Needs Review</option>
+      <option value="in_progress">In Progress</option><option value="application_submitted">App Submitted</option>
+      <option value="submitted">Submitted</option><option value="ready_for_training">Ready for Training</option>
+      <option value="awarded">Awarded</option><option value="wont_apply">Won't Apply</option>
+    </select></div>
     <div class="form-group"><div class="form-label">Submission Date</div>
       <input id="app-date" type="date" value="${new Date().toISOString().split('T')[0]}"></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes</div>
+    <div class="form-row"><div class="form-group"><div class="form-label">Award Requested ($)</div>
+      <input id="app-amount" type="number" placeholder="45000"></div>
+    <div class="form-group"><div class="form-label">Application Link (Google Drive, etc.)</div>
+      <input id="app-link" type="url" placeholder="https://drive.google.com/..."></div></div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes / Next Steps</div>
       <textarea id="app-notes" rows="2"></textarea></div></div>`,
   async()=>{
     const err=document.getElementById('app-err')
@@ -4066,11 +4144,15 @@ function openApplicationModal(){
       const wib=(wibs.data||[])[0]
       if(!co){err.innerHTML=`<div class="alert alert-error">Company "${companyName}" not found — add it first</div>`;return false}
       if(!wib){err.innerHTML=`<div class="alert alert-error">WIB "${wibName}" not found — add it first</div>`;return false}
+      const appTitle=document.getElementById('app-title')?.value?.trim()
+      const appLink=document.getElementById('app-link')?.value?.trim()
+      const appStatus=document.getElementById('app-status-new')?.value||'intake'
+      const noteText=[appTitle?'Application: '+appTitle:'',appLink?'Link: '+appLink:'',document.getElementById('app-notes').value||''].filter(Boolean).join('\n')
       await api('/api/applications','POST',{
-        company_id:co.id,wib_id:wib.id,status:'intake',
+        company_id:co.id,wib_id:wib.id,status:appStatus,
         award_amount_requested:document.getElementById('app-amount').value||null,
         submission_date:document.getElementById('app-date').value||null,
-        notes:document.getElementById('app-notes').value||null
+        notes:noteText||null
       })
       showToast('Application created successfully','success')
       loadPage('applications')
