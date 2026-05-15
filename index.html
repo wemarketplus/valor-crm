@@ -497,10 +497,17 @@ async function apiAI(prompt,context=''){
   try{
     // Route through server to keep API key secure
     const d=await api('/api/ai','POST',{prompt,context})
-    if(d.error&&!d.text)return'AI temporarily unavailable: '+(d.error||'unknown error')
+    if(d.error&&!d.text)return'AI Error: '+(d.error||'unknown error')
+    if(d.error&&d.text)return d.text  // server returns helpful message
     return d.text||'No response generated.'
   }catch(e){
-    return'AI temporarily unavailable: '+e.message
+    if(e.message?.includes('Server error')||e.message?.includes('restart')){
+      return'⏳ AI unavailable — server is starting up. Wait 30 seconds and try again.'
+    }
+    if(e.message?.includes('Session expired')){
+      return'Session expired — please sign in again.'
+    }
+    return'❌ AI connection failed: '+e.message+'. Check that ANTHROPIC_API_KEY is set in Render environment variables.'
   }
 }
 
