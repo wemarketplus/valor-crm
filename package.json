@@ -1,17 +1,16 @@
 {
   "name": "valor-crm",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Valor Workforce Funding — Grant Monetization CRM",
-  "main": "server.js",
+  "private": true,
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "express": "^4.19.0",
     "@supabase/supabase-js": "^2.45.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }
