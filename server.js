@@ -15,11 +15,10 @@ app.use(cors())
 app.use(express.json({ limit: '10mb' }))
 
 /* =========================
-   SERVE YOUR EXISTING CRM FRONTEND
-   (DO NOT CHANGE YOUR LAYOUT FILES)
+   CRITICAL FIX: SERVE FRONTEND
 ========================= */
 
-app.use(express.static(path.join(__dirname)))
+app.use(express.static(__dirname))
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'))
@@ -46,119 +45,7 @@ app.get('/health', (req, res) => {
 })
 
 /* =========================
-   SAFE DB CONNECT
-========================= */
-
-async function connectDB(retries = 10, delay = 3000) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      await pool.query('SELECT 1')
-      console.log('✅ Database connected')
-      return
-    } catch (err) {
-      console.log(`⏳ DB not ready (attempt ${i + 1})`)
-      await new Promise(r => setTimeout(r, delay))
-    }
-  }
-
-  throw new Error('❌ Database connection failed after retries')
-}
-
-/* =========================
-   MIGRATIONS (UNCHANGED LOGIC)
-========================= */
-
-async function runMigrations() {
-  console.log('🔄 Running migrations...')
-
-  await pool.query(`
-    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-  `)
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS territories (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      name TEXT NOT NULL UNIQUE,
-      states TEXT[] DEFAULT '{}',
-      description TEXT DEFAULT '',
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-  `)
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS tasks (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      record_type TEXT NOT NULL,
-      record_id UUID NOT NULL,
-      title TEXT NOT NULL,
-      due_date DATE,
-      priority TEXT DEFAULT 'medium',
-      assignee_id UUID,
-      notes TEXT DEFAULT '',
-      completed BOOLEAN DEFAULT false,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-  `)
-
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS notifications (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID,
-      title TEXT NOT NULL,
-      message TEXT DEFAULT '',
-      type TEXT DEFAULT 'info',
-      is_read BOOLEAN DEFAULT false,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-  `)
-
-  console.log('✅ Migrations complete')
-}
-
-/* =========================
-   LOGIN (UNCHANGED BEHAVIOR)
-   KEEP YOUR CURRENT FRONTEND EXPECTATION WORKING
-========================= */
-
-app.post('/api/login', async (req, res) => {
-  try {
-    const { email, password } = req.body
-
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Missing credentials' })
-    }
-
-    const result = await pool.query(`
-      SELECT id, email, role
-      FROM user_profiles
-      WHERE email = $1
-      LIMIT 1
-    `, [email])
-
-    const user = result.rows[0]
-
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid login' })
-    }
-
-    // KEEP YOUR CURRENT SIMPLE AUTH LOGIC
-    if (password !== 'admin123') {
-      return res.status(401).json({ error: 'Invalid login' })
-    }
-
-    res.json({
-      success: true,
-      user
-    })
-
-  } catch (err) {
-    console.error(err)
-    res.status(500).json({ error: 'Login failed' })
-  }
-})
-
-/* =========================
-   TERRITORIES
+   BASIC API SAFETY (DO NOT BREAK FRONTEND)
 ========================= */
 
 app.get('/api/territories', async (req, res) => {
@@ -170,10 +57,6 @@ app.get('/api/territories', async (req, res) => {
     res.status(500).json({ error: 'Failed loading territories' })
   }
 })
-
-/* =========================
-   TASKS
-========================= */
 
 app.post('/api/tasks', async (req, res) => {
   try {
@@ -218,26 +101,11 @@ app.post('/api/tasks', async (req, res) => {
 })
 
 /* =========================
-   START SERVER (RENDER SAFE)
+   START SERVER
 ========================= */
 
 const PORT = process.env.PORT || 10000
 
-async function startServer() {
-  try {
-    console.log('🚀 Starting server...')
-
-    await connectDB()
-    await runMigrations()
-
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`✅ Server running on port ${PORT}`)
-    })
-
-  } catch (err) {
-    console.error('❌ Startup failed:', err)
-    process.exit(1)
-  }
-}
-
-startServer()
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Server running on port ${PORT}`)
+})
