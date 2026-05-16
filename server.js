@@ -12,18 +12,20 @@ app.use(express.json({ limit: '10mb' }))
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production'
-    ? { rejectUnauthorized: false }
-    : false
+  ssl:
+    process.env.NODE_ENV === 'production'
+      ? { rejectUnauthorized: false }
+      : false
 })
 
 /* ════════════════════════════════════════════════
-   DATABASE MIGRATIONS
+   MIGRATIONS
 ════════════════════════════════════════════════ */
 
 async function runMigrations() {
 
   /* TERRITORIES */
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS territories (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -34,45 +36,26 @@ async function runMigrations() {
     );
   `)
 
-  /* USER PROFILES */
-  await pool.query(`
-    ALTER TABLE user_profiles
-    ADD COLUMN IF NOT EXISTS territory_id UUID REFERENCES territories(id)
-    ON DELETE SET NULL;
-  `)
-
   /* WIB RECORDS */
+
   await pool.query(`
     ALTER TABLE wib_records
-    ADD COLUMN IF NOT EXISTS territory_id UUID REFERENCES territories(id)
+    ADD COLUMN IF NOT EXISTS territory_id UUID
+    REFERENCES territories(id)
     ON DELETE SET NULL;
   `)
 
-  /* NOTIFICATIONS */
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS notifications (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      user_id UUID NOT NULL,
-      title TEXT NOT NULL,
-      message TEXT,
-      type TEXT DEFAULT 'info',
-      is_read BOOLEAN DEFAULT false,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
-  `)
+  /* USER PROFILES */
 
-  /* CHAT MESSAGES */
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS chat_messages (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      sender_id UUID NOT NULL,
-      channel TEXT NOT NULL,
-      message TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    );
+    ALTER TABLE user_profiles
+    ADD COLUMN IF NOT EXISTS territory_id UUID
+    REFERENCES territories(id)
+    ON DELETE SET NULL;
   `)
 
   /* TASKS */
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS tasks (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -88,14 +71,48 @@ async function runMigrations() {
     );
   `)
 
-  /* FORCE POSTGREST CACHE RELOAD */
+  /* NOTIFICATIONS */
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID,
+      title TEXT NOT NULL,
+      message TEXT,
+      type TEXT DEFAULT 'info',
+      is_read BOOLEAN DEFAULT false,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `)
+
+  /* CHAT */
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      sender_id UUID,
+      channel TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `)
+
+  /* RELOAD CACHE */
+
   try {
-    await pool.query(`SELECT pg_notify('pgrst', 'reload schema');`)
-  } catch (e) {
-    console.log('Schema reload skipped:', e.message)
+
+    await pool.query(`
+      SELECT pg_notify('pgrst', 'reload schema');
+    `)
+
+  } catch (err) {
+
+    console.log('Schema reload skipped')
+
   }
 
   console.log('✅ Migrations complete')
+
 }
 
 /* ════════════════════════════════════════════════
@@ -117,8 +134,9 @@ app.get('/api/territories', async (req, res) => {
   } catch (err) {
 
     console.error(err)
+
     res.status(500).json({
-      error: 'Failed to load territories'
+      error: 'Failed loading territories'
     })
 
   }
@@ -136,9 +154,11 @@ app.post('/api/territories', async (req, res) => {
     } = req.body
 
     if (!name) {
+
       return res.status(400).json({
         error: 'Territory name required'
       })
+
     }
 
     const result = await pool.query(`
@@ -160,6 +180,7 @@ app.post('/api/territories', async (req, res) => {
   } catch (err) {
 
     console.error(err)
+
     res.status(500).json({
       error: 'Failed creating territory'
     })
@@ -186,10 +207,16 @@ app.post('/api/tasks', async (req, res) => {
       notes
     } = req.body
 
-    if (!record_type || !record_id || !title) {
+    if (
+      !record_type ||
+      !record_id ||
+      !title
+    ) {
+
       return res.status(400).json({
         error: 'Missing required task fields'
       })
+
     }
 
     const result = await pool.query(`
@@ -253,7 +280,7 @@ app.get('/api/notifications', async (req, res) => {
     console.error(err)
 
     res.status(500).json({
-      error: 'Notifications failed to load'
+      error: 'Notifications failed'
     })
 
   }
@@ -265,13 +292,15 @@ app.get('/api/notifications', async (req, res) => {
 ════════════════════════════════════════════════ */
 
 app.get('/health', (req, res) => {
+
   res.json({
     status: 'ok'
   })
+
 })
 
 /* ════════════════════════════════════════════════
-   STARTUP
+   START
 ════════════════════════════════════════════════ */
 
 const PORT = process.env.PORT || 3000
@@ -280,15 +309,15 @@ runMigrations()
   .then(() => {
 
     app.listen(PORT, () => {
+
       console.log(`✅ Server running on ${PORT}`)
+
     })
 
   })
   .catch(err => {
 
-    console.error('❌ Startup failed')
     console.error(err)
-
     process.exit(1)
 
   })
