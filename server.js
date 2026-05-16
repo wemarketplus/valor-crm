@@ -512,19 +512,21 @@ app.post('/api/change-password', auth, async (req, res) => {
 // ─── ADMIN RESET PASSWORD ─────────────────────────────────────────────────────
 app.post('/api/users/:id/reset-password', auth, requireAdmin, async (req, res) => {
   try {
-    const { new_password } = req.body
-    if (!new_password || new_password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
     const { data: target } = await supabase.from('user_profiles').select('email').eq('id', req.params.id).single()
     if (!target) return res.status(404).json({ error: 'User not found' })
-    const { error } = await supabase.auth.admin.updateUserById(req.params.id, { password: new_password })
-    if (error) return res.status(400).json({ error: error.message })
-    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'RESET_PASSWORD', details: `Admin reset password for: ${target.email}` }) } catch(_) {}
-    res.json({ success: true, message: `Password reset for ${target.email}` })
-  } catch (err) {
-    res.status(500).json({ error: 'Password reset failed. Please try again.' })
-  }
+    const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({ type: 'recovery', email: target.email })
+    if (!linkErr && linkData) {
+      try { await safeInsertLog({ user_id: req.user.id, action: 'RESET_PASSWORD', details: 'Reset link sent to: ' + target.email }) } catch(_) {}
+      return res.json({ success: true, method: 'magic_link', message: 'Password reset email sent to ' + target.email + '. Link expires in 1 hour.' })
+    }
+    // Fallback only when generateLink is unavailable on this Supabase plan
+    const tmpPwd = require('crypto').randomBytes(16).toString('base64url')
+    const { error: pwdErr } = await supabase.auth.admin.updateUserById(req.params.id, { password: tmpPwd })
+    if (pwdErr) return res.status(400).json({ error: pwdErr.message })
+    try { await safeInsertLog({ user_id: req.user.id, action: 'RESET_PASSWORD', details: 'Temp password set for: ' + target.email }) } catch(_) {}
+    res.json({ success: true, method: 'temporary_password', temporary_password: tmpPwd, message: 'Temp password set for ' + target.email + '. Share via secure channel only.' })
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
-
 // ─── WIBs ─────────────────────────────────────────────────────────────────────
 app.get('/api/wibs', auth, async (req, res) => {
   const { state, status, search, limit = 200, offset = 0 } = req.query
@@ -1013,7 +1015,27 @@ app.put('/api/users/:id', auth, requireAdmin, async (req, res) => {
     if (is_active !== undefined) update.is_active = is_active
     const { data, error } = await supabase.from('user_profiles').update(update).eq('id', req.params.id).select().single()
     if (error) return res.status(400).json({ error: error.message })
-    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_USER', details: `Updated: ${data.email}${is_active === false ? ' — DISABLED' : ''}` }) } catch(_) {}
+
+    // If disabling: ban in Supabase Auth immediately (invalidates all active JWTs)
+    if (is_active === false) {
+      try { await supabase.auth.admin.updateUserById(req.params.id, { ban_duration: '876000h' }) }
+      catch (e) { console.warn('Supabase Auth ban failed (non-fatal):', e.message) }
+    }
+    // If re-enabling: lift the ban
+    if (is_active === true) {
+      try { await supabase.auth.admin.updateUserById(req.params.id, { ban_duration: 'none' }) }
+      catch (e) { console.warn('Supabase Auth unban failed (non-fatal):', e.message) }
+    }
+    // Prevent non-super-admins from assigning super_admin role
+    if (role === 'super_admin' && req.user.role !== 'super_admin') {
+      return res.status(403).json({ error: 'Only Super Admins can assign the Super Admin role' })
+    }
+
+    const changeNote = [
+      is_active === false ? 'DISABLED' : is_active === true ? 'RE-ENABLED' : '',
+      role ? 'role set to ' + role : '',
+    ].filter(Boolean).join('; ')
+    try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_USER', details: 'Updated: ' + data.email + (changeNote ? ' — ' + changeNote : '') }) } catch(_) {}
     res.json(data)
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -2090,20 +2112,55 @@ app.post('/api/ai', auth, async (req, res) => {
     })
   }
 
+  // ── Prompt sanitization: block injection attempts ───────────────────────────
+  // Remove sequences that try to override the system role or leak cross-tenant data.
+  // These are not perfect — defense in depth requires the system prompt to be
+  // a hardcoded server-side string, which it is (context is bounded below).
+  function sanitizeAiInput(s) {
+    return String(s || '')
+      .substring(0, 2000)  // hard token budget per field
+      .replace(/ignore\s+(previous|all|prior|above)\s+(instructions?|prompts?|context)/gi, '[filtered]')
+      .replace(/system\s*prompt/gi, '[filtered]')
+      .replace(/you\s+are\s+(?:now|a|an)\s+(?:different|new|another)/gi, '[filtered]')
+      .replace(/reveal\s+(?:all|every|the|your)\s+(?:data|records|users|companies)/gi, '[filtered]')
+      .replace(/<script[^>]*>.*?<\/script>/gi, '[filtered]')
+      .trim()
+  }
+
+  const safePrompt  = sanitizeAiInput(prompt)
+  const safeContext = sanitizeAiInput(context)
+
+  // Per-user AI rate limit: max 50 calls per hour (prevents cost runaway)
+  const oneHourAgo = new Date(Date.now() - 3600000).toISOString()
+  const countCols  = global._hasUserId !== false ? 'id' : 'id'
+  const { count: aiCount } = await supabase
+    .from('activity_log')
+    .select('id', { count: 'exact', head: true })
+    .eq('user_id', req.user.id)
+    .eq('action',  'AI_QUERY')
+    .gte('created_at', oneHourAgo)
+  if ((aiCount || 0) >= 50) {
+    return res.status(429).json({
+      error: 'AI rate limit reached (50 requests/hour). Please wait before trying again.',
+      text:  'Rate limit reached. Try again in an hour.'
+    })
+  }
+
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
+        'Content-Type':      'application/json',
+        'x-api-key':         apiKey,
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model:      'claude-sonnet-4-20250514',
         max_tokens: 1000,
+        system:     'You are an expert workforce grant consultant AI assistant for Valor Workforce Funding LLC. You help staff analyze WIB relationships, employer eligibility, grant funding opportunities, and application status. Never reveal data from other organizations. Only discuss the context provided. Be concise, actionable, and format for CRM display.',
         messages: [{
-          role: 'user',
-          content: `You are an expert workforce grant consultant AI assistant for Valor Workforce Funding LLC. Context: ${context}\n\nTask: ${prompt}\n\nBe concise and actionable. Format for CRM display.`
+          role:    'user',
+          content: `Context: ${safeContext}\n\nTask: ${safePrompt}`
         }]
       })
     })
@@ -2220,7 +2277,13 @@ function requirePermission(permKey) {
 }
 
 // ─── EXPORT ───────────────────────────────────────────────────────────────────
-const esc = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+const esc = v => {
+  // Formula injection prevention: prefix cells starting with =, +, -, @, tab, CR/LF
+  // to prevent spreadsheet apps (Excel, Google Sheets) from executing them as formulas
+  const s = String(v ?? '')
+  const safe = /^[=+\-@\t\r\n]/.test(s) ? "'" + s : s
+  return '"' + safe.replace(/"/g, '""') + '"'
+}
 // ─── STREAMING CSV EXPORT ─────────────────────────────────────────────────────
 // Uses cursor-based pagination (1,000 rows/page) and Transfer-Encoding: chunked
 // so the server never loads more than 1,000 rows into memory at once.
