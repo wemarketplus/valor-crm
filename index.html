@@ -199,11 +199,21 @@
 
       loadWibViews()
 
-    } catch (err) {
-      console.error('Init failed:', err)
-    }
-  })
+  } catch (err) {
+    console.error('Init failed:', err)
+  }
+})
+</script>
 
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    console.log('CRM SAFE START')
+    loadWibViews()
+  } catch (err) {
+    console.error(err)
+  }
+})
 </script>
 
 </body>
