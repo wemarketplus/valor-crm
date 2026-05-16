@@ -963,9 +963,24 @@ app.get('/api/audit', auth, requireAdmin, async (req, res) => {
 
 // ─── USERS ────────────────────────────────────────────────────────────────────
 app.get('/api/users', auth, requireAdmin, async (req, res) => {
-  const { data, error } = await supabase.from('user_profiles').select('id,email,full_name,role,title,phone,is_active,created_at,last_login_at').order('created_at', { ascending: false })
+  const [{ data: users, error }, { data: assignments }] = await Promise.all([
+    supabase
+      .from('user_profiles')
+      .select('id,email,full_name,role,title,phone,is_active,created_at,last_login_at,territory_id')
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('user_territory_assignments')
+      .select('user_id,territory_id,territories(id,name)')
+  ])
   if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
+  // Attach territories array to each user
+  const byUser = {}
+  for (const a of (assignments || [])) {
+    if (!byUser[a.user_id]) byUser[a.user_id] = []
+    if (a.territories) byUser[a.user_id].push(a.territories)
+  }
+  const enriched = (users || []).map(u => ({ ...u, territories: byUser[u.id] || [] }))
+  res.json({ data: enriched })
 })
 
 app.post('/api/users', auth, requireAdmin, async (req, res) => {
@@ -2995,7 +3010,110 @@ app.delete('/api/territories/:id', auth, requireAdmin, async (req, res) => {
   res.json({ success: true })
 })
 
-// Assign a user to a territory (admin only)
+// ── GET /api/users/:id/territories — list territories for one user ──
+app.get('/api/users/:id/territories', auth, requireAdmin, async (req, res) => {
+  const { data, error } = await supabase
+    .from('user_territory_assignments')
+    .select('territory_id, territories(id,name,states,description)')
+    .eq('user_id', req.params.id)
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data: (data || []).map(r => r.territories) })
+})
+
+// ── PUT /api/users/:id/territories — replace full assignment set ──
+// Body: { territory_ids: ['uuid1', 'uuid2', ...] }
+// Passing [] clears all assignments.
+app.put('/api/users/:id/territories', auth, requireAdmin, async (req, res) => {
+  const { territory_ids = [] } = req.body
+  if (!Array.isArray(territory_ids)) {
+    return res.status(400).json({ error: 'territory_ids must be an array' })
+  }
+  // Atomic replace: delete existing then insert new
+  const { error: delErr } = await supabase
+    .from('user_territory_assignments')
+    .delete()
+    .eq('user_id', req.params.id)
+  if (delErr) return res.status(400).json({ error: delErr.message })
+  if (territory_ids.length > 0) {
+    const rows = territory_ids.map(tid => ({
+      user_id: req.params.id,
+      territory_id: tid,
+      assigned_by: req.user.id
+    }))
+    const { error: insErr } = await supabase
+      .from('user_territory_assignments')
+      .insert(rows)
+    if (insErr) return res.status(400).json({ error: insErr.message })
+  }
+  // Sync legacy single-value column for backwards compat
+  await supabase
+    .from('user_profiles')
+    .update({ territory_id: territory_ids[0] || null })
+    .eq('id', req.params.id)
+  try {
+    const tNames = territory_ids.length
+      ? (await supabase.from('territories').select('name').in('id', territory_ids)).data?.map(t => t.name).join(', ')
+      : 'none'
+    await safeInsertLog({
+      user_id: req.user.id,
+      action: 'ASSIGN_TERRITORIES',
+      record_type: 'user_profiles',
+      record_id: req.params.id,
+      details: `Assigned territories: ${tNames}`
+    })
+  } catch (_) {}
+  res.json({ success: true, territory_ids })
+})
+
+// ── GET /api/me/wib-view — current user's view pref + assigned territories ──
+app.get('/api/me/wib-view', auth, async (req, res) => {
+  const [{ data: pref }, { data: assignments }] = await Promise.all([
+    supabase.from('user_wib_view_prefs').select('view_mode').eq('user_id', req.user.id).single(),
+    supabase.from('user_territory_assignments').select('territory_id, territories(id,name)').eq('user_id', req.user.id)
+  ])
+  const territories = (assignments || []).map(a => a.territories).filter(Boolean)
+  res.json({
+    view_mode: pref?.view_mode || 'all',
+    territories
+  })
+})
+
+// ── PUT /api/me/wib-view — save current user's view preference ──
+app.put('/api/me/wib-view', auth, async (req, res) => {
+  const { view_mode } = req.body
+  if (!['all', 'my_territories'].includes(view_mode)) {
+    return res.status(400).json({ error: 'view_mode must be "all" or "my_territories"' })
+  }
+  const { error } = await supabase
+    .from('user_wib_view_prefs')
+    .upsert(
+      { user_id: req.user.id, view_mode, updated_at: new Date().toISOString() },
+      { onConflict: 'user_id' }
+    )
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true, view_mode })
+})
+
+// ── GET /api/wibs/my — WIBs filtered to caller's territories ──
+app.get('/api/wibs/my', auth, async (req, res) => {
+  const { search, limit = 1000 } = req.query
+  const { data: assignments } = await supabase
+    .from('user_territory_assignments')
+    .select('territory_id')
+    .eq('user_id', req.user.id)
+  const territoryIds = (assignments || []).map(a => a.territory_id)
+  let q = supabase
+    .from('wib_records')
+    .select('*, owner:user_profiles!owner_id(full_name,email)', { count: 'exact' })
+    .limit(Number(limit))
+  if (territoryIds.length > 0) q = q.in('territory_id', territoryIds)
+  if (search) q = q.ilike('wib_name', `%${search}%`)
+  const { data, error, count } = await q
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data, count })
+})
+
+// ── Backwards-compat: single territory assign on user ──
 app.put('/api/users/:id/territory', auth, requireAdmin, async (req, res) => {
   const { territory_id } = req.body
   const { data, error } = await supabase.from('user_profiles').update({ territory_id: territory_id || null }).eq('id', req.params.id).select('id,email,full_name,role,territory_id').single()
@@ -3003,7 +3121,7 @@ app.put('/api/users/:id/territory', auth, requireAdmin, async (req, res) => {
   res.json(data)
 })
 
-// Assign a WIB to a territory (admin only)
+// ── Backwards-compat: single territory assign on WIB ──
 app.put('/api/wibs/:id/territory', auth, requireAdmin, async (req, res) => {
   const { territory_id } = req.body
   const { data, error } = await supabase.from('wib_records').update({ territory_id: territory_id || null }).eq('id', req.params.id).select().single()
