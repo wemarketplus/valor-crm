@@ -879,7 +879,7 @@ function showModal(title,body,onSave=null,size=''){
   <div class="modal-overlay" onclick="handleOverlayClick(event)">
     <div class="modal ${size}" onclick="event.stopPropagation()">
       <div class="modal-hd">
-        <div class="modal-title">${title}</div>
+        <div class="modal-title">${escHtml(title)}</div>
         <button class="modal-close" onclick="closeModal()">✕</button>
       </div>
       <div class="modal-body" id="modal-body">${body}</div>
@@ -1117,7 +1117,7 @@ function renderApp(){
         <div class="sb-user">
           <div class="sb-avatar">${initials}</div>
           <div style="flex:1;min-width:0">
-            <div class="sb-user-name">${currentUser?.full_name||currentUser?.email}</div>
+            <div class="sb-user-name">${escHtml(currentUser?.full_name||currentUser?.email||'')}</div>
             <div class="sb-user-role">${roleLabel}</div>
           </div>
           <div class="sb-user-actions">
@@ -1979,7 +1979,7 @@ async function loadWibTabData(tab){
         const due=m.due_date?new Date(m.due_date):null,over=due&&!m.done&&due<now
         return`<div class="task-row">
           <div class="task-check${m.done?' done':''}" onclick="toggleTaskDB('${t.id}',${!!m.done})">✓</div>
-          <div style="flex:1"><div class="task-title-text${m.done?' done':''}">${title}</div>
+          <div style="flex:1"><div class="task-title-text${m.done?' done':''}">${escHtml(title)}</div>
             ${due?`<div class="task-due${over?' over':''}">${over?'⚠️ Overdue: ':'Due: '}${due.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>`:''}
           </div>
           <div class="row-actions"><button class="action-btn" onclick="toggleTaskDB('${t.id}',${!!m.done})">${m.done?'Reopen':'Done'}</button><button class="action-btn del" onclick="deleteTask('${t.id}')">Del</button></div>
@@ -2383,7 +2383,7 @@ function renderCompaniesTable(companies){
         <td>${companyStatusPill(c.status)}</td>
         <td>${starRating(c.rating)}</td>
         <td style="text-align:center">${c.is_25_pct_operator?'<span style="color:var(--green-t)">✓</span>':'<span style="color:var(--text4)">□</span>'}</td>
-        <td>${c.domain?`<a href="https://${escHtml(c.domain)}" target="_blank" class="cell-link" onclick="event.stopPropagation()">${escHtml(c.domain)}</a>`:'<span class="cell-dim">—</span>'}</td>
+        <td>${c.domain?`<a href="${escUrl(c.domain)}" target="_blank" class="cell-link" onclick="event.stopPropagation()">${escHtml(c.domain)}</a>`:'<span class="cell-dim">—</span>'}</td>
         <td class="cell-dim">${escHtml(c.supported_by||'—')}</td>
         <td class="cell-dim">${c.last_contact_date?fmtAgo(c.last_contact_date):'No contact'}</td>
         <td class="cell-dim">${fmtDate(c.created_at)}</td>
@@ -2481,7 +2481,7 @@ function renderCompanyProfile(){
           <div class="field-row"><span class="field-key">Contact Name</span><span class="field-val">${escHtml(c.primary_contact_name)||'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Email</span><span class="field-val">${c.primary_contact_email?`<a href="mailto:${escHtml(c.primary_contact_email)}" class="fv-link">${escHtml(c.primary_contact_email)}</a>`:'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Phone</span><span class="field-val">${c.primary_contact_phone?`<a href="tel:${escHtml(c.primary_contact_phone)}" class="fv-link">${escHtml(c.primary_contact_phone)}</a>`:'<span class="fv-empty">—</span>'}</span></div>
-          <div class="field-row"><span class="field-key">Website</span><span class="field-val">${c.domain?`<a href="https://${escHtml(c.domain)}" target="_blank" class="fv-link">🔗 ${escHtml(c.domain)}</a>`:'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Website</span><span class="field-val">${c.domain?`<a href="${escUrl(c.domain)}" target="_blank" class="fv-link">🔗 ${escHtml(c.domain)}</a>`:'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Short Name</span><span class="field-val">${escHtml(c.short_name)||'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Type</span><span class="field-val">${c.company_type||'<span class="fv-empty">—</span>'}</span></div>
         </div>
@@ -2647,7 +2647,7 @@ async function loadCompanyTabData(tab){
         const due=m.due_date?new Date(m.due_date):null,over=due&&!m.done&&due<now
         return`<div class="task-row">
           <div class="task-check${m.done?' done':''}" onclick="toggleTaskDB('${t.id}',${!!m.done})">✓</div>
-          <div style="flex:1"><div class="task-title-text${m.done?' done':''}">${title}</div>
+          <div style="flex:1"><div class="task-title-text${m.done?' done':''}">${escHtml(title)}</div>
             ${due?`<div class="task-due${over?' over':''}">${over?'⚠️ Overdue: ':'Due: '}${due.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>`:''}
           </div>
           <div class="row-actions"><button class="action-btn" onclick="toggleTaskDB('${t.id}',${!!m.done})">${m.done?'Reopen':'Done'}</button><button class="action-btn del" onclick="deleteTask('${t.id}')">Del</button></div>
