@@ -795,21 +795,47 @@ async function apiDownload(url){
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click();URL.revokeObjectURL(a.href)
 }
 
-async function apiAI(prompt){
+/**
+ * apiAI — calls the server-side AI proxy and returns sanitized text.
+ * The server handles prompt sanitization, rate limiting, and the system prompt.
+ * Here we sanitize the OUTPUT before it reaches innerHTML to prevent
+ * reflected XSS if an attacker-controlled system ever echoes back injection.
+ * @param {string} prompt — user's plain-text request
+ * @param {string} [context] — optional structured context (also sanitized server-side)
+ * @returns {string} — plain text response safe for insertion into innerHTML via escHtml
+ */
+async function apiAI(prompt, context) {
   try {
-    const d=await api('/api/ai','POST',{prompt,context:''})
-    if(d.error&&!d.text){
-      if(d.error.includes('ANTHROPIC_API_KEY')||d.error.includes('API_KEY')){
-        return '🔑 AI not configured yet.\n\nTo enable the AI Assistant:\n1. Go to your Render dashboard\n2. Open Environment Variables\n3. Add: ANTHROPIC_API_KEY = your-key-here\n4. Click Save & Redeploy'
-      }
-      return '⚠️ AI Error: '+(d.error||'Unknown error')
+    const d = await api('/api/ai', 'POST', { prompt, context: context || '' })
+
+    // API key not configured — show actionable setup instructions
+    if (d.error && (d.error.includes('ANTHROPIC_API_KEY') || d.error.includes('API_KEY') || d.text?.includes('ANTHROPIC_API_KEY'))) {
+      return '🔑 AI not configured.\n\nTo enable:\n1. Render Dashboard → Environment\n2. Add: ANTHROPIC_API_KEY = sk-ant-...\n3. Save & Redeploy (takes ~60s)'
     }
-    return d.text||'No response generated.'
-  } catch(e) {
-    if(e.message.includes('ANTHROPIC_API_KEY')||e.message.includes('API_KEY')){
-      return '🔑 AI not configured yet.\n\nTo enable the AI Assistant:\n1. Go to your Render dashboard\n2. Open Environment Variables\n3. Add: ANTHROPIC_API_KEY = your-key-here\n4. Click Save & Redeploy'
+
+    // Rate limit
+    if (d.error?.includes('rate limit') || d.status === 429) {
+      return '⏱ Rate limit reached (50 requests/hour). Please wait before trying again.'
     }
-    return '⚠️ AI connection failed: '+e.message
+
+    // Server-side error
+    if (d.error && !d.text) {
+      return '⚠️ AI Error: ' + escHtml(d.error || 'Unknown error')
+    }
+
+    // Return plain text — callers are responsible for rendering safely.
+    // Modal handlers use: el.innerHTML = '<div ...>' + escHtml(r) + '</div>'
+    // Chat handler uses: thinking.textContent = response  (safe by default)
+    return d.text || 'No response generated.'
+
+  } catch (e) {
+    if (e.message?.includes('ANTHROPIC_API_KEY') || e.message?.includes('API_KEY')) {
+      return '🔑 AI not configured.\n\nTo enable:\n1. Render Dashboard → Environment\n2. Add: ANTHROPIC_API_KEY = sk-ant-...\n3. Save & Redeploy'
+    }
+    if (e.status === 429) {
+      return '⏱ Rate limit reached. Please wait before trying again.'
+    }
+    return '⚠️ AI connection failed: ' + escHtml(e.message || 'Network error')
   }
 }
 
@@ -1112,6 +1138,7 @@ function renderApp(){
         ${sbi('revenue','💵','Revenue Tracker')}
         ${sbi('compliance','🛡','Compliance')}
         ${sbi('ai','🤖','AI Assistant')}
+          ${sbi('drive','📁','Files & Drive')}
       </div>
       <div class="sb-footer">
         <div class="sb-user">
@@ -1319,6 +1346,7 @@ async function loadPage(page){
     else if(page==='emails')pageEmails()
     else if(page==='chat')pageChat()
     else if(page==='ai')pageAIAssistant()
+    else if(page==='drive')pageDrive()
     else if(page==='auditlogs')await pageAuditLogs()
     else if(page==='reports')await pageReports()
     else if(page==='invoices')await pageInvoices()
@@ -2080,28 +2108,47 @@ async function aiAssistNote(textareaId){
 }
 
 function renderNoteCard(n){
-  const aircall=isAircallNote(n)
-  const content=getNoteContent(n)
-  const noteType=getNoteType(n)
-  const initials=(n.user?.full_name||n.user?.email||'?').slice(0,2).toUpperCase()
-  const timeAgo=n.created_at?fmtAgo(n.created_at):''
-  const meta=n.metadata||{}
+  const aircall = isAircallNote(n)
+  const content = getNoteContent(n)
+  const noteType = getNoteType(n)
+  const initials = (n.user?.full_name||n.user?.email||'?').slice(0,2).toUpperCase()
+  // Use explicit date+time instead of relative "X hours ago"
+  const noteDateTime = fmtNoteDateTime(n.created_at)
+  const meta = n.metadata || {}
+
   if(aircall){
+    // Format: "aircall/ May 15, 2026 at 3:47 PM" + duration and direction badges
+    const durationBadge = meta.duration
+      ? `<span style="background:var(--green-bg);color:var(--green-t);padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600;margin-left:6px">${meta.duration}m</span>`
+      : ''
+    const dirBadge = meta.direction
+      ? `<span style="background:var(--blue-bg);color:var(--blue-t);padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600;margin-left:4px">${meta.direction}</span>`
+      : ''
     return`<div class="aircall-card">
-      <div class="aircall-hd">📞 Aircall — ${escHtml(n.user?.full_name||'System')} · ${timeAgo}${meta.duration?' ('+meta.duration+'m)':''}</div>
-      <div style="font-size:11.5px;color:var(--text);line-height:1.65">${content.replace(/\n/g,'<br>')}</div>
-      ${meta.recording_url?`<a href="${meta.recording_url}" target="_blank" style="font-size:10.5px;color:var(--blue-t)">🔗 Recording</a>`:''}
+      <div class="aircall-hd" style="display:flex;align-items:center;flex-wrap:wrap;gap:2px">
+        <span style="font-size:11px">📞</span>
+        <span style="font-weight:700;color:var(--green-t);margin-right:2px">aircall/</span>
+        <span style="font-weight:400;color:var(--text2)">${escHtml(noteDateTime)}</span>
+        ${durationBadge}${dirBadge}
+        ${meta.recording_url?`<a href="${escUrl(meta.recording_url)}" target="_blank" style="font-size:9.5px;color:var(--blue-t);margin-left:auto;text-decoration:none">🔗 Recording</a>`:''}
+      </div>
+      <div style="font-size:11.5px;color:var(--text);line-height:1.65;margin-top:7px">${escHtml(content).replace(/\n/g,'<br>')}</div>
     </div>`
   }
+
+  // Standard note: "[Full Name]  May 15, 2026 at 3:47 PM"
+  const authorName = escHtml(n.user?.full_name||n.user?.email||'System')
   return`<div class="note-card">
     <div class="note-meta">
       <div class="note-av">${initials}</div>
-      <div class="note-author">${escHtml(n.user?.full_name||n.user?.email||'System')}</div>
-      <div class="note-time">${timeAgo}</div>
-      <span class="note-badge">${noteType}</span>
-      <button class="action-btn del" style="margin-left:auto" onclick="deleteNote('${n.id}')">✕</button>
+      <div>
+        <div class="note-author">${authorName}</div>
+        <div class="note-time">${escHtml(noteDateTime)}</div>
+      </div>
+      <span class="note-badge" style="margin-left:auto">${escHtml(noteType)}</span>
+      <button class="action-btn del" onclick="deleteNote('${n.id}')">✕</button>
     </div>
-    <div class="note-content">${content.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div>
+    <div class="note-content">${escHtml(content).replace(/\n/g,'<br>')}</div>
   </div>`
 }
 
@@ -2991,40 +3038,154 @@ function showNotifPane(pane,btn){
   if(pane==='notifs'){body.innerHTML='<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">No notifications</div>'}
 }
 
-function pageNotifications(){
-  setTopbar('Notifications','',`<button class="btn btn-sm" onclick="showToast('All marked read','success')">✓ Mark all read</button>`)
+/* ─── NOTIFICATION HELPERS ─────────────────────────────────────────────────── */
+// Global unread count — updated by loadNotificationBadge()
+window._notifUnread = 0
+
+// Fetch unread count and update sidebar badge
+async function loadNotificationBadge(){
+  try {
+    const data = await api('/api/notifications?limit=1&unread_only=true')
+    const count = data.unread_count || 0
+    window._notifUnread = count
+    const badge = document.getElementById('notif-badge')
+    if(badge){
+      badge.textContent = count > 0 ? (count > 99 ? '99+' : String(count)) : ''
+      badge.style.display = count > 0 ? 'inline-flex' : 'none'
+    }
+  } catch(_) {}
+}
+
+// Mark a single notification read then re-render
+async function markNotifRead(id){
+  try { await api('/api/notifications/' + id + '/read', 'PUT', {}) } catch(_) {}
+  pageNotifications()
+  loadNotificationBadge()
+}
+
+// Accept/deny an access request notification
+async function respondNotif(id, action){
+  try {
+    await api('/api/notifications/' + id + '/respond', 'POST', { action })
+    showToast(action === 'accept' ? 'Access granted' : 'Request denied', action === 'accept' ? 'success' : 'warn')
+  } catch(e) { showToast(e.message, 'error') }
+  pageNotifications()
+  loadNotificationBadge()
+}
+
+async function markAllNotifsRead(){
+  try { await api('/api/notifications/mark-all-read', 'POST', {}) } catch(_) {}
+  showToast('All marked read','success')
+  pageNotifications()
+  loadNotificationBadge()
+}
+
+// Called on login to subscribe to real-time notification pushes
+function subscribeToNotifications(){
+  if(!window._supabaseClient || window._notifSubscribed) return
+  window._notifSubscribed = true
+  window._supabaseClient
+    .channel('notifications-' + currentUser?.id)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'notifications',
+      filter: 'recipient_id=eq.' + currentUser?.id
+    }, payload => {
+      // Update badge without page reload
+      window._notifUnread = (window._notifUnread || 0) + 1
+      const badge = document.getElementById('notif-badge')
+      if(badge){
+        badge.textContent = window._notifUnread > 99 ? '99+' : String(window._notifUnread)
+        badge.style.display = 'inline-flex'
+      }
+      // If currently on notifications page, refresh it
+      if(currentPage === 'notifications') pageNotifications()
+      // Show a toast so user knows something arrived
+      const body = payload.new?.body || 'New notification'
+      showToast('🔔 ' + body.substring(0, 60), 'info')
+    })
+    .subscribe()
+}
+
+async function pageNotifications(){
+  setTopbar('Notifications','',`
+    <button class="btn btn-sm" onclick="markAllNotifsRead()">✓ Mark all read</button>`)
   clearViewbar()
-  document.getElementById('page-area').innerHTML=`
+
+  const area = document.getElementById('page-area')
+  area.innerHTML = '<div class="loading">⏳ Loading notifications...</div>'
+
+  let notifs = [], unread = 0, actSummary = {}
+  try {
+    const data = await api('/api/notifications?limit=50')
+    notifs = data.data || []
+    unread = data.unread_count || 0
+    actSummary = data.activity_summary || {}
+  } catch(e) {
+    area.innerHTML = '<div class="alert alert-error">Could not load notifications: ' + escHtml(e.message) + '</div>'
+    return
+  }
+
+  const requests  = notifs.filter(n => n.type === 'access_request')
+  const general   = notifs.filter(n => n.type !== 'access_request')
+
+  function renderNotifItem(n){
+    const initials = (n.sender_name || '?').charAt(0).toUpperCase()
+    const colours  = { access_request:'#3b82f6', task_assigned:'#8b5cf6', mention:'#ec4899', system:'#6b7280' }
+    const c = colours[n.type] || '#6b7280'
+    const isRequest = n.type === 'access_request'
+    return `<div class="notif-item ${n.is_read ? '' : 'unread'}" id="notif-${n.id}">
+      <div class="notif-av" style="background:${c}22;color:${c}">${escHtml(initials)}</div>
+      <div style="flex:1">
+        <div class="notif-text">${escHtml(n.body || n.title || '')}</div>
+        <div class="notif-time">${fmtNoteDateTime(n.created_at)}</div>
+        ${isRequest ? `<div style="display:flex;gap:5px;margin-top:6px">
+          <button class="btn btn-xs btn-blue" onclick="respondNotif('${n.id}','accept')">Accept</button>
+          <button class="btn btn-xs" onclick="respondNotif('${n.id}','deny')">Deny</button>
+        </div>` : `<div style="margin-top:4px">
+          <button class="btn btn-xs btn-ghost" onclick="markNotifRead('${n.id}')">Mark read</button>
+        </div>`}
+      </div>
+    </div>`
+  }
+
+  const emptyRequests  = '<div style="padding:20px;text-align:center;color:var(--text3);font-size:11.5px">No pending requests</div>'
+  const emptyGeneral   = '<div style="padding:20px;text-align:center;color:var(--text3);font-size:11.5px">No notifications yet</div>'
+
+  area.innerHTML = `
   <div class="g2">
     <div class="att-wrap">
       <div class="att-toolbar"><div class="card-title">🔔 Notifications & Requests</div></div>
       <div style="display:flex;border-bottom:.5px solid var(--border)">
-        <button class="rtab" style="padding:8px 14px" onclick="document.querySelectorAll('.rtab').forEach(t=>t.classList.remove('active'));this.classList.add('active')">Notifications (0)</button>
-        <button class="rtab active" onclick="document.querySelectorAll('.rtab').forEach(t=>t.classList.remove('active'));this.classList.add('active')">Requests (3)</button>
+        <button class="rtab" id="ntab-general" style="padding:8px 14px" onclick="document.querySelectorAll('.ntab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('npane-general').style.display='';document.getElementById('npane-requests').style.display='none'">
+          Notifications (${general.length})
+        </button>
+        <button class="ntab rtab active" id="ntab-requests" onclick="document.querySelectorAll('.ntab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.getElementById('npane-requests').style.display='';document.getElementById('npane-general').style.display='none'">
+          Requests (${requests.length})
+        </button>
       </div>
-      ${[
-        {i:'S',c:'#3b82f6',t:'Samantha Orer is requesting access to the email Re: Incumbent Workforce Training.',tm:'about 20 hours ago'},
-        {i:'S',c:'#3b82f6',t:'Samantha Orer is requesting access to the email RE: Incumbent Workforce Training.',tm:'about 20 hours ago'},
-        {i:'V',c:'#ec4899',t:'Virginia Webb is requesting access to the email IWT Training application - San Diego Workforce Partnership.',tm:'4 days ago'},
-      ].map(n=>`<div class="notif-item unread">
-        <div class="notif-av" style="background:${n.c}22;color:${n.c}">${n.i}</div>
-        <div><div class="notif-text">${n.t}</div><div class="notif-time">${n.tm}</div>
-        <div style="display:flex;gap:5px;margin-top:6px">
-          <button class="btn btn-xs btn-blue" onclick="showToast('Access granted','success')">Accept</button>
-          <button class="btn btn-xs" onclick="showToast('Access denied','warn');this.closest('.notif-item').style.opacity='0.4'">Deny</button>
-        </div></div>
-      </div>`).join('')}
+      <div id="npane-requests">
+        ${requests.length ? requests.map(renderNotifItem).join('') : emptyRequests}
+      </div>
+      <div id="npane-general" style="display:none">
+        ${general.length ? general.map(renderNotifItem).join('') : emptyGeneral}
+      </div>
     </div>
     <div class="card">
       <div class="card-hd"><div class="card-title">📊 Activity Summary</div></div>
       <div class="card-body">
-        <div class="stat-row"><span class="stat-label">New notes this week</span><span class="stat-value" id="notif-notes">—</span></div>
-        <div class="stat-row"><span class="stat-label">Tasks completed</span><span class="stat-value" id="notif-tasks">—</span></div>
-        <div class="stat-row"><span class="stat-label">WIBs contacted</span><span class="stat-value">—</span></div>
-        <div class="stat-row"><span class="stat-label">Applications submitted</span><span class="stat-value">—</span></div>
+        <div class="stat-row"><span class="stat-label">New notes this week</span><span class="stat-value">${actSummary.notes_this_week ?? '—'}</span></div>
+        <div class="stat-row"><span class="stat-label">Tasks completed</span><span class="stat-value">${actSummary.tasks_completed ?? '—'}</span></div>
+        <div class="stat-row"><span class="stat-label">WIBs contacted</span><span class="stat-value">${actSummary.wibs_contacted ?? '—'}</span></div>
+        <div class="stat-row"><span class="stat-label">Applications submitted</span><span class="stat-value">${actSummary.apps_submitted ?? '—'}</span></div>
       </div>
     </div>
   </div>`
+
+  // Mark first tab correct class
+  document.getElementById('ntab-requests')?.classList.add('ntab')
+  document.getElementById('ntab-general')?.classList.add('ntab')
 }
 
 /* ═══════════════════════════════════════════════════
@@ -3361,67 +3522,213 @@ async function sendAIMessage(){
   const input=document.getElementById('ai-chat-input');if(!input)return
   const text=input.value.trim();if(!text)return
   const msgs=document.getElementById('ai-chat-msgs');if(!msgs)return
-  msgs.innerHTML+=`<div class="ai-msg user">${text}</div>`
+  msgs.innerHTML+=`<div class="ai-msg user">${escHtml(text)}</div>`
   input.value=''
-  msgs.innerHTML+=`<div class="ai-msg bot" id="ai-thinking">⏳ Thinking...</div>`
+  msgs.innerHTML+=`<div class="ai-msg bot" id="ai-thinking"><span class="ai-thinking-dots">⏳ Thinking</span></div>`
   msgs.scrollTop=msgs.scrollHeight
   const response=await apiAI(text)
   const thinking=document.getElementById('ai-thinking')
-  if(thinking)thinking.innerHTML=response.replace(/\n/g,'<br>')
+
+  // Detect API key missing on first real call
+  if(response.startsWith('🔑')) {
+    window._aiKeyMissing=true
+    showAiKeyBanner()
+  }
+
+  if(thinking) {
+    const alertClass = response.startsWith('🔑') ? 'ai-msg bot ai-warn' : response.startsWith('⚠️') || response.startsWith('⏱') ? 'ai-msg bot ai-error' : 'ai-msg bot'
+    thinking.className = alertClass
+    thinking.innerHTML = escHtml(response).replace(/\n/g,'<br>')
+  }
   msgs.scrollTop=msgs.scrollHeight
 }
 
+function showAiKeyBanner(){
+  const existing = document.getElementById('ai-key-banner')
+  if(existing) return  // already showing
+  const chat = document.getElementById('ai-chat-msgs')
+  if(!chat) return
+  const banner = document.createElement('div')
+  banner.id = 'ai-key-banner'
+  banner.style.cssText = 'background:var(--amber-bg,#fffbeb);border:.5px solid var(--amber,#d97706);border-radius:8px;padding:12px 14px;margin:8px 0;font-size:11.5px;line-height:1.6'
+  banner.innerHTML = '<strong>🔑 AI Assistant not configured</strong><br>Add your Anthropic API key in Render:<br>1. Go to <strong>Render Dashboard → your service → Environment</strong><br>2. Add variable: <code style="background:rgba(0,0,0,.07);padding:1px 4px;border-radius:3px">ANTHROPIC_API_KEY</code> = your key<br>3. Click <strong>Save Changes</strong> — Render will redeploy automatically (~60s)'
+  chat.appendChild(banner)
+  chat.scrollTop = chat.scrollHeight
+}
+
 /* ─── AI Quick Action Modals ─── */
-function researchWIB(){showModal('🏛 Research a WIB',`<div class="form-row form-full"><div class="form-group"><div class="form-label">WIB Name or State</div><input id="rw-name" placeholder="TX - Texas Workforce Investment Council..."></div></div><div id="rw-result"></div>`,async()=>{const n=document.getElementById('rw-name').value;const el=document.getElementById('rw-result');el.innerHTML='<div class="loading">⏳ Researching...</div>';const r=await apiAI(`Research this Workforce Investment Board (WIB) and provide: official website, contact information, IWT program details, funding amounts, eligibility requirements, and current program status: ${n}`);el.innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
-function draftEmail(){showModal('📧 Draft Outreach Email',`<div class="form-row form-full"><div class="form-group"><div class="form-label">WIB or employer context</div><textarea id="de-ctx" rows="4" placeholder="WIB: TX Workforce Commission&#10;Contact: John Smith, Director&#10;Purpose: Introduce IWT grant opportunities..."></textarea></div></div><div id="de-result"></div>`,async()=>{const c=document.getElementById('de-ctx').value;const el=document.getElementById('de-result');el.innerHTML='<div class="loading">⏳ Drafting...</div>';const r=await apiAI(`Draft a professional outreach email for a workforce grant consultant. Context: ${c}. Make it concise, compelling, and include a clear call to action.`);el.innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
-function summarizeCall(){showModal('📞 Summarize Call',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste call notes or bullet points</div><textarea id="sc-notes" rows="6" placeholder="• Spoke with IWT coordinator&#10;• Program open until June 30&#10;• Max $50K per employer..."></textarea></div></div><div id="sc-result"></div>`,async()=>{const n=document.getElementById('sc-notes').value;const el=document.getElementById('sc-result');el.innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Turn these call notes into a professional CRM note with: Summary, Key Points, Follow-up Tasks, and Next Steps: ${n}`);el.innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
-function analyzeEmployer(){showModal('🏢 Employer Eligibility Analysis',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Employer Details</div><textarea id="ea-details" rows="4" placeholder="Company: Heritage Senior Living&#10;Employees: 45&#10;Industry: Skilled Nursing&#10;State: TX..."></textarea></div></div><div id="ea-result"></div>`,async()=>{const d=document.getElementById('ea-details').value;const el=document.getElementById('ea-result');el.innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`Analyze if this employer likely qualifies for IWT/incumbent worker training grants. Provide: eligibility assessment, recommended approach, potential award amounts, and next steps: ${d}`);el.innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
-function draftApplication(){showModal('📋 Application Assistant',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Employer & WIB context</div><textarea id="da-ctx" rows="4" placeholder="Employer: Heritage Senior Living, 45 CNAs&#10;WIB: TX Workforce Commission, $40K max..."></textarea></div></div><div id="da-result"></div>`,async()=>{const c=document.getElementById('da-ctx').value;const el=document.getElementById('da-result');el.innerHTML='<div class="loading">⏳ Drafting...</div>';const r=await apiAI(`Help draft key sections of an IWT grant application: employer need statement, training plan description, expected outcomes, and cost breakdown. Context: ${c}`);el.innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
-function checkCompliance(){showModal('🛡 Compliance Check',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Grant situation description</div><textarea id="cc-ctx" rows="4" placeholder="Grant award: $45,000&#10;Training completion: April 30&#10;Documents: attendance, payroll&#10;Missing: final report..."></textarea></div></div><div id="cc-result"></div>`,async()=>{const c=document.getElementById('cc-ctx').value;const el=document.getElementById('cc-result');el.innerHTML='<div class="loading">⏳ Checking...</div>';const r=await apiAI(`Review this grant compliance situation. Identify risks, missing items, urgent actions, and deadlines: ${c}`);el.innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
-function recommendNext(){showModal('🎯 Recommend Next Steps',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Current situation</div><textarea id="rn-ctx" rows="4" placeholder="WIB: TX Gulf Coast, contacted 2 weeks ago&#10;Status: Follow Up Needed&#10;Blockers: Director hasn't responded..."></textarea></div></div><div id="rn-result"></div>`,async()=>{const c=document.getElementById('rn-ctx').value;const el=document.getElementById('rn-result');el.innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`As a workforce grant consultant, recommend specific next actions to advance this relationship and close the deal: ${c}`);el.innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
-function generateMeetingNotes(){showModal('📝 Meeting Notes',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste rough notes or bullet points</div><textarea id="mn-notes" rows="5" placeholder="• Met with WIB director&#10;• Discussed Q3 cycle&#10;• They want 10 employer referrals&#10;• Decision by June 1..."></textarea></div></div><div id="mn-result"></div>`,async()=>{const n=document.getElementById('mn-notes').value;const el=document.getElementById('mn-result');el.innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Convert these rough notes into professional meeting notes. Format with: Date, Attendees, Key Discussion Points, Decisions Made, Action Items: ${n}`);el.innerHTML=`<div class="alert alert-info" style="white-space:pre-wrap;margin-top:10px">${r}</div>`;return false})}
+function researchWIB(){showModal('🏛 Research a WIB',`<div class="form-row form-full"><div class="form-group"><div class="form-label">WIB Name or State</div><input id="rw-name" placeholder="TX - Texas Workforce Investment Council..."></div></div><div id="rw-result"></div>`,async()=>{const n=document.getElementById('rw-name').value;const el=document.getElementById('rw-result');el.innerHTML='<div class="loading">⏳ Researching...</div>';const r=await apiAI(`Research this Workforce Investment Board (WIB) and provide: official website, contact information, IWT program details, funding amounts, eligibility requirements, and current program status: ${n}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+function draftEmail(){showModal('📧 Draft Outreach Email',`<div class="form-row form-full"><div class="form-group"><div class="form-label">WIB or employer context</div><textarea id="de-ctx" rows="4" placeholder="WIB: TX Workforce Commission&#10;Contact: John Smith, Director&#10;Purpose: Introduce IWT grant opportunities..."></textarea></div></div><div id="de-result"></div>`,async()=>{const c=document.getElementById('de-ctx').value;const el=document.getElementById('de-result');el.innerHTML='<div class="loading">⏳ Drafting...</div>';const r=await apiAI(`Draft a professional outreach email for a workforce grant consultant. Context: ${c}. Make it concise, compelling, and include a clear call to action.`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+function summarizeCall(){showModal('📞 Summarize Call',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste call notes or bullet points</div><textarea id="sc-notes" rows="6" placeholder="• Spoke with IWT coordinator&#10;• Program open until June 30&#10;• Max $50K per employer..."></textarea></div></div><div id="sc-result"></div>`,async()=>{const n=document.getElementById('sc-notes').value;const el=document.getElementById('sc-result');el.innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Turn these call notes into a professional CRM note with: Summary, Key Points, Follow-up Tasks, and Next Steps: ${n}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+function analyzeEmployer(){showModal('🏢 Employer Eligibility Analysis',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Employer Details</div><textarea id="ea-details" rows="4" placeholder="Company: Heritage Senior Living&#10;Employees: 45&#10;Industry: Skilled Nursing&#10;State: TX..."></textarea></div></div><div id="ea-result"></div>`,async()=>{const d=document.getElementById('ea-details').value;const el=document.getElementById('ea-result');el.innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`Analyze if this employer likely qualifies for IWT/incumbent worker training grants. Provide: eligibility assessment, recommended approach, potential award amounts, and next steps: ${d}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+function draftApplication(){showModal('📋 Application Assistant',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Employer & WIB context</div><textarea id="da-ctx" rows="4" placeholder="Employer: Heritage Senior Living, 45 CNAs&#10;WIB: TX Workforce Commission, $40K max..."></textarea></div></div><div id="da-result"></div>`,async()=>{const c=document.getElementById('da-ctx').value;const el=document.getElementById('da-result');el.innerHTML='<div class="loading">⏳ Drafting...</div>';const r=await apiAI(`Help draft key sections of an IWT grant application: employer need statement, training plan description, expected outcomes, and cost breakdown. Context: ${c}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+function checkCompliance(){showModal('🛡 Compliance Check',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Grant situation description</div><textarea id="cc-ctx" rows="4" placeholder="Grant award: $45,000&#10;Training completion: April 30&#10;Documents: attendance, payroll&#10;Missing: final report..."></textarea></div></div><div id="cc-result"></div>`,async()=>{const c=document.getElementById('cc-ctx').value;const el=document.getElementById('cc-result');el.innerHTML='<div class="loading">⏳ Checking...</div>';const r=await apiAI(`Review this grant compliance situation. Identify risks, missing items, urgent actions, and deadlines: ${c}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+function recommendNext(){showModal('🎯 Recommend Next Steps',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Current situation</div><textarea id="rn-ctx" rows="4" placeholder="WIB: TX Gulf Coast, contacted 2 weeks ago&#10;Status: Follow Up Needed&#10;Blockers: Director hasn't responded..."></textarea></div></div><div id="rn-result"></div>`,async()=>{const c=document.getElementById('rn-ctx').value;const el=document.getElementById('rn-result');el.innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`As a workforce grant consultant, recommend specific next actions to advance this relationship and close the deal: ${c}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+function generateMeetingNotes(){showModal('📝 Meeting Notes',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste rough notes or bullet points</div><textarea id="mn-notes" rows="5" placeholder="• Met with WIB director&#10;• Discussed Q3 cycle&#10;• They want 10 employer referrals&#10;• Decision by June 1..."></textarea></div></div><div id="mn-result"></div>`,async()=>{const n=document.getElementById('mn-notes').value;const el=document.getElementById('mn-result');el.innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Convert these rough notes into professional meeting notes. Format with: Date, Attendees, Key Discussion Points, Decisions Made, Action Items: ${n}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
 
 /* ═══════════════════════════════════════════════════
    CHAT
 ═══════════════════════════════════════════════════ */
-function pageChat(){
-  setTopbar('Internal Chat','Team Communication','')
-  clearViewbar()
-  document.getElementById('page-area').innerHTML=`
-  <div style="display:flex;gap:0;height:calc(100vh - ${44}px);margin:-14px -16px">
-    <div style="width:200px;border-right:.5px solid var(--border);background:#fff;padding:8px 0">
-      <div style="padding:6px 12px;font-size:9px;color:var(--text3);letter-spacing:.9px;text-transform:uppercase;font-weight:600">Channels</div>
-      ${['general','wib-outreach','applications','compliance','announcements'].map(ch=>`<div class="sb-item${ch===chatChannel?' active':''}" onclick="switchChatChannel('${ch}')"># ${ch}</div>`).join('')}
-      <div style="padding:6px 12px;margin-top:8px;font-size:9px;color:var(--text3);letter-spacing:.9px;text-transform:uppercase;font-weight:600">Direct Messages</div>
-      ${(window._users||[]).slice(0,5).map(u=>`<div class="sb-item">
-        <span style="width:14px;height:14px;border-radius:50%;background:var(--green-bg);display:inline-block;margin-right:2px"></span>
-        ${escHtml(u.full_name||u.email)}
-      </div>`).join('')}
-    </div>
-    <div style="flex:1;display:flex;flex-direction:column">
-      <div style="padding:10px 14px;border-bottom:.5px solid var(--border);font-size:13px;font-weight:600"># ${chatChannel}</div>
-      <div id="chat-messages" style="flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:8px">
-        <div class="ai-msg bot" style="max-width:80%">Welcome to #${chatChannel}! This channel is for team coordination on workforce grant initiatives.</div>
+/* ─── LIVE CHAT ──────────────────────────────────────────────────────────────
+   Messages persist to chat_messages table and broadcast via Supabase Realtime.
+   All users on the same channel receive new messages without page refresh.
+─────────────────────────────────────────────────────────────────────────── */
+let _chatRealtimeChannel = null  // holds the active Supabase Realtime subscription
+
+function renderChatMessage(msg, isMine){
+  const initials = (msg.sender_name || '?').slice(0,2).toUpperCase()
+  const time = fmtNoteDateTime(msg.created_at)
+  if(isMine){
+    return `<div class="msg-wrap mine">
+      <div class="msg-av" style="background:var(--blue-bg);color:var(--blue-t)">${escHtml(initials)}</div>
+      <div>
+        <div class="msg-bubble msg-mine">${escHtml(msg.content)}</div>
+        <div class="msg-meta">${escHtml(time)}</div>
       </div>
-      <div style="padding:10px 14px;border-top:.5px solid var(--border);display:flex;gap:8px">
-        <input id="chat-input" placeholder="Message #${chatChannel}..." style="flex:1" onkeydown="if(event.key==='Enter')sendChatMsg()">
-        <button class="btn btn-primary" onclick="sendChatMsg()">Send</button>
-      </div>
+    </div>`
+  }
+  return `<div class="msg-wrap">
+    <div class="msg-av" style="background:var(--orange-bg);color:var(--orange-t)">${escHtml(initials)}</div>
+    <div>
+      <div style="font-size:10px;font-weight:600;color:var(--text2);margin-bottom:2px">${escHtml(msg.sender_name||'Team Member')}</div>
+      <div class="msg-bubble">${escHtml(msg.content)}</div>
+      <div class="msg-meta">${escHtml(time)}</div>
     </div>
   </div>`
 }
 
-function switchChatChannel(ch){chatChannel=ch;pageChat()}
-function sendChatMsg(){
-  const input=document.getElementById('chat-input');if(!input)return
-  const text=input.value.trim();if(!text)return
-  const msgs=document.getElementById('chat-messages');if(!msgs)return
-  const initials=(currentUser?.full_name||'?').slice(0,2).toUpperCase()
-  msgs.innerHTML+=`<div class="msg-wrap mine">
-    <div class="msg-av" style="background:var(--blue-bg);color:var(--blue-t)">${initials}</div>
-    <div><div class="msg-bubble msg-mine">${text}</div><div class="msg-meta">Just now</div></div>
+function appendChatMessage(msg){
+  const msgs = document.getElementById('chat-messages')
+  if(!msgs) return
+  const isMine = msg.sender_id === currentUser?.id
+  msgs.insertAdjacentHTML('beforeend', renderChatMessage(msg, isMine))
+  msgs.scrollTop = msgs.scrollHeight
+}
+
+async function pageChat(){
+  setTopbar('Internal Chat','Team Communication','')
+  clearViewbar()
+
+  // Unsubscribe from previous channel if switching
+  if(_chatRealtimeChannel){
+    try { _chatRealtimeChannel.unsubscribe() } catch(_){}
+    _chatRealtimeChannel = null
+  }
+
+  const CHANNELS = ['general','wib-outreach','applications','compliance','announcements']
+  const dmUsers  = (window._users||[]).filter(u=>u.id!==currentUser?.id).slice(0,8)
+
+  document.getElementById('page-area').innerHTML = `
+  <div style="display:flex;gap:0;height:calc(100vh - 44px);margin:-14px -16px">
+    <!-- Sidebar -->
+    <div style="width:200px;border-right:.5px solid var(--border);background:var(--bg1);padding:8px 0;flex-shrink:0">
+      <div style="padding:6px 12px;font-size:9px;color:var(--text3);letter-spacing:.9px;text-transform:uppercase;font-weight:600">Channels</div>
+      ${CHANNELS.map(ch=>`
+        <div class="sb-item${ch===chatChannel?' active':''}" onclick="switchChatChannel('${ch}')" id="ch-${ch}">
+          <span style="color:var(--text3);margin-right:4px">#</span>${ch}
+        </div>`).join('')}
+      <div style="padding:6px 12px;margin-top:8px;font-size:9px;color:var(--text3);letter-spacing:.9px;text-transform:uppercase;font-weight:600">Direct Messages</div>
+      ${dmUsers.map(u=>`
+        <div class="sb-item" onclick="switchChatChannel('dm-${u.id}')">
+          <span style="width:7px;height:7px;border-radius:50%;background:var(--green);display:inline-block;margin-right:6px"></span>
+          ${escHtml((u.full_name||u.email).split(' ')[0])}
+        </div>`).join('')}
+    </div>
+    <!-- Main chat area -->
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+      <div style="padding:10px 14px;border-bottom:.5px solid var(--border);font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px">
+        <span style="color:var(--text3)">#</span>${chatChannel}
+        <span style="font-size:10px;color:var(--text3);font-weight:400;margin-left:4px">Team channel</span>
+      </div>
+      <div id="chat-messages" style="flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:6px">
+        <div style="text-align:center;font-size:10.5px;color:var(--text3);padding:12px 0">Loading messages...</div>
+      </div>
+      <div style="padding:10px 14px;border-top:.5px solid var(--border);display:flex;gap:8px;align-items:flex-end">
+        <textarea id="chat-input" placeholder="Message #${chatChannel}... (Enter to send, Shift+Enter for newline)"
+          style="flex:1;resize:none;border:.5px solid var(--border1);border-radius:8px;padding:8px 10px;font-size:12px;font-family:inherit;outline:none;min-height:36px;max-height:120px"
+          rows="1"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMsg()}"
+          oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
+        <button class="btn btn-primary" onclick="sendChatMsg()" style="flex-shrink:0">Send</button>
+      </div>
+    </div>
   </div>`
-  input.value='';msgs.scrollTop=msgs.scrollHeight
+
+  // Load recent message history from DB
+  try {
+    const data = await api('/api/chat/' + encodeURIComponent(chatChannel) + '?limit=50')
+    const msgs = document.getElementById('chat-messages')
+    if(!msgs) return
+    const history = (data.data || []).reverse()  // oldest first
+    if(!history.length){
+      msgs.innerHTML = `<div style="text-align:center;font-size:10.5px;color:var(--text3);padding:20px 0">
+        No messages yet in #${chatChannel}. Be the first to say something!
+      </div>`
+    } else {
+      msgs.innerHTML = history.map(m => renderChatMessage(m, m.sender_id===currentUser?.id)).join('')
+      msgs.scrollTop = msgs.scrollHeight
+    }
+  } catch(e) {
+    const msgs = document.getElementById('chat-messages')
+    if(msgs) msgs.innerHTML = `<div style="text-align:center;color:var(--text3);padding:20px">
+      <div style="font-size:12px;margin-bottom:6px">Chat history unavailable</div>
+      <div style="font-size:10.5px">${escHtml(e.message)}</div>
+      <div style="font-size:10px;margin-top:8px;color:var(--text4)">Run the chat SQL migration to enable persistent messages</div>
+    </div>`
+  }
+
+  // Subscribe to real-time messages on this channel via Supabase Realtime
+  if(window._supabaseClient){
+    _chatRealtimeChannel = window._supabaseClient
+      .channel('chat-' + chatChannel)
+      .on('postgres_changes', {
+        event:  'INSERT',
+        schema: 'public',
+        table:  'chat_messages',
+        filter: 'channel=eq.' + chatChannel
+      }, payload => {
+        // Skip if it's our own message (already shown optimistically)
+        if(payload.new?.sender_id !== currentUser?.id){
+          appendChatMessage(payload.new)
+        }
+      })
+      .subscribe()
+  }
+}
+
+function switchChatChannel(ch){
+  chatChannel = ch
+  pageChat()
+}
+
+async function sendChatMsg(){
+  const input = document.getElementById('chat-input')
+  if(!input) return
+  const text = input.value.trim()
+  if(!text) return
+  input.value = ''
+  input.style.height = '36px'
+
+  // Optimistic UI — show message immediately before server confirms
+  const optimisticMsg = {
+    id:          'optimistic-' + Date.now(),
+    channel:     chatChannel,
+    sender_id:   currentUser?.id,
+    sender_name: currentUser?.full_name || currentUser?.email || 'You',
+    content:     text,
+    created_at:  new Date().toISOString()
+  }
+  appendChatMessage(optimisticMsg)
+
+  // Persist to DB — other users receive it via Supabase Realtime subscription
+  try {
+    await api('/api/chat/' + encodeURIComponent(chatChannel), 'POST', { content: text })
+  } catch(e) {
+    showToast('Message failed to send: ' + e.message, 'error')
+    // Remove the optimistic message on failure
+    const el = document.getElementById('optimistic-' + optimisticMsg.id.replace('optimistic-',''))
+    if(el) el.remove()
+  }
 }
 
 /* ═══════════════════════════════════════════════════
@@ -3447,6 +3754,331 @@ async function pageTraining(){
   setTopbar('Training Providers','')
   document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🎓</div><div class="empty-text">Training Providers</div><div class="empty-sub">Manage approved training providers and curricula</div></div>`
 }
+
+/* ═══════════════════════════════════════════════════
+   GOOGLE DRIVE MODULE
+   OAuth 2.0 flow: user authorizes → tokens stored in DB
+   Server proxies all Drive API calls — tokens never hit frontend
+═══════════════════════════════════════════════════ */
+async function pageDrive(){
+  setTopbar('Files & Documents','Google Drive Integration',`
+    <button class="btn btn-primary" onclick="openDriveUpload()">⬆ Upload File</button>`)
+  clearViewbar()
+  const area = document.getElementById('page-area')
+  area.innerHTML = '<div class="loading">⏳ Checking Drive connection...</div>'
+
+  // Check if user has authorized Google Drive
+  let driveStatus
+  try {
+    driveStatus = await api('/api/drive/status')
+  } catch(e) {
+    area.innerHTML = `<div class="alert alert-error">Drive status check failed: ${escHtml(e.message)}</div>`
+    return
+  }
+
+  if(!driveStatus.connected){
+    // Show OAuth connect prompt
+    area.innerHTML = `
+    <div style="max-width:520px;margin:40px auto;text-align:center">
+      <div style="font-size:48px;margin-bottom:16px">📁</div>
+      <div style="font-size:18px;font-weight:700;margin-bottom:8px">Connect Google Drive</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:24px;line-height:1.7">
+        Connect your Google account to store and manage grant documents, 
+        application files, contracts, and compliance records directly inside the CRM.
+        We request access only to files created by or opened with this app.
+      </div>
+      <div style="background:var(--bg2);border:.5px solid var(--border);border-radius:10px;padding:16px;margin-bottom:24px;text-align:left">
+        <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">What we can access:</div>
+        ${['View and manage files you open with this app','Create and organize folders for grant documents','Upload application files and compliance records','Share specific files with team members'].map(s=>`
+          <div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:11.5px;color:var(--text)">
+            <span style="color:var(--green-t)">✓</span>${escHtml(s)}
+          </div>`).join('')}
+        <div style="margin-top:8px;padding-top:8px;border-top:.5px solid var(--border);font-size:10.5px;color:var(--text3)">
+          We do NOT access your personal Drive files, Gmail, or other Google services.
+        </div>
+      </div>
+      <button class="btn btn-primary" style="font-size:13px;padding:10px 24px" onclick="connectGoogleDrive()">
+        🔗 Connect Google Drive
+      </button>
+      <div style="margin-top:12px;font-size:10.5px;color:var(--text3)">
+        Requires a Google account. You can disconnect at any time in Settings.
+      </div>
+    </div>`
+    return
+  }
+
+  // Drive is connected — show file browser
+  window._driveFolder = window._driveFolder || 'root'
+  await renderDriveFiles(window._driveFolder)
+}
+
+async function renderDriveFiles(folderId){
+  const area = document.getElementById('page-area')
+  area.innerHTML = '<div class="loading">⏳ Loading files...</div>'
+
+  let files, breadcrumb
+  try {
+    const data = await api('/api/drive/files?folder_id=' + encodeURIComponent(folderId))
+    files = data.files || []
+    breadcrumb = data.breadcrumb || []
+  } catch(e){
+    area.innerHTML = `<div class="alert alert-error">Could not load Drive files: ${escHtml(e.message)}</div>`
+    return
+  }
+
+  const iconFor = (mimeType) => {
+    if(!mimeType) return '📄'
+    if(mimeType.includes('folder'))         return '📁'
+    if(mimeType.includes('spreadsheet') || mimeType.includes('excel')) return '📊'
+    if(mimeType.includes('document') || mimeType.includes('word'))     return '📝'
+    if(mimeType.includes('pdf'))            return '📕'
+    if(mimeType.includes('presentation') || mimeType.includes('powerpoint')) return '📊'
+    if(mimeType.includes('image'))          return '🖼'
+    return '📄'
+  }
+
+  const fmtSize = (bytes) => {
+    if(!bytes) return ''
+    if(bytes < 1024) return bytes + ' B'
+    if(bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB'
+    return (bytes/1048576).toFixed(1) + ' MB'
+  }
+
+  // Build breadcrumb trail
+  const breadcrumbHtml = [
+    {id:'root',name:'My Drive'},...breadcrumb
+  ].map((b,i,arr)=>
+    i < arr.length-1
+      ? `<span class="topbar-crumb" onclick="window._driveFolder='${b.id}';renderDriveFiles('${b.id}')">${escHtml(b.name)}</span><span class="topbar-crumb-sep">/</span>`
+      : `<span style="font-weight:600">${escHtml(b.name)}</span>`
+  ).join('')
+
+  area.innerHTML = `
+  <div class="att-wrap">
+    <div class="att-toolbar">
+      <div class="att-toolbar-l" style="flex-wrap:wrap;gap:8px">
+        <div style="font-size:12px;color:var(--text2)">${breadcrumbHtml}</div>
+      </div>
+      <div class="att-toolbar-r" style="gap:6px">
+        <button class="btn btn-sm" onclick="openDriveUpload('${folderId}')">⬆ Upload</button>
+        <button class="btn btn-sm" onclick="createDriveFolder('${folderId}')">📁 New Folder</button>
+        <button class="btn btn-sm btn-ghost" onclick="importFromDrive('${folderId}')">📥 Import to CRM</button>
+        <button class="btn btn-sm btn-ghost" onclick="exportToDrive('${folderId}')">📤 Export to Drive</button>
+      </div>
+    </div>
+    <table class="att-tbl">
+      <thead><tr>
+        <th style="width:36px"><input type="checkbox" class="att-chk" onchange="document.querySelectorAll('.drive-chk').forEach(c=>c.checked=this.checked)"></th>
+        <th><div class="th-i">Name</div></th>
+        <th><div class="th-i">Modified</div></th>
+        <th><div class="th-i">Size</div></th>
+        <th><div class="th-i">Actions</div></th>
+      </tr></thead>
+      <tbody>
+      ${!files.length ? `<tr><td colspan="5">
+        <div class="empty-state">
+          <div class="empty-icon">📁</div>
+          <div class="empty-text">This folder is empty</div>
+          <button class="btn btn-primary" onclick="openDriveUpload('${folderId}')">⬆ Upload First File</button>
+        </div>
+      </td></tr>` : files.map(f=>`
+        <tr onclick="${f.mimeType?.includes('folder') ? `window._driveFolder='${f.id}';renderDriveFiles('${f.id}')` : `window.open('${escAttr(f.webViewLink||'')}','_blank')`}" style="cursor:pointer">
+          <td onclick="event.stopPropagation()"><input type="checkbox" class="att-chk drive-chk" value="${f.id}"></td>
+          <td>
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:18px">${iconFor(f.mimeType)}</span>
+              <div>
+                <div style="font-size:12px;font-weight:500">${escHtml(f.name)}</div>
+                ${f.owners?.[0]?.displayName ? `<div style="font-size:10px;color:var(--text3)">${escHtml(f.owners[0].displayName)}</div>` : ''}
+              </div>
+            </div>
+          </td>
+          <td class="cell-dim">${f.modifiedTime ? fmtNoteDateTime(f.modifiedTime) : '—'}</td>
+          <td class="cell-dim">${fmtSize(f.size)}</td>
+          <td onclick="event.stopPropagation()">
+            <div style="display:flex;gap:4px">
+              ${f.webViewLink ? `<a href="${escAttr(f.webViewLink)}" target="_blank" class="btn btn-xs btn-ghost">Open</a>` : ''}
+              ${!f.mimeType?.includes('folder') ? `<button class="btn btn-xs" onclick="downloadDriveFile('${f.id}','${escAttr(f.name)}')">Download</button>` : ''}
+              <button class="btn btn-xs" onclick="deleteDriveFile('${f.id}','${escAttr(f.name)}','${folderId}')">✕</button>
+            </div>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    <div class="att-footer"><span>${files.length} item${files.length===1?'':'s'}</span></div>
+  </div>`
+}
+
+function connectGoogleDrive(){
+  // Opens Google OAuth consent screen — server generates the URL
+  window.location.href = '/api/auth/google?token=' + encodeURIComponent(token)
+}
+
+function openDriveUpload(folderId='root'){
+  showModal('⬆ Upload to Google Drive', `
+    <div class="alert alert-info" style="margin-bottom:12px">
+      Files will be uploaded to ${folderId === 'root' ? 'My Drive' : 'the current folder'}.
+    </div>
+    <div class="form-row form-full"><div class="form-group">
+      <div class="form-label">Select File</div>
+      <input type="file" id="drive-upload-file" style="border:.5px solid var(--border2);border-radius:7px;padding:8px;width:100%;box-sizing:border-box">
+    </div></div>
+    <div id="drive-upload-progress"></div>`,
+  async()=>{
+    const fileEl = document.getElementById('drive-upload-file')
+    if(!fileEl?.files?.[0]){ showToast('Select a file first','error'); return false }
+    const file = fileEl.files[0]
+    const prog = document.getElementById('drive-upload-progress')
+    if(prog) prog.innerHTML = '<div class="loading">⏳ Uploading...</div>'
+
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('folder_id', folderId)
+
+    try {
+      const r = await fetch('/api/drive/upload', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: formData
+      })
+      const d = await r.json()
+      if(!r.ok) throw new Error(d.error || 'Upload failed')
+      showToast('✅ ' + file.name + ' uploaded to Drive','success')
+      window._driveFolder = folderId
+      await renderDriveFiles(folderId)
+    } catch(e){
+      showToast('Upload failed: ' + e.message,'error')
+      return false
+    }
+  })
+}
+
+async function downloadDriveFile(fileId, fileName){
+  showToast('Preparing download...','info')
+  try {
+    const r = await fetch('/api/drive/download/' + fileId, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    })
+    if(!r.ok) throw new Error('Download failed')
+    const blob = await r.blob()
+    const url  = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url; a.download = fileName; a.click()
+    URL.revokeObjectURL(url)
+  } catch(e){ showToast('Download failed: ' + e.message,'error') }
+}
+
+async function createDriveFolder(parentId='root'){
+  showModal('📁 Create New Folder', `
+    <div class="form-row form-full"><div class="form-group">
+      <div class="form-label">Folder Name</div>
+      <input id="new-folder-name" placeholder="e.g. TX Gulf Coast WIB - 2026">
+    </div></div>`,
+  async()=>{
+    const name = document.getElementById('new-folder-name')?.value?.trim()
+    if(!name){ showToast('Folder name required','error'); return false }
+    try {
+      await api('/api/drive/folder', 'POST', { name, parent_id: parentId })
+      showToast('Folder created','success')
+      await renderDriveFiles(parentId)
+    } catch(e){ showToast(e.message,'error'); return false }
+  })
+}
+
+async function deleteDriveFile(fileId, fileName, folderId){
+  if(!confirm('Move "' + fileName + '" to trash in Google Drive?')) return
+  try {
+    await api('/api/drive/files/' + fileId, 'DELETE')
+    showToast(fileName + ' moved to trash','success')
+    await renderDriveFiles(folderId)
+  } catch(e){ showToast(e.message,'error') }
+}
+
+// Import: pick a Drive CSV and run it through the existing import wizard
+async function importFromDrive(folderId='root'){
+  showModal('📥 Import from Google Drive', `
+    <div style="font-size:12px;color:var(--text2);margin-bottom:12px">
+      Select a CSV file from Drive to import into the CRM.
+    </div>
+    <div id="drive-picker-list"><div class="loading">⏳ Loading CSV files...</div></div>`,
+  async()=>{
+    const selected = document.querySelector('.drive-picker-item.selected')
+    if(!selected){ showToast('Select a file first','error'); return false }
+    const fileId   = selected.dataset.id
+    const fileName = selected.dataset.name
+    // Download from Drive then pipe through the existing import wizard
+    try {
+      const r = await fetch('/api/drive/download/' + fileId, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      })
+      if(!r.ok) throw new Error('Could not read file from Drive')
+      const blob = await r.blob()
+      const file = new File([blob], fileName, { type: 'text/csv' })
+      closeModal()
+      // Launch the import wizard with the Drive file pre-loaded
+      showToast('Opening import wizard for ' + fileName,'info')
+      // Determine type from filename heuristic
+      const type = fileName.toLowerCase().includes('location') ? 'locations'
+                 : fileName.toLowerCase().includes('wib') ? 'wibs'
+                 : fileName.toLowerCase().includes('compan') ? 'companies'
+                 : fileName.toLowerCase().includes('funding') ? 'funding'
+                 : fileName.toLowerCase().includes('applic') ? 'applications'
+                 : 'companies'
+      openImportModal(type, file)  // passes pre-loaded file to existing wizard
+    } catch(e){ showToast(e.message,'error'); return false }
+  })
+
+  // Load CSV files from Drive for the picker
+  try {
+    const data = await api('/api/drive/files?folder_id=' + folderId + '&mime=text/csv')
+    const files = data.files || []
+    const listEl = document.getElementById('drive-picker-list')
+    if(!listEl) return
+    if(!files.length){
+      listEl.innerHTML = '<div style="text-align:center;color:var(--text3);padding:20px">No CSV files found in this folder.<br>Upload a CSV to Drive first, then import.</div>'
+    } else {
+      listEl.innerHTML = files.map(f=>`
+        <div class="drive-picker-item" data-id="${escAttr(f.id)}" data-name="${escAttr(f.name)}"
+             onclick="document.querySelectorAll('.drive-picker-item').forEach(e=>e.classList.remove('selected'));this.classList.add('selected')"
+             style="padding:10px 12px;border:.5px solid var(--border1);border-radius:8px;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:10px">
+          <span>📊</span>
+          <div>
+            <div style="font-size:12px;font-weight:500">${escHtml(f.name)}</div>
+            <div style="font-size:10.5px;color:var(--text3)">${f.modifiedTime ? fmtNoteDateTime(f.modifiedTime) : ''}</div>
+          </div>
+        </div>`).join('')
+    }
+  } catch(_){}
+}
+
+// Export: generate CSV and save directly to Drive
+async function exportToDrive(folderId='root'){
+  showModal('📤 Export to Google Drive', `
+    <div class="form-row form-full"><div class="form-group">
+      <div class="form-label">What to export</div>
+      <select id="drive-export-type">
+        <option value="companies">Companies</option>
+        <option value="locations">Locations</option>
+        <option value="wibs">Workforce Boards</option>
+        <option value="funding">Funding Opportunities</option>
+        <option value="applications">Applications</option>
+      </select>
+    </div></div>
+    <div class="form-row form-full"><div class="form-group">
+      <div class="form-label">File Name</div>
+      <input id="drive-export-name" value="valor-export-${new Date().toISOString().split('T')[0]}.csv">
+    </div></div>`,
+  async()=>{
+    const type = document.getElementById('drive-export-type')?.value
+    const name = document.getElementById('drive-export-name')?.value?.trim() || 'valor-export.csv'
+    try {
+      await api('/api/drive/export', 'POST', { type, file_name: name, folder_id: folderId })
+      showToast('✅ ' + name + ' saved to Drive','success')
+      await renderDriveFiles(folderId)
+    } catch(e){ showToast(e.message,'error'); return false }
+  })
+}
+
 
 /* ═══════════════════════════════════════════════════
    AUTOMATIONS PAGE
@@ -4340,6 +4972,22 @@ function fmtDateFull(d){
   return dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
 }
 
+/**
+ * fmtNoteDateTime — formats a note timestamp as "May 15, 2026 at 3:47 PM"
+ * Used on all note cards for explicit date+time display per spec.
+ * @param {string|Date} d — ISO timestamp from DB
+ * @returns {string} — human-readable date and time
+ */
+function fmtNoteDateTime(d){
+  if(!d) return '—'
+  try {
+    const dt = new Date(d)
+    const date = dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})
+    const time = dt.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true})
+    return date + ' at ' + time
+  } catch { return String(d) }
+}
+
 function showTaskFilterModal(){
   showModal('Filter Tasks',`
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Assigned To</div>
@@ -4443,6 +5091,7 @@ function renderNotesGrid(notes){
       const type=meta.note_type||(isAircall?'Aircall':'Note')
       const bgCol=isAircall?'var(--green-bg)':'var(--blue-bg)'
       const textCol=isAircall?'var(--green-t)':'var(--blue-t)'
+      const noteDateTime=fmtNoteDateTime(n.created_at)
       return`<div class="card" style="cursor:pointer" onclick="showNoteDetail('${n.id}')">
         <div class="card-hd" style="padding:8px 10px">
           <div style="display:flex;align-items:center;gap:6px">
@@ -4457,7 +5106,7 @@ function renderNotesGrid(notes){
           ${isAircall&&meta.recording_url?`<a href="${meta.recording_url}" target="_blank" style="font-size:10px;color:var(--blue-t);text-decoration:none;display:block;margin-top:6px">🔗 Recording</a>`:''}
           <div style="font-size:9.5px;color:var(--text3);margin-top:6px;display:flex;align-items:center;gap:4px">
             <span style="width:16px;height:16px;border-radius:50%;background:${isAircall?'var(--blue-bg)':'var(--orange-bg)'};display:inline-flex;align-items:center;justify-content:center;font-size:8px">${isAircall?'A':initials}</span>
-            <span>${isAircall?'Aircall':n.user?.full_name||'System'}</span>
+            <span>${isAircall?'aircall/ '+noteDateTime:(escHtml(n.user?.full_name||'System')+' · '+noteDateTime)}</span>
           </div>
         </div>
       </div>`
@@ -4467,7 +5116,7 @@ function renderNotesGrid(notes){
 
 function showNoteDetail(id){
   const n=window._globalNotes?.find(note=>note.id===id);if(!n)return
-  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${(n.user?.full_name||'?').slice(0,2).toUpperCase()}</div><div class="note-author">${escHtml(n.user?.full_name||'System')}</div><div class="note-time">${fmtDate(n.created_at)}</div><span class="note-badge">${n.metadata?.note_type||'Note'}</span></div><div class="note-content">${getNoteContent(n).replace(/</g,'&lt;')}</div></div>`)
+  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${(n.user?.full_name||'?').slice(0,2).toUpperCase()}</div><div><div class="note-author">${escHtml(n.user?.full_name||'System')}</div><div class="note-time">${fmtNoteDateTime(n.created_at)}</div></div><span class="note-badge" style="margin-left:auto">${escHtml(n.metadata?.note_type||'Note')}</span></div><div class="note-content" style="margin-top:8px">${escHtml(getNoteContent(n)).replace(/\n/g,'<br>')}</div></div>`)
 }
 
 function openNewNoteModal(){
