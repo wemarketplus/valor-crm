@@ -2191,31 +2191,32 @@ function setNoteType(el,type){
 }
 
 async function saveWibNote(){
-  const ta=document.getElementById('wib-note-ta');if(!ta)return
-  const text=ta.value.trim()
-  if(!text){showToast('Note body is required','error');return}
-  const w=currentWib;if(!w)return
-  // Gather required composer fields
-  const authorEl=document.getElementById('wib-note-author')
-  const timeEl=document.getElementById('wib-note-time')
-  const authorName=(authorEl?.textContent||'').trim()||currentUser?.full_name||currentUser?.email||''
-  const noteTimestamp=(timeEl?.textContent||'').trim()||fmtNoteDateTime(new Date().toISOString())
-  if(!authorName){showToast('Author name is required','error');return}
-  if(!noteTimestamp){showToast('Note timestamp is missing','error');return}
-  const activeType=document.querySelector('.note-type-btn.active')?.textContent||'Note'
-  const isAircall=activeType==='Aircall'||activeType==='Call Summary'
+  const ta = document.getElementById('wib-note-ta'); if(!ta) return
+  const w  = currentWib; if(!w) return
+  const activeType = document.querySelector('.note-type-btn.active')?.textContent || 'Note'
+  let payload
   try{
-    await api('/api/notes','POST',{record_type:'wib_records',record_id:w.id,details:text,
-      metadata:{note_type:isAircall?'Aircall':activeType,is_aircall:isAircall,posted_as:authorName,composed_at:noteTimestamp}})
-    showToast('Note saved','success');ta.value=''
-    // Reset composer author back to current user after saving
-    if(authorEl){const un=currentUser?.full_name||currentUser?.email||'You';authorEl.textContent=un}
-    const avEl=document.getElementById('wib-note-av')
-    if(avEl){avEl.textContent=(currentUser?.full_name||currentUser?.email||'You').slice(0,2).toUpperCase();avEl.className='nc-av'}
-    if(timeEl)timeEl.textContent=fmtNoteDateTime(new Date().toISOString())
-    document.querySelectorAll('.note-type-btn').forEach((b,i)=>{b.classList.toggle('active',i===0)})
+    payload = buildNotePayload(ta.value, activeType, {
+      record_type : 'wib_records',
+      record_id   : w.id
+    })
+  }catch(e){ showToast(e.message,'error'); return }
+
+  try{
+    await api('/api/notes','POST', payload)
+    showToast('Note saved','success')
+    ta.value = ''
+    // Reset composer UI back to default (current user, fresh timestamp, first type)
+    const authorEl = document.getElementById('wib-note-author')
+    const avEl     = document.getElementById('wib-note-av')
+    const timeEl   = document.getElementById('wib-note-time')
+    const userName = currentUser?.full_name || currentUser?.email || 'You'
+    if(authorEl) authorEl.textContent = userName
+    if(avEl){ avEl.textContent = userName.slice(0,2).toUpperCase(); avEl.className = 'nc-av' }
+    if(timeEl)  timeEl.textContent = fmtNoteDateTime(new Date().toISOString())
+    document.querySelectorAll('.note-type-btn').forEach((b,i)=>{ b.classList.toggle('active', i===0) })
     loadWibTabData('notes')
-  }catch(e){showToast('Failed: '+e.message,'error')}
+  }catch(e){ showToast('Failed: '+e.message,'error') }
 }
 
 async function aiAssistNote(textareaId){
@@ -2877,31 +2878,32 @@ async function loadCompanyTabData(tab){
 }
 
 async function saveCompanyNote(){
-  const ta=document.getElementById('co-note-ta');if(!ta)return
-  const text=ta.value.trim()
-  if(!text){showToast('Note body is required','error');return}
-  const c=currentCompany;if(!c)return
-  // Gather required composer fields
-  const authorEl=document.getElementById('co-note-author')
-  const timeEl=document.getElementById('co-note-time')
-  const authorName=(authorEl?.textContent||'').trim()||currentUser?.full_name||currentUser?.email||''
-  const noteTimestamp=(timeEl?.textContent||'').trim()||fmtNoteDateTime(new Date().toISOString())
-  if(!authorName){showToast('Author name is required','error');return}
-  if(!noteTimestamp){showToast('Note timestamp is missing','error');return}
-  const activeType=document.querySelector('.note-type-btn.active')?.textContent||'Note'
-  const isAircall=activeType==='Aircall'||activeType==='Call Summary'
+  const ta = document.getElementById('co-note-ta'); if(!ta) return
+  const c  = currentCompany; if(!c) return
+  const activeType = document.querySelector('.note-type-btn.active')?.textContent || 'Note'
+  let payload
   try{
-    await api('/api/notes','POST',{record_type:'companies',record_id:c.id,details:text,
-      metadata:{note_type:isAircall?'Aircall':activeType,is_aircall:isAircall,posted_as:authorName,composed_at:noteTimestamp}})
-    showToast('Note saved','success');ta.value=''
-    // Reset composer after saving
-    if(authorEl){const un=currentUser?.full_name||currentUser?.email||'You';authorEl.textContent=un}
-    const avEl=document.getElementById('co-note-av')
-    if(avEl){avEl.textContent=(currentUser?.full_name||currentUser?.email||'You').slice(0,2).toUpperCase();avEl.className='nc-av'}
-    if(timeEl)timeEl.textContent=fmtNoteDateTime(new Date().toISOString())
-    document.querySelectorAll('.note-type-btn').forEach((b,i)=>{b.classList.toggle('active',i===0)})
+    payload = buildNotePayload(ta.value, activeType, {
+      record_type : 'companies',
+      record_id   : c.id
+    })
+  }catch(e){ showToast(e.message,'error'); return }
+
+  try{
+    await api('/api/notes','POST', payload)
+    showToast('Note saved','success')
+    ta.value = ''
+    // Reset composer UI back to default
+    const authorEl = document.getElementById('co-note-author')
+    const avEl     = document.getElementById('co-note-av')
+    const timeEl   = document.getElementById('co-note-time')
+    const userName = currentUser?.full_name || currentUser?.email || 'You'
+    if(authorEl) authorEl.textContent = userName
+    if(avEl){ avEl.textContent = userName.slice(0,2).toUpperCase(); avEl.className = 'nc-av' }
+    if(timeEl)  timeEl.textContent = fmtNoteDateTime(new Date().toISOString())
+    document.querySelectorAll('.note-type-btn').forEach((b,i)=>{ b.classList.toggle('active', i===0) })
     loadCompanyTabData('notes')
-  }catch(e){showToast('Failed: '+e.message,'error')}
+  }catch(e){ showToast('Failed: '+e.message,'error') }
 }
 
 /* ─── Company Modal ─── */
@@ -5995,6 +5997,65 @@ function fmtNoteDateTime(d){
   } catch { return String(d) }
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+   buildNotePayload — SINGLE SOURCE OF TRUTH for every note object.
+
+   Rules enforced here (regardless of call site):
+     1. user_name   — required. Pulled from currentUser; falls back to 'Unknown'.
+     2. timestamp   — required. Always the exact current ISO datetime.
+     3. note_content— required. Caller must pass a non-empty string; this
+                      function throws if it is missing so callers surface the
+                      error before ever hitting the API.
+     4. Aircall exception — if note_type is 'Aircall' OR 'Call Summary',
+                      user_name is unconditionally overwritten to 'Aircall'.
+
+   Returns the complete object ready to POST to /api/notes.
+   Extra fields (record_type, record_id, extra metadata) are merged in via
+   the `overrides` argument so callers stay DRY.
+───────────────────────────────────────────────────────────────────────── */
+function buildNotePayload(note_content, note_type, overrides){
+  // ── 1. note_content is mandatory ────────────────────────────────────────
+  if(!note_content || !note_content.trim()){
+    throw new Error('Note content is required.')
+  }
+
+  // ── 2. timestamp — always "right now" ───────────────────────────────────
+  const timestamp = new Date().toISOString()
+
+  // ── 3. Resolve user_name, then apply Aircall override ───────────────────
+  const resolvedType = (note_type || 'Note').trim()
+  const isAircall    = resolvedType === 'Aircall' || resolvedType === 'Call Summary'
+  const user_name    = isAircall
+    ? 'Aircall'
+    : ( (currentUser?.full_name || currentUser?.email || '').trim() || 'Unknown' )
+
+  // ── 4. Assemble the canonical payload ───────────────────────────────────
+  const base = {
+    details    : note_content.trim(),
+    metadata   : {
+      user_name  : user_name,     // required field 1
+      timestamp  : timestamp,     // required field 2
+      note_content: note_content.trim(), // required field 3 (mirrored into metadata for index queries)
+      note_type  : isAircall ? 'Aircall' : resolvedType,
+      is_aircall : isAircall,
+    }
+  }
+
+  // Merge any caller-specific fields (record_type, record_id, extra metadata)
+  const extra = overrides || {}
+  if(extra.record_type) base.record_type = extra.record_type
+  if(extra.record_id)   base.record_id   = extra.record_id
+  if(extra.metadata){
+    Object.assign(base.metadata, extra.metadata)
+    // Re-enforce the three required fields — overrides must not erase them
+    base.metadata.user_name    = user_name
+    base.metadata.timestamp    = timestamp
+    base.metadata.note_content = note_content.trim()
+  }
+
+  return base
+}
+
 function showTaskFilterModal(){
   showModal('Filter Tasks',`
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Assigned To</div>
@@ -6180,17 +6241,46 @@ function showNoteDetail(id){
 function openNewNoteModal(){
   showModal('New Note',`
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Note Type</div>
-      <select id="new-note-type"><option>Note</option><option>Call Summary</option><option>Meeting Notes</option><option>Email</option><option>Follow-up</option></select>
+      <select id="new-note-type" onchange="updateNewNoteAuthor(this)">
+        <option>Note</option>
+        <option>Aircall</option>
+        <option>Call Summary</option>
+        <option>Meeting Notes</option>
+        <option>Email</option>
+        <option>Follow-up</option>
+      </select>
     </div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Content</div><textarea id="new-note-content" rows="6" placeholder="Write your note..."></textarea></div></div>`,
+    <div class="form-row form-full" id="new-note-author-row">
+      <div class="form-group">
+        <div class="form-label">Author</div>
+        <input id="new-note-author" readonly
+          value="${escHtml(currentUser?.full_name||currentUser?.email||'Unknown')}"
+          style="background:var(--gray);color:var(--text2);cursor:default">
+      </div>
+    </div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Content <span class="form-req">*</span></div>
+      <textarea id="new-note-content" rows="6" placeholder="Write your note..."></textarea>
+    </div></div>`,
   async()=>{
-    const content=document.getElementById('new-note-content').value.trim()
-    if(!content){showToast('Note cannot be empty','error');return false}
+    const noteType = document.getElementById('new-note-type').value
+    let payload
     try{
-      await api('/api/notes','POST',{details:content,metadata:{note_type:document.getElementById('new-note-type').value}})
-      showToast('Note saved','success');pageNotes()
-    }catch(e){showToast(e.message,'error');return false}
+      payload = buildNotePayload(
+        document.getElementById('new-note-content').value,
+        noteType
+      )
+    }catch(e){ showToast(e.message,'error'); return false }
+    try{
+      await api('/api/notes','POST', payload)
+      showToast('Note saved','success'); pageNotes()
+    }catch(e){ showToast(e.message,'error'); return false }
   })
+}
+
+function updateNewNoteAuthor(sel){
+  const authorInput = document.getElementById('new-note-author'); if(!authorInput) return
+  const isAircall = sel.value==='Aircall'||sel.value==='Call Summary'
+  authorInput.value = isAircall ? 'Aircall' : (currentUser?.full_name||currentUser?.email||'Unknown')
 }
 
 /* ═══════════════════════════════════════════════════
@@ -6283,7 +6373,9 @@ function openComposeEmail(prefillTo='',prefillSubject='',prefillBody=''){
     const logNote=document.getElementById('email-log-note')?.checked
     if(logNote){
       try{
-        await api('/api/notes','POST',{details:`EMAIL SENT TO: ${to}\nSUBJECT: ${subj}\n\n${body}`,note_type:'Email'})
+        const emailContent = `EMAIL SENT TO: ${to}\nSUBJECT: ${subj}\n\n${body}`
+        const payload = buildNotePayload(emailContent, 'Email')
+        await api('/api/notes','POST', payload)
       }catch(_){}
     }
     showToast(`Email to ${to} logged to CRM activity`,'success')
@@ -6334,26 +6426,39 @@ function pageEmails(){
 function addAircallNote(recordId='',recordType=''){
   showModal('📞 Log Call / Aircall Note',`
     <div class="alert alert-info">Log a manual call note or paste Aircall auto-summary. This will appear in the Notes and Calls tabs of the record.</div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Call Notes / Summary</div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Call Notes / Summary <span class="form-req">*</span></div>
       <textarea id="aircall-notes" rows="6" placeholder="Call with WIB Director — discussed Q3 funding cycle...&#10;Key points: Program open until June 30, max $50K per employer...&#10;Follow-up: Send application template by Friday"></textarea>
     </div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Duration</div><input id="aircall-dur" placeholder="15m"></div>
     <div class="form-group"><div class="form-label">Direction</div><select id="aircall-dir"><option>Outbound</option><option>Inbound</option></select></div></div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Recording URL (optional)</div><input id="aircall-url" type="url" placeholder="https://assets.aircall.io/calls/..."></div></div>`,
   async()=>{
-    const notes=document.getElementById('aircall-notes').value.trim()
-    if(!notes){showToast('Call notes are required','error');return false}
-    const dur=document.getElementById('aircall-dur').value
-    const dir=document.getElementById('aircall-dir').value
-    const url=document.getElementById('aircall-url').value
-    const fullNote=`Call (${dur||'?'}m) — ${dir}\n${escHtml(notes)}${url?'\nRecording: '+url:''}`
+    const notes = document.getElementById('aircall-notes').value
+    const dur   = document.getElementById('aircall-dur').value.trim()
+    const dir   = document.getElementById('aircall-dir').value
+    const url   = document.getElementById('aircall-url').value.trim()
+    // Build the human-readable content string first
+    const fullContent = `Call (${dur||'?'}m) — ${dir}\n${notes.trim()}${url?'\nRecording: '+url:''}`
+    let payload
     try{
-      await api('/api/notes','POST',{record_type:recordType||null,record_id:recordId||null,details:fullNote,metadata:{is_aircall:true,note_type:'Aircall',duration:dur,direction:dir,recording_url:url||null}})
+      // note_type 'Aircall' → buildNotePayload sets user_name = 'Aircall' automatically
+      payload = buildNotePayload(fullContent, 'Aircall', {
+        record_type : recordType || null,
+        record_id   : recordId   || null,
+        metadata    : {
+          duration      : dur,
+          direction     : dir,
+          recording_url : url || null,
+        }
+      })
+    }catch(e){ showToast(e.message,'error'); return false }
+    try{
+      await api('/api/notes','POST', payload)
       showToast('Call logged','success')
-      if(currentPage==='wib-profile')loadWibTabData(wibTab)
-      if(currentPage==='company-profile')loadCompanyTabData(companyTab)
-      if(currentPage==='calls')pageCalls()
-    }catch(e){showToast(e.message,'error');return false}
+      if(currentPage==='wib-profile')    loadWibTabData(wibTab)
+      if(currentPage==='company-profile') loadCompanyTabData(companyTab)
+      if(currentPage==='calls')           pageCalls()
+    }catch(e){ showToast(e.message,'error'); return false }
   })
 }
 
