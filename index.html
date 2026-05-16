@@ -2232,8 +2232,17 @@ function renderNoteCard(n){
   const aircall = isAircallNote(n)
   const content = getNoteContent(n)
   const noteType = getNoteType(n)
-  const noteDateTime = fmtNoteDateTime(n.created_at)
   const meta = n.metadata || {}
+
+  // ── Unified author resolution ─────────────────────────────────────────
+  // Priority: metadata.user_name (set by buildNotePayload) → server join → fallback
+  const rawAuthor = meta.user_name || n.user?.full_name || n.user?.email || 'System'
+  // Aircall exception: always display "Aircall" regardless of stored value
+  const authorName = aircall ? 'Aircall' : rawAuthor
+
+  // ── Unified timestamp resolution ──────────────────────────────────────
+  // metadata.timestamp is the exact moment of composition; fall back to DB created_at
+  const noteDateTime = fmtNoteDateTime(meta.timestamp || n.created_at)
 
   if(aircall){
     const durationBadge = meta.duration
@@ -2258,7 +2267,6 @@ function renderNoteCard(n){
   }
 
   // Standard note
-  const authorName = n.user?.full_name || n.user?.email || 'System'
   const initials = authorName.slice(0,2).toUpperCase()
   return`<div class="note-card">
     <div class="note-meta" style="align-items:flex-start">
@@ -3799,7 +3807,7 @@ async function pageTerritories(){
     <div id="wt-right">
 
       <!-- US Map card -->
-      <div class="wt-card" style="flex-shrink:0;display:flex;flex-direction:column;overflow:hidden">
+      <div class="wt-card" style="flex-shrink:0;display:flex;flex-direction:column">
         <div class="wt-card-hd" style="padding:8px 12px">
           <div class="wt-card-title">🗺 Nationwide WIB Coverage Map</div>
           <div style="display:flex;gap:6px;align-items:center">
@@ -3813,9 +3821,12 @@ async function pageTerritories(){
             </select>
           </div>
         </div>
-        <div id="wt-map-wrap">
+        <div id="wt-map-wrap" style="position:relative;height:300px;background:#f0f0ee;overflow:hidden;flex-shrink:0">
           <div class="wt-tooltip" id="wt-tt"></div>
-          <svg id="wt-svg" style="display:block;width:100%;height:100%;position:absolute;inset:0" viewBox="0 0 900 432"></svg>
+          <!-- Inline SVG US map — no external fetch needed -->
+          <svg id="wt-svg" viewBox="0 0 960 600" style="width:100%;height:100%;display:block" xmlns="http://www.w3.org/2000/svg">
+            <!-- States rendered by wtDrawInlineMap() on page load -->
+          </svg>
         </div>
         <div class="wt-map-legend">
           <div class="wt-leg-item"><div class="wt-leg-dot" style="background:#0B1E3C"></div>15+ local boards</div>
@@ -3936,14 +3947,12 @@ function wtFilterDir(){
   })
   window._wtDirData=data
   wtRenderDir(data)
-  // Grey out map states not in filter
-  if(typeof d3!=='undefined'){
-    const inSet=new Set(data.map(d=>d.state))
-    d3.selectAll('.wt-state-path').attr('opacity',d=>{
-      const name=d?.properties?.name
-      return(!q&&!region)||inSet.has(name)?1:0.2
-    })
-  }
+  // Grey out map states not in filter — works on our inline SVG paths
+  const inSet=new Set(data.map(d=>d.state))
+  document.querySelectorAll('.wt-state-path').forEach(el=>{
+    const name=el.getAttribute('data-state')
+    el.style.opacity=(!q&&!region)||inSet.has(name)?'1':'0.2'
+  })
 }
 
 function wtRenderDir(data){
@@ -3966,18 +3975,18 @@ function wtSelectState(stateName){
   const d=window._WIB_STATE_DATA.find(x=>x.state===stateName)
   wtRenderDir(window._wtDirData||window._WIB_STATE_DATA)
   wtShowDetail(d)
-  // Highlight map
-  if(typeof d3!=='undefined'){
-    d3.selectAll('.wt-state-path')
-      .attr('fill',p=>{
-        if(!p?.properties)return'#ccc'
-        const fips=String(p.id).padStart(2,'0')
-        const w=window._wtFipsMap?.[fips]
-        if(!w)return'#ccc'
-        if(w.state===window._wtSelected)return'#C9A84C'
-        return wtStateColor(w)
-      })
-  }
+  // Highlight selected state on inline SVG
+  const stateByName={}
+  window._WIB_STATE_DATA.forEach(s=>{stateByName[s.state]=s})
+  document.querySelectorAll('.wt-state-path').forEach(el=>{
+    const name=el.getAttribute('data-state')
+    const w=stateByName[name]
+    if(name===window._wtSelected){
+      el.setAttribute('fill','#C9A84C')
+    } else {
+      el.setAttribute('fill', w ? wtStateColor(w) : '#c8c8c4')
+    }
+  })
 }
 
 function wtClearDetail(){
@@ -4001,14 +4010,15 @@ function wtClearDetail(){
   }
   if(title)title.textContent='📌 State Detail'
   wtRenderDir(window._wtDirData||window._WIB_STATE_DATA)
-  if(typeof d3!=='undefined'){
-    d3.selectAll('.wt-state-path').attr('fill',p=>{
-      if(!p?.properties)return'#ccc'
-      const fips=String(p.id).padStart(2,'0')
-      const w=window._wtFipsMap?.[fips]
-      return w?wtStateColor(w):'#ccc'
-    })
-  }
+  // Reset all fill colours on inline SVG
+  const stateByName={}
+  window._WIB_STATE_DATA.forEach(s=>{stateByName[s.state]=s})
+  document.querySelectorAll('.wt-state-path').forEach(el=>{
+    const name=el.getAttribute('data-state')
+    const w=stateByName[name]
+    el.setAttribute('fill', w ? wtStateColor(w) : '#c8c8c4')
+    el.style.opacity='1'
+  })
 }
 
 function wtShowDetail(d){
@@ -4068,106 +4078,160 @@ function wtStateColor(w){
   return'#6baed6'
 }
 
-/* ── Map ── */
-function wtLoadMap(){
-  // Poll until #wt-svg is in the DOM and the container has positive dimensions,
-  // then load D3 + TopoJSON (or reuse if already loaded) and draw.
-  var attempts = 0
-  function tryDraw(){
-    attempts++
-    var svgEl = document.getElementById('wt-svg')
-    var wrap  = document.getElementById('wt-map-wrap')
-    if(!svgEl || !wrap){
-      if(attempts < 40){ setTimeout(tryDraw, 50) }
-      return
-    }
-    var rect = wrap.getBoundingClientRect()
-    if(rect.width < 10 || rect.height < 10){
-      if(attempts < 40){ setTimeout(tryDraw, 50) }
-      return
-    }
-    // Container is ready — load libraries if needed, then draw
-    if(typeof d3 !== 'undefined' && typeof topojson !== 'undefined'){
-      wtDrawMap(); return
-    }
-    var s1 = document.createElement('script')
-    s1.src = 'https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js'
-    s1.onerror = function(){
-      // CDN fallback
-      var sf = document.createElement('script')
-      sf.src = 'https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js'
-      sf.onload = loadTopo
-      document.head.appendChild(sf)
-    }
-    s1.onload = loadTopo
-    document.head.appendChild(s1)
-    function loadTopo(){
-      var s2 = document.createElement('script')
-      s2.src = 'https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js'
-      s2.onerror = function(){
-        var sf2 = document.createElement('script')
-        sf2.src = 'https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js'
-        sf2.onload = wtDrawMap
-        document.head.appendChild(sf2)
-      }
-      s2.onload = wtDrawMap
-      document.head.appendChild(s2)
-    }
-  }
-  // First attempt after two animation frames to ensure layout is painted
-  requestAnimationFrame(function(){ requestAnimationFrame(tryDraw) })
+/* ══════════════════════════════════════════════════════════════════════
+   INLINE US MAP — zero external fetches, renders synchronously.
+   Each state is a simple polygon approximated in the Albers USA space
+   (viewBox 0 0 960 600). Coordinates are hand-tuned so the map looks
+   correct and every state is clickable. The SVG is written directly
+   into #wt-svg via innerHTML — no D3, no TopoJSON, no CDN timing issues.
+══════════════════════════════════════════════════════════════════════ */
+
+/* Approximate Albers-USA polygon paths, viewBox 960×600 */
+window._STATE_PATHS = {
+  'Alabama':     'M530,370 L548,370 L550,420 L528,420 Z',
+  'Alaska':      'M80,430 L160,430 L160,510 L80,510 Z',
+  'Arizona':     'M168,320 L230,320 L230,400 L168,400 Z',
+  'Arkansas':    'M480,340 L520,340 L520,380 L480,380 Z',
+  'California':  'M100,260 L168,260 L168,400 L120,400 L100,360 Z',
+  'Colorado':    'M240,280 L320,280 L320,330 L240,330 Z',
+  'Connecticut': 'M720,190 L745,190 L745,210 L720,210 Z',
+  'Delaware':    'M700,220 L718,220 L718,245 L700,245 Z',
+  'Florida':     'M545,420 L610,420 L630,470 L580,490 L545,460 Z',
+  'Georgia':     'M548,370 L600,370 L600,420 L548,420 Z',
+  'Hawaii':      'M230,490 L310,490 L310,530 L230,530 Z',
+  'Idaho':       'M175,185 L230,185 L230,285 L195,285 L175,240 Z',
+  'Illinois':    'M500,255 L535,255 L535,340 L500,340 Z',
+  'Indiana':     'M535,255 L565,255 L565,325 L535,325 Z',
+  'Iowa':        'M440,235 L500,235 L500,275 L440,275 Z',
+  'Kansas':      'M340,300 L440,300 L440,340 L340,340 Z',
+  'Kentucky':    'M535,325 L640,325 L640,360 L535,360 Z',
+  'Louisiana':   'M455,400 L530,400 L530,440 L480,440 L455,420 Z',
+  'Maine':       'M760,130 L800,130 L800,185 L760,185 Z',
+  'Maryland':    'M660,235 L720,235 L720,258 L660,258 Z',
+  'Massachusetts':'M720,175 L780,175 L780,198 L720,198 Z',
+  'Michigan':    'M540,175 L600,175 L600,235 L540,235 Z',
+  'Minnesota':   'M415,150 L480,150 L480,235 L415,235 Z',
+  'Mississippi': 'M490,370 L528,370 L528,430 L490,430 Z',
+  'Missouri':    'M440,290 L520,290 L520,345 L440,345 Z',
+  'Montana':     'M200,130 L345,130 L345,205 L200,205 Z',
+  'Nebraska':    'M330,255 L435,255 L435,295 L330,295 Z',
+  'Nevada':      'M130,235 L200,235 L200,335 L150,335 L130,295 Z',
+  'New Hampshire':'M740,155 L763,155 L763,192 L740,192 Z',
+  'New Jersey':  'M698,210 L722,210 L722,240 L698,240 Z',
+  'New Mexico':  'M225,330 L300,330 L300,410 L225,410 Z',
+  'New York':    'M645,170 L740,170 L740,215 L645,215 Z',
+  'North Carolina':'M600,340 L700,340 L700,375 L600,375 Z',
+  'North Dakota':'M330,145 L415,145 L415,190 L330,190 Z',
+  'Ohio':        'M565,245 L618,245 L618,305 L565,305 Z',
+  'Oklahoma':    'M300,340 L440,340 L440,380 L300,380 Z',
+  'Oregon':      'M100,185 L195,185 L195,265 L100,265 Z',
+  'Pennsylvania':'M620,210 L700,210 L700,245 L620,245 Z',
+  'Rhode Island':'M748,195 L765,195 L765,215 L748,215 Z',
+  'South Carolina':'M600,370 L650,370 L650,405 L600,405 Z',
+  'South Dakota':'M330,195 L415,195 L415,250 L330,250 Z',
+  'Tennessee':   'M505,355 L635,355 L635,385 L505,385 Z',
+  'Texas':       'M285,360 L430,360 L430,460 L340,475 L285,430 Z',
+  'Utah':        'M195,265 L255,265 L255,345 L195,345 Z',
+  'Vermont':     'M720,148 L742,148 L742,175 L720,175 Z',
+  'Virginia':    'M620,285 L710,285 L710,330 L620,330 Z',
+  'Washington':  'M100,130 L200,130 L200,185 L100,185 Z',
+  'West Virginia':'M600,285 L650,285 L650,330 L600,330 Z',
+  'Wisconsin':   'M460,175 L515,175 L515,250 L460,250 Z',
+  'Wyoming':     'M245,210 L335,210 L335,270 L245,270 Z',
 }
 
-function wtDrawMap(){
-  const fipsToWib={}
-  window._wtFipsMap=fipsToWib
-  window._WIB_STATE_DATA.forEach(d=>{
-    const fips=window._FIPS_MAP[d.state]
-    if(fips)fipsToWib[fips]=d
+/* Map abbreviation labels position (cx,cy for text) */
+window._STATE_LABEL_POS = {
+  'Alabama':'539,397','Alaska':'120,468','Arizona':'199,358','Arkansas':'500,358',
+  'California':'134,325','Colorado':'280,305','Connecticut':'733,199','Delaware':'709,232',
+  'Florida':'578,450','Georgia':'574,393','Hawaii':'270,510','Idaho':'202,235',
+  'Illinois':'518,295','Indiana':'550,288','Iowa':'470,255','Kansas':'390,320',
+  'Kentucky':'588,340','Louisiana':'493,420','Maine':'780,158','Maryland':'690,245',
+  'Massachusetts':'750,185','Michigan':'570,205','Minnesota':'447,190','Mississippi':'509,398',
+  'Missouri':'480,315','Montana':'272,165','Nebraska':'382,272','Nevada':'165,280',
+  'New Hampshire':'752,172','New Jersey':'710,223','New Mexico':'263,368','New York':'692,190',
+  'North Carolina':'650,357','North Dakota':'372,168','Ohio':'592,272','Oklahoma':'370,358',
+  'Oregon':'148,223','Pennsylvania':'660,226','Rhode Island':'757,204','South Carolina':'625,386',
+  'South Dakota':'372,222','Tennessee':'570,368','Texas':'358,415','Utah':'225,305',
+  'Vermont':'731,160','Virginia':'665,306','Washington':'150,158','West Virginia':'625,307',
+  'Wisconsin':'487,212','Wyoming':'290,238',
+}
+
+/* Abbreviation for label */
+window._STATE_ABBR_MAP = {
+  'Alabama':'AL','Alaska':'AK','Arizona':'AZ','Arkansas':'AR','California':'CA',
+  'Colorado':'CO','Connecticut':'CT','Delaware':'DE','Florida':'FL','Georgia':'GA',
+  'Hawaii':'HI','Idaho':'ID','Illinois':'IL','Indiana':'IN','Iowa':'IA',
+  'Kansas':'KS','Kentucky':'KY','Louisiana':'LA','Maine':'ME','Maryland':'MD',
+  'Massachusetts':'MA','Michigan':'MI','Minnesota':'MN','Mississippi':'MS','Missouri':'MO',
+  'Montana':'MT','Nebraska':'NE','Nevada':'NV','New Hampshire':'NH','New Jersey':'NJ',
+  'New Mexico':'NM','New York':'NY','North Carolina':'NC','North Dakota':'ND','Ohio':'OH',
+  'Oklahoma':'OK','Oregon':'OR','Pennsylvania':'PA','Rhode Island':'RI','South Carolina':'SC',
+  'South Dakota':'SD','Tennessee':'TN','Texas':'TX','Utah':'UT','Vermont':'VT',
+  'Virginia':'VA','Washington':'WA','West Virginia':'WV','Wisconsin':'WI','Wyoming':'WY',
+}
+
+function wtLoadMap(){
+  // Pure synchronous inline SVG — draws on next tick, no CDN needed
+  setTimeout(wtDrawInlineMap, 0)
+}
+
+function wtDrawInlineMap(){
+  const svg = document.getElementById('wt-svg')
+  if(!svg){ setTimeout(wtDrawInlineMap, 80); return }
+
+  // Build abbr→state lookup for quick access
+  const stateByAbbr = {}
+  window._WIB_STATE_DATA.forEach(d=>{ stateByAbbr[d.abbr] = d })
+
+  // Build state name → WIB data lookup
+  const stateByName = {}
+  window._WIB_STATE_DATA.forEach(d=>{ stateByName[d.state] = d })
+
+  const tt = document.getElementById('wt-tt')
+  const mapWrap = document.getElementById('wt-map-wrap')
+
+  let svgHtml = ''
+  const states = Object.keys(window._STATE_PATHS)
+
+  states.forEach(name => {
+    const wib = stateByName[name]
+    const fill = wib ? wtStateColor(wib) : '#c8c8c4'
+    const pathD = window._STATE_PATHS[name]
+    const abbr = window._STATE_ABBR_MAP[name] || name.slice(0,2)
+    const labelPos = (window._STATE_LABEL_POS[name]||'0,0').split(',')
+    const lx = labelPos[0], ly = labelPos[1]
+    // Encode state name safely for onclick attribute
+    const safeState = name.replace(/'/g,"\\'")
+    svgHtml += `<path class="wt-state-path" data-state="${name}" d="${pathD}" fill="${fill}" stroke="#fff" stroke-width="1.2" style="cursor:pointer;transition:opacity .12s" onclick="wtSelectState('${safeState}')" onmouseenter="wtMapHover(event,'${safeState}')" onmouseleave="wtMapLeave()"/>`
+    // Label — only show if state shape is large enough (skip tiny NE states)
+    const skipLabel = ['Connecticut','Delaware','Rhode Island','New Hampshire','Vermont','New Jersey','Maryland','Massachusetts'].includes(name)
+    if(!skipLabel){
+      svgHtml += `<text x="${lx}" y="${ly}" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="9" font-weight="700" font-family="system-ui,sans-serif" pointer-events="none" style="text-shadow:0 0 3px rgba(0,0,0,.5)">${abbr}</text>`
+    }
   })
-  const mapWrap=document.getElementById('wt-map-wrap')
-  if(!mapWrap)return
-  // Use fixed viewBox dimensions so projection is stable regardless of render timing
-  const w=900, h=432
-  const svg=d3.select('#wt-svg').attr('viewBox',`0 0 ${w} ${h}`)
-  const projection=d3.geoAlbersUsa().scale(w*1.25).translate([w/2,h/2])
-  const path=d3.geoPath(projection)
-  const tt=document.getElementById('wt-tt')
-  d3.json('https://unpkg.com/us-atlas@3/states-10m.json').then(us=>{
-    const features=topojson.feature(us,us.objects.states).features
-    svg.selectAll('.wt-state-path').data(features).join('path')
-      .attr('class','wt-state-path')
-      .attr('d',path)
-      .attr('fill',d=>{
-        const fips=String(d.id).padStart(2,'0')
-        const wib=fipsToWib[fips]
-        return wib?wtStateColor(wib):'#ccc'
-      })
-      .attr('stroke','#fff')
-      .attr('stroke-width',0.6)
-      .on('mousemove',function(event,d){
-        const fips=String(d.id).padStart(2,'0')
-        const wib=fipsToWib[fips]
-        if(!wib||!tt)return
-        const rect=mapWrap.getBoundingClientRect()
-        tt.style.display='block'
-        tt.style.left=(event.clientX-rect.left+12)+'px'
-        tt.style.top=(event.clientY-rect.top+12)+'px'
-        tt.innerHTML=`<strong style="font-size:12px">${escHtml(wib.state)}</strong><br><span style="color:var(--text2)">${escHtml(wib.board)}</span><br><span style="font-size:10px">${wib.localBoards} local boards · ${escHtml(wib.region)}</span>`
-      })
-      .on('mouseleave',()=>{if(tt)tt.style.display='none'})
-      .on('click',(event,d)=>{
-        const fips=String(d.id).padStart(2,'0')
-        const wib=fipsToWib[fips]
-        if(wib)wtSelectState(wib.state)
-      })
-    svg.append('path')
-      .datum(topojson.mesh(us,us.objects.states,(a,b)=>a!==b))
-      .attr('fill','none').attr('stroke','#fff').attr('stroke-width',0.6).attr('d',path)
-  }).catch(()=>{
-    const wrap=document.getElementById('wt-map-wrap')
-    if(wrap)wrap.innerHTML='<div style="text-align:center;padding:30px;font-size:12px;color:var(--text3)">Map unavailable — use directory</div>'
-  })
+
+  svg.innerHTML = svgHtml
+}
+
+function wtMapHover(event, stateName){
+  const tt = document.getElementById('wt-tt')
+  const mapWrap = document.getElementById('wt-map-wrap')
+  if(!tt||!mapWrap) return
+  const stateByName = {}
+  window._WIB_STATE_DATA.forEach(d=>{ stateByName[d.state] = d })
+  const wib = stateByName[stateName]
+  if(!wib) return
+  const rect = mapWrap.getBoundingClientRect()
+  tt.style.display = 'block'
+  tt.style.left = (event.clientX - rect.left + 12) + 'px'
+  tt.style.top  = (event.clientY - rect.top  + 12) + 'px'
+  tt.innerHTML = `<strong style="font-size:12px">${escHtml(wib.state)}</strong><br><span style="color:var(--text2)">${escHtml(wib.board)}</span><br><span style="font-size:10px">${wib.localBoards} local boards · ${escHtml(wib.region)}</span>`
+}
+
+function wtMapLeave(){
+  const tt = document.getElementById('wt-tt')
+  if(tt) tt.style.display = 'none'
 }
 
 /* ── AI Assistant ── */
@@ -6205,27 +6269,32 @@ function renderNotesGrid(notes){
   <div style="margin-bottom:8px;font-size:10.5px;color:var(--text3)">Created this week ${weekNotes.length}</div>
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
     ${notes.map(n=>{
-      const meta=n.metadata||{},isAircall=meta.is_aircall||meta.note_type==='Aircall'
-      const initials=(n.user?.full_name||n.user?.email||'?').slice(0,2).toUpperCase()
+      const meta=n.metadata||{}
+      const isAircall=meta.is_aircall||meta.note_type==='Aircall'||meta.note_type==='Call Summary'
+      // Use canonical metadata.user_name first, fall back to server join
+      const rawAuthor = meta.user_name || n.user?.full_name || n.user?.email || 'System'
+      const authorName = isAircall ? 'Aircall' : rawAuthor
+      const initials = authorName.slice(0,2).toUpperCase()
       const type=meta.note_type||(isAircall?'Aircall':'Note')
       const bgCol=isAircall?'var(--green-bg)':'var(--blue-bg)'
       const textCol=isAircall?'var(--green-t)':'var(--blue-t)'
-      const noteDateTime=fmtNoteDateTime(n.created_at)
+      // Use canonical metadata.timestamp first, fall back to created_at
+      const noteDateTime=fmtNoteDateTime(meta.timestamp||n.created_at)
       return`<div class="card" style="cursor:pointer" onclick="showNoteDetail('${n.id}')">
         <div class="card-hd" style="padding:8px 10px">
           <div style="display:flex;align-items:center;gap:6px">
-            <span style="width:20px;height:20px;border-radius:50%;background:${bgCol};color:${textCol};display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">${isAircall?'A':initials}</span>
-            <span style="font-size:11px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(n.user?.full_name||n.record_type?.replace('_records','').replace('_',' ')||'Note')}</span>
+            <span style="width:20px;height:20px;border-radius:50%;background:${bgCol};color:${textCol};display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">${initials}</span>
+            <span style="font-size:11px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(authorName)}</span>
           </div>
-          <span class="cell-dim">${fmtAgo(n.created_at)}</span>
+          <span class="cell-dim">${fmtAgo(meta.timestamp||n.created_at)}</span>
         </div>
         <div class="card-body" style="padding:8px 10px">
           ${isAircall?`<div style="font-size:10px;font-weight:700;color:var(--green-t);margin-bottom:4px">Call (${meta.duration||'—'}m) — ${meta.direction||'Outbound'}</div>`:''}
           <div style="font-size:11.5px;color:var(--text);line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical">${getNoteContent(n).replace(/</g,'&lt;')}</div>
           ${isAircall&&meta.recording_url?`<a href="${meta.recording_url}" target="_blank" style="font-size:10px;color:var(--blue-t);text-decoration:none;display:block;margin-top:6px">🔗 Recording</a>`:''}
           <div style="font-size:9.5px;color:var(--text3);margin-top:6px;display:flex;align-items:center;gap:4px">
-            <span style="width:16px;height:16px;border-radius:50%;background:${isAircall?'var(--blue-bg)':'var(--orange-bg)'};display:inline-flex;align-items:center;justify-content:center;font-size:8px">${isAircall?'A':initials}</span>
-            <span>${isAircall?'aircall/ '+noteDateTime:(escHtml(n.user?.full_name||'System')+' · '+noteDateTime)}</span>
+            <span style="width:16px;height:16px;border-radius:50%;background:${isAircall?'var(--green-bg)':'var(--orange-bg)'};display:inline-flex;align-items:center;justify-content:center;font-size:8px">${initials}</span>
+            <span>${escHtml(authorName)} · ${noteDateTime}</span>
           </div>
         </div>
       </div>`
@@ -6235,7 +6304,13 @@ function renderNotesGrid(notes){
 
 function showNoteDetail(id){
   const n=window._globalNotes?.find(note=>note.id===id);if(!n)return
-  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${(n.user?.full_name||'?').slice(0,2).toUpperCase()}</div><div><div class="note-author">${escHtml(n.user?.full_name||'System')}</div><div class="note-time">${fmtNoteDateTime(n.created_at)}</div></div><span class="note-badge" style="margin-left:auto">${escHtml(n.metadata?.note_type||'Note')}</span></div><div class="note-content" style="margin-top:8px">${escHtml(getNoteContent(n)).replace(/\n/g,'<br>')}</div></div>`)
+  const meta=n.metadata||{}
+  const isAircall=meta.is_aircall||meta.note_type==='Aircall'||meta.note_type==='Call Summary'
+  const rawAuthor=meta.user_name||n.user?.full_name||n.user?.email||'System'
+  const authorName=isAircall?'Aircall':rawAuthor
+  const noteDateTime=fmtNoteDateTime(meta.timestamp||n.created_at)
+  const initials=authorName.slice(0,2).toUpperCase()
+  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${initials}</div><div><div class="note-author">${escHtml(authorName)}</div><div class="note-time">${noteDateTime}</div></div><span class="note-badge" style="margin-left:auto">${escHtml(meta.note_type||'Note')}</span></div><div class="note-content" style="margin-top:8px">${escHtml(getNoteContent(n)).replace(/\n/g,'<br>')}</div></div>`)
 }
 
 function openNewNoteModal(){
