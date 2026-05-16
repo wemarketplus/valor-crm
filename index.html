@@ -3909,6 +3909,12 @@ async function pageTerritories(){
   wtLoadMap()
   wtAiAppend('ai', `👋 Hi! I'm your WIB Territory AI assistant. I have contact info for all 50 state workforce boards built in, and I can search the web for the latest news, director changes, and local board details. Ask me anything — or click a state on the map to get started.`)
 
+  // Pre-fetch WIBs if not yet cached so the local boards panel can populate
+  // when a state is clicked, even if the Workforce Boards page hasn't been visited.
+  if(!window._wibs || !window._wibs.length){
+    api('/api/wibs?limit=1000').then(r=>{ window._wibs=r.data||[] }).catch(()=>{})
+  }
+
   // Load territories list (async — runs after map is already painted)
   try{
     const [terrRes,usersRes,wibsRes]=await Promise.all([
@@ -3919,6 +3925,8 @@ async function pageTerritories(){
     const territories=terrRes.data||[]
     const users=usersRes.data||[]
     const wibs=wibsRes.data||[]
+    // Cache into global so wtShowDetail local-boards section can access them
+    if(wibs.length) window._wibs=wibs
     const wibCount={}
     wibs.forEach(w=>{if(w.territory_id)wibCount[w.territory_id]=(wibCount[w.territory_id]||0)+1})
     const usersInTerritory={}
@@ -4041,43 +4049,42 @@ function wtShowDetail(d){
   if(!d||!body)return
   if(title)title.textContent='📌 '+escHtml(d.state)
   body.style.textAlign='left';body.style.paddingTop='0';body.style.color='var(--text)'
+
+  // Collect local WIBs from CRM that match this state abbreviation
+  const stateWibs=(window._wibs||[]).filter(w=>(w.state||'').toUpperCase()===d.abbr.toUpperCase())
+  const localWibsHtml=stateWibs.length
+    ?`<div style="margin-top:11px">
+        <div style="font-size:10px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:7px">🏛 Local Boards in CRM (${stateWibs.length})</div>
+        <div style="display:flex;flex-direction:column;gap:5px;max-height:180px;overflow-y:auto">
+          ${stateWibs.map(w=>`<div onclick="openWibProfile('${w.id}')" style="display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:var(--white);border:.5px solid var(--border);border-radius:7px;cursor:pointer;transition:background .1s" onmouseover="this.style.background='var(--blue-bg)'" onmouseout="this.style.background='var(--white)'">
+            <div style="min-width:0">
+              <div style="font-size:11.5px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(w.wib_name)}</div>
+              <div style="font-size:10px;color:var(--text3)">${escHtml(w.wib_type||'Local')}${w.status?' \u00b7 '+w.status.replace(/_/g,' '):''}</div>
+            </div>
+            <span style="font-size:9px;color:var(--blue-t);flex-shrink:0;margin-left:6px">Open \u2192</span>
+          </div>`).join('')}
+        </div>
+      </div>`
+    :`<div style="margin-top:11px;padding:9px 11px;background:var(--gray2);border-radius:7px;font-size:11px;color:var(--text3)">No local boards loaded in CRM for ${escHtml(d.state)} yet. <a class="wt-cell-link" style="display:block;margin-top:4px" href="https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx" target="_blank" rel="noopener">Find them on CareerOneStop \u2192</a></div>`
+
   body.innerHTML=`
     <div style="margin-bottom:10px;padding-bottom:8px;border-bottom:.5px solid var(--gray2)">
       <div style="font-size:12px;font-weight:600;margin-bottom:4px">${escHtml(d.board)}</div>
       <span class="pill p-blue" style="font-size:9.5px">${d.localBoards} local boards</span>
       <span class="pill p-teal" style="font-size:9.5px;margin-left:4px">${escHtml(d.region)}</span>
     </div>
-
-    <!-- WIOA / IWT Funding Contact — primary focus -->
     <div style="background:var(--amber-bg);border:.5px solid #f0c040;border-radius:9px;padding:11px 13px;margin-bottom:11px">
-      <div style="font-size:10px;font-weight:700;color:var(--amber-t);letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">💰 WIOA / IWT Funding Contact</div>
+      <div style="font-size:10px;font-weight:700;color:var(--amber-t);letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">\u{1F4B0} WIOA / IWT Funding Contact</div>
       <div style="font-size:12.5px;font-weight:700;color:var(--text);margin-bottom:1px">${escHtml(d.director)}</div>
       <div style="font-size:10.5px;color:var(--text2);margin-bottom:8px">${escHtml(d.title)}</div>
       <div style="display:flex;flex-direction:column;gap:5px">
-        <a class="wt-cell-link" href="tel:${escAttr(d.phone)}" style="font-size:11.5px;display:flex;align-items:center;gap:5px">
-          <span style="font-size:13px">📞</span> ${escHtml(d.phone)}
-        </a>
-        <a class="wt-cell-link" href="mailto:${escAttr(d.email)}" style="font-size:11.5px;display:flex;align-items:center;gap:5px;word-break:break-all">
-          <span style="font-size:13px">✉️</span> ${escHtml(d.email)}
-        </a>
-        <a class="wt-cell-link" href="${escUrl(d.website)}" target="_blank" rel="noopener" style="font-size:11.5px;display:flex;align-items:center;gap:5px">
-          <span style="font-size:13px">🌐</span> State Board Website →
-        </a>
+        <a class="wt-cell-link" href="tel:${escAttr(d.phone)}" style="font-size:11.5px;display:flex;align-items:center;gap:5px"><span style="font-size:13px">\u{1F4DE}</span> ${escHtml(d.phone)}</a>
+        <a class="wt-cell-link" href="mailto:${escAttr(d.email)}" style="font-size:11.5px;display:flex;align-items:center;gap:5px;word-break:break-all"><span style="font-size:13px">\u2709\uFE0F</span> ${escHtml(d.email)}</a>
+        <a class="wt-cell-link" href="${escUrl(d.website)}" target="_blank" rel="noopener" style="font-size:11.5px;display:flex;align-items:center;gap:5px"><span style="font-size:13px">\u{1F310}</span> State Board Website \u2192</a>
       </div>
     </div>
-
-    <div class="wt-detail-grid">
-      <div class="wt-detail-field" style="grid-column:1/-1">
-        <div class="wt-detail-label">Find Local WIBs for Site-Specific IWT Applications</div>
-        <a class="wt-cell-link" href="https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx" target="_blank" rel="noopener">CareerOneStop WDB Finder — ${escHtml(d.state)} →</a>
-      </div>
-      <div class="wt-detail-field" style="grid-column:1/-1">
-        <div class="wt-detail-label">WIOA Incumbent Worker Training (IWT) — Federal Overview</div>
-        <a class="wt-cell-link" href="https://www.dol.gov/agencies/eta/wioa/about" target="_blank" rel="noopener">DOL WIOA Program Overview →</a>
-      </div>
-    </div>
-
-    <div style="margin-top:10px;padding-top:8px;border-top:.5px solid var(--gray2);display:flex;gap:6px;flex-wrap:wrap">
+    ${localWibsHtml}
+    <div style="margin-top:11px;padding-top:8px;border-top:.5px solid var(--gray2);display:flex;gap:6px;flex-wrap:wrap">
       <button class="btn btn-xs" style="font-size:10px" onclick="wtAskAbout('${d.state.replace(/'/g,"\\'")}')">🤖 Ask AI about ${escHtml(d.state)}</button>
       <button class="btn btn-xs" style="font-size:10px" onclick="wtAskAbout('WIOA IWT grant funding ${d.state.replace(/'/g,"\\'")}')">💰 IWT grant info</button>
       <button class="btn btn-xs" style="font-size:10px" onclick="wtAskAbout('latest WIB news ${d.state.replace(/'/g,"\\'")}')">🔍 Latest news</button>
@@ -6336,23 +6343,42 @@ function showNoteDetail(id){
 }
 
 function openNewNoteModal(){
+  // Pre-build the WIB option list for the link-to-record selector
+  const wibOpts=(window._wibs||[]).map(w=>`<option value="wib:${escAttr(w.id)}">${escHtml(w.wib_name)}${w.state?' ('+w.state+')':''}</option>`).join('')
+  const coOpts=(window._companies||[]).map(c=>`<option value="co:${escAttr(c.id)}">${escHtml(c.company_name)}</option>`).join('')
+
   showModal('New Note',`
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Note Type</div>
-      <select id="new-note-type" onchange="updateNewNoteAuthor(this)">
-        <option>Note</option>
-        <option>Aircall</option>
-        <option>Call Summary</option>
-        <option>Meeting Notes</option>
-        <option>Email</option>
-        <option>Follow-up</option>
-      </select>
-    </div></div>
-    <div class="form-row form-full" id="new-note-author-row">
-      <div class="form-group">
-        <div class="form-label">Author</div>
+    <div style="background:var(--blue-bg);border:.5px solid #93c5fd;border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:11px;color:var(--blue-t)">
+      ℹ️ Notes are shared across the entire CRM. All notes show the author name, date/time, and content wherever they appear — on WIB profiles, Company profiles, the Notes page, and the Calls page.
+    </div>
+    <div class="form-row">
+      <div class="form-group"><div class="form-label">Note Type</div>
+        <select id="new-note-type" onchange="updateNewNoteAuthor(this)">
+          <option>Note</option>
+          <option>Aircall</option>
+          <option>Call Summary</option>
+          <option>Meeting Notes</option>
+          <option>Email</option>
+          <option>Follow-up</option>
+        </select>
+      </div>
+      <div class="form-group"><div class="form-label">Date &amp; Time</div>
         <input id="new-note-author" readonly
           value="${escHtml(currentUser?.full_name||currentUser?.email||'Unknown')}"
-          style="background:var(--gray);color:var(--text2);cursor:default">
+          style="background:var(--gray);color:var(--text2);cursor:default;display:none">
+        <div style="padding:7px 10px;background:var(--gray);border:.5px solid var(--border2);border-radius:7px;font-size:11.5px;color:var(--text2)" id="new-note-ts">${fmtNoteDateTime(new Date().toISOString())}</div>
+      </div>
+    </div>
+    <div class="form-row" style="margin-bottom:4px">
+      <div class="form-group"><div class="form-label">Author</div>
+        <div style="padding:7px 10px;background:var(--gray);border:.5px solid var(--border2);border-radius:7px;font-size:11.5px;color:var(--text2)" id="new-note-author-display">${escHtml(currentUser?.full_name||currentUser?.email||'Unknown')}</div>
+      </div>
+      <div class="form-group"><div class="form-label">Link to Record <span style="font-size:9.5px;color:var(--text3)">(optional)</span></div>
+        <select id="new-note-record">
+          <option value="">— None —</option>
+          ${wibOpts ? '<optgroup label="Workforce Boards">'+wibOpts+'</optgroup>' : ''}
+          ${coOpts  ? '<optgroup label="Companies">'+coOpts+'</optgroup>'  : ''}
+        </select>
       </div>
     </div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Content <span class="form-req">*</span></div>
@@ -6360,11 +6386,19 @@ function openNewNoteModal(){
     </div></div>`,
   async()=>{
     const noteType = document.getElementById('new-note-type').value
+    const recordVal = document.getElementById('new-note-record')?.value||''
+    let recordType=null, recordId=null
+    if(recordVal){
+      const [rt,rid]=recordVal.split(':')
+      recordType = rt==='wib' ? 'wib_records' : rt==='co' ? 'companies' : null
+      recordId   = rid||null
+    }
     let payload
     try{
       payload = buildNotePayload(
         document.getElementById('new-note-content').value,
-        noteType
+        noteType,
+        { record_type: recordType, record_id: recordId }
       )
     }catch(e){ showToast(e.message,'error'); return false }
     try{
@@ -6375,9 +6409,16 @@ function openNewNoteModal(){
 }
 
 function updateNewNoteAuthor(sel){
-  const authorInput = document.getElementById('new-note-author'); if(!authorInput) return
   const isAircall = sel.value==='Aircall'||sel.value==='Call Summary'
-  authorInput.value = isAircall ? 'Aircall' : (currentUser?.full_name||currentUser?.email||'Unknown')
+  const authorName = isAircall ? 'Aircall' : (currentUser?.full_name||currentUser?.email||'Unknown')
+  // Update both the hidden legacy input and the visible display div
+  const legacyInput = document.getElementById('new-note-author')
+  const displayDiv  = document.getElementById('new-note-author-display')
+  if(legacyInput) legacyInput.value = authorName
+  if(displayDiv){
+    displayDiv.textContent = authorName
+    displayDiv.style.color = isAircall ? 'var(--green-t)' : 'var(--text2)'
+  }
 }
 
 /* ═══════════════════════════════════════════════════
