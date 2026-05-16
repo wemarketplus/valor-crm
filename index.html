@@ -654,6 +654,35 @@ textarea{resize:vertical;min-height:70px}
 .email-row{display:grid;grid-template-columns:1fr auto;align-items:center;padding:10px 14px;border-bottom:.5px solid var(--gray2);cursor:pointer;transition:background .1s;font-size:12px}
 .email-row:hover{background:var(--gray)}
 
+/* ── Territory Assignment Styles ─────────────────────────────── */
+.territory-badge{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:500;background:var(--teal-bg);color:var(--teal-t);margin:1px}
+.territory-badge.unassigned{background:var(--gray2);color:var(--text3)}
+.ms-dropdown{position:relative;display:inline-block;width:100%}
+.ms-trigger{width:100%;padding:7px 10px;border:1px solid var(--border2);border-radius:8px;background:var(--white);font-size:12px;cursor:pointer;display:flex;align-items:center;flex-wrap:wrap;gap:4px;min-height:36px;transition:border-color .15s}
+.ms-trigger:hover{border-color:var(--blue)}
+.ms-trigger .ms-pill{background:var(--teal-bg);color:var(--teal-t);padding:2px 7px;border-radius:10px;font-size:10.5px;font-weight:500;display:flex;align-items:center;gap:3px}
+.ms-trigger .ms-pill-x{cursor:pointer;font-size:11px;opacity:.6;line-height:1}
+.ms-trigger .ms-pill-x:hover{opacity:1}
+.ms-trigger .ms-placeholder{color:var(--text3);font-size:12px}
+.ms-trigger .ms-arrow{margin-left:auto;color:var(--text3);font-size:10px;flex-shrink:0}
+.ms-menu{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:9999;background:var(--white);border:1px solid var(--border2);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow-y:auto;display:none}
+.ms-menu.open{display:block}
+.ms-search{padding:8px;border-bottom:1px solid var(--border)}
+.ms-search input{width:100%;padding:5px 8px;border:1px solid var(--border2);border-radius:6px;font-size:11.5px;outline:none}
+.ms-option{padding:8px 12px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:8px;transition:background .1s}
+.ms-option:hover{background:var(--gray2)}
+.ms-option input[type=checkbox]{accent-color:var(--teal);width:13px;height:13px;pointer-events:none}
+.ms-option.selected{background:var(--teal-bg)}
+.ms-empty{padding:10px 12px;font-size:12px;color:var(--text3);text-align:center}
+.wib-view-toggle{display:flex;align-items:center;gap:8px;background:var(--white);border:1px solid var(--border2);border-radius:10px;padding:5px 10px;font-size:12px}
+.wib-view-toggle .vt-label{color:var(--text2);font-weight:500;font-size:11px;white-space:nowrap}
+.wib-view-toggle select{border:none;outline:none;font-size:12px;font-weight:500;color:var(--text);background:transparent;cursor:pointer;padding:0 4px}
+.wib-view-indicator{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:10.5px;font-weight:600;background:var(--teal-bg);color:var(--teal-t);transition:all .2s;white-space:nowrap}
+.wib-view-indicator.mode-all{background:var(--blue-bg);color:var(--blue-t)}
+.terr-cell{display:flex;flex-wrap:wrap;gap:2px;align-items:center}
+@keyframes tspin{to{transform:rotate(360deg)}}
+.t-saving{display:inline-block;width:11px;height:11px;border:1.5px solid currentColor;border-top-color:transparent;border-radius:50%;animation:tspin .6s linear infinite}
+
 </style>
 </head>
 <body>
@@ -1131,6 +1160,7 @@ function renderApp(){
         <div class="sb-divider"></div>
         <div class="sb-section">Admin</div>
         ${sbi('users','👥','User Management')}
+        ${sbi('territories','🗺','WIB Territories')}
         ${sbi('auditlogs','🔍','Audit Logs')}
         ${sbi('settings','⚙','Settings')}
         `:''}
@@ -1244,13 +1274,12 @@ function switchView(id){
 
 function applyWibView(id){
   if(!window._wibs) return
-  let d = [...window._wibs]
-  // Territory-based views: id is 'territory_<uuid>'
+  let d = getWibsByViewMode(window._wibViewMode)
+  // Territory sidebar pills override the mode filter
   if(id && id.startsWith('territory_')) {
     const territoryId = id.replace('territory_', '')
-    d = d.filter(w => w.territory_id === territoryId)
+    d = [...window._wibs].filter(w => w.territory_id === territoryId)
   } else {
-    // Built-in named views
     const viewFilters = {
       all: ()=>true,
       contacted: w=>['contacted','funding_available','follow_up_needed','network_member'].includes(w.status),
@@ -1261,7 +1290,6 @@ function applyWibView(id){
     const filter = viewFilters[id] || (()=>true)
     d = d.filter(filter)
   }
-  // Sort variants
   if(id==='by_state') d.sort((a,b)=>(a.state||'').localeCompare(b.state||''))
   else if(id==='by_location') d.sort((a,b)=>(b.call_priority||0)-(a.call_priority||0))
   window._wibFilters.search = ''
@@ -1342,6 +1370,7 @@ async function loadPage(page){
     else if(page==='revenue')await pageRevenue()
     else if(page==='compliance')await pageCompliance()
     else if(page==='users')await pageUsers()
+    else if(page==='territories')await pageTerritories()
     else if(page==='tasks')await pageTasks()
     else if(page==='notes')await pageNotes()
     else if(page==='calls')pageCalls()
@@ -1501,16 +1530,35 @@ async function pageDashboard(){
    WORKFORCE BOARDS — LIST
 ═══════════════════════════════════════════════════ */
 async function pageWibs(){
-  // Load territories and WIBs in parallel so viewbar is populated
-  const [data, terrData] = await Promise.all([
+  // Load WIBs, territories, and user's saved view pref in parallel
+  const [data, terrData, viewPref] = await Promise.all([
     api('/api/wibs?limit=1000'),
-    api('/api/territories').catch(()=>({data:[]}))
+    api('/api/territories').catch(()=>({data:[]})),
+    api('/api/me/wib-view').catch(()=>({view_mode:'all',territories:[]}))
   ])
-  window._wibs = data.data || []
-  window._territories = terrData.data || []
+  window._wibs          = data.data || []
+  window._territories   = terrData.data || []
+  window._myTerritories = viewPref.territories || []
+  window._wibViewMode   = viewPref.view_mode || 'all'
   const total = data.count || window._wibs.length
 
+  // Build the view-mode toggle widget
+  const hasAssigned = window._myTerritories.length > 0
+  const viewToggleHtml = `<div class="wib-view-toggle">
+    <span class="vt-label">View Mode</span>
+    <select id="wib-view-mode-select" onchange="onWibViewModeChange(this.value)">
+      <option value="all"${window._wibViewMode==='all'?' selected':''}>All WIBs</option>
+      <option value="my_territories"${window._wibViewMode==='my_territories'?' selected':''}${!hasAssigned?' disabled':''}>
+        My Assigned WIBs${!hasAssigned?' (none assigned)':''}
+      </option>
+    </select>
+    <span class="wib-view-indicator${window._wibViewMode==='all'?' mode-all':''}" id="wib-mode-indicator">
+      ${window._wibViewMode==='all'?'⊞ All WIBs':'🗺 '+window._myTerritories.map(t=>t.name).join(', ')}
+    </span>
+  </div>`
+
   setTopbar('Workforce Boards',`${total.toLocaleString()} total`,`
+    ${viewToggleHtml}
     <div class="ie-wrap">
       <button class="btn ie-btn" onclick="toggleIEMenu('wib-ie')">⬆ Import / Export ∨</button>
       <div class="ie-menu" id="wib-ie">
@@ -1528,7 +1576,7 @@ async function pageWibs(){
 
   setViewbar([
     {id:'all',icon:'⊞',label:'All WIBs',count:total},
-    ...(window._territories||[]).map(t=>({id:'territory_'+t.id,icon:'⊞',label:t.name})),
+    ...(window._territories||[]).map(t=>({id:'territory_'+t.id,icon:'🗺',label:t.name})),
     {id:'contacted',icon:'⊞',label:'Contacted WIBs'},
     {id:'by_location',icon:'⊞',label:'WIBs by Count of Locations'},
     {id:'by_state',icon:'⊞',label:'WIBs by State'},
@@ -1536,7 +1584,7 @@ async function pageWibs(){
   ],'all',[],
   'READONLY In-Network 4-5 Star Locations -daily')
 
-  renderWibTable(window._wibs)
+  renderWibTable(getWibsByViewMode(window._wibViewMode))
   // Async enrichment: load contacts, locations, funding to populate extra columns
   Promise.all([
     api('/api/locations?limit=5000').catch(()=>({data:[]})),
@@ -1549,8 +1597,35 @@ async function pageWibs(){
       w._funding   = funds.filter(f=>f.wib_id===w.id).map(f=>f.opportunity_name)
       w._contacts  = [w.contact_name, w.contact_name_2].filter(Boolean)
     })
-    renderWibTable(window._wibs)
+    renderWibTable(getWibsByViewMode(window._wibViewMode))
   }).catch(()=>{})
+}
+
+// ── View mode helpers ─────────────────────────────────────────────
+window._wibViewMode     = 'all'
+window._myTerritories   = []
+
+function getWibsByViewMode(mode){
+  const all = window._wibs || []
+  if(mode !== 'my_territories' || !window._myTerritories.length) return all
+  const myIds = new Set(window._myTerritories.map(t=>t.id))
+  return all.filter(w => myIds.has(w.territory_id))
+}
+
+async function onWibViewModeChange(newMode){
+  window._wibViewMode = newMode
+  // Update indicator badge instantly
+  const indicator = document.getElementById('wib-mode-indicator')
+  if(indicator){
+    indicator.className = 'wib-view-indicator' + (newMode==='all'?' mode-all':'')
+    indicator.textContent = newMode==='all'
+      ? '⊞ All WIBs'
+      : '🗺 '+window._myTerritories.map(t=>t.name).join(', ')
+  }
+  // Instant client-side filter — zero latency
+  renderWibTable(getWibsByViewMode(newMode))
+  // Persist preference in background (non-blocking)
+  api('/api/me/wib-view','PUT',{view_mode:newMode}).catch(()=>{})
 }
 
 // ── SORT STATE ─────────────────────────────────────────────────────────
@@ -3221,7 +3296,7 @@ async function pageUsers(){
     </div>
     <table class="att-tbl"><thead><tr>
       <th><div class="th-i">User</div></th><th><div class="th-i">Role</div></th>
-      <th><div class="th-i">Title</div></th><th><div class="th-i">Status</div></th>
+      <th><div class="th-i">Title</div></th><th><div class="th-i">Territories</div></th><th><div class="th-i">Status</div></th>
       <th><div class="th-i">Last Login</div></th><th><div class="th-i">Actions</div></th>
     </tr></thead>
     <tbody id="users-tbody">
@@ -3242,6 +3317,12 @@ async function pageUsers(){
 function renderUserRow(u){
   const roleLabels={super_admin:'Super Admin',admin:'Admin',grant_coordinator:'Grant Coordinator',compliance_mgr:'Compliance Mgr',team_member:'Sales Specialist',external_partner:'Read-Only'}
   const initials=(u.full_name||u.email||'?').slice(0,2).toUpperCase()
+  const isAdminViewer=['super_admin','admin'].includes(currentUser?.role)
+  const terrHtml=(u.territories||[]).length>0
+    ?(u.territories||[]).map(t=>`<span class="territory-badge">${escHtml(t.name)}</span>`).join('')
+    :'<span class="territory-badge unassigned">Unassigned</span>'
+  // Safely encode user object for onclick — avoid single-quote conflicts
+  const uEncoded=encodeURIComponent(JSON.stringify(u))
   return`<tr>
     <td><div style="display:flex;align-items:center;gap:8px">
       <span style="width:26px;height:26px;border-radius:50%;background:var(--blue-bg);color:var(--blue-t);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">${initials}</span>
@@ -3249,13 +3330,105 @@ function renderUserRow(u){
     </div></td>
     <td><span class="pill p-blue">${roleLabels[u.role]||u.role}</span></td>
     <td class="cell-dim">${escHtml(u.title||'—')}</td>
+    <td><div class="terr-cell">${terrHtml}</div></td>
     <td>${u.is_active!==false?'<span class="pill p-green">Active</span>':'<span class="pill p-red">Inactive</span>'}</td>
-    <td class="cell-dim">${u.last_login?fmtAgo(u.last_login):'Never'}</td>
+    <td class="cell-dim">${u.last_login_at?fmtAgo(u.last_login_at):(u.last_login?fmtAgo(u.last_login):'Never')}</td>
     <td><div class="action-btns">
       <button class="action-btn" onclick="openEditUserModal(${JSON.stringify(u).replace(/"/g,"'")})">Edit</button>
-      ${['super_admin','admin'].includes(currentUser?.role)?`<button class="action-btn del" onclick="deleteUserConfirm('${u.id}','${escHtml(u.full_name||u.email)}')">Delete</button>`:''}
+      ${isAdminViewer?`<button class="action-btn" style="color:var(--teal-t);border-color:var(--teal-bg)" onclick="openAssignTerritoryModal(decodeURIComponent('${uEncoded}'))">🗺 Territories</button>`:''}
+      ${isAdminViewer?`<button class="action-btn del" onclick="deleteUserConfirm('${u.id}','${escHtml(u.full_name||u.email)}')">Delete</button>`:''}
     </div></td>
   </tr>`
+}
+
+// ── Multi-select dropdown widget ──────────────────────────────────
+function createMultiSelect(containerId,options,selectedIds,onChange){
+  const container=document.getElementById(containerId)
+  if(!container)return
+  let selected=new Set(selectedIds||[])
+  let filterVal=''
+  function render(){
+    const selOpts=options.filter(o=>selected.has(o.id))
+    const pills=selOpts.map(o=>`<span class="ms-pill">${escHtml(o.name)}<span class="ms-pill-x" data-id="${o.id}">✕</span></span>`).join('')
+    const filtered=options.filter(o=>!filterVal||o.name.toLowerCase().includes(filterVal.toLowerCase()))
+    const opts=filtered.length
+      ?filtered.map(o=>`<div class="ms-option${selected.has(o.id)?' selected':''}" data-id="${o.id}"><input type="checkbox" ${selected.has(o.id)?'checked':''}> ${escHtml(o.name)}</div>`).join('')
+      :'<div class="ms-empty">No territories match</div>'
+    container.innerHTML=`<div class="ms-dropdown"><div class="ms-trigger" id="${containerId}_trigger">${pills||'<span class="ms-placeholder">Select territories…</span>'}<span class="ms-arrow">▼</span></div><div class="ms-menu" id="${containerId}_menu"><div class="ms-search"><input placeholder="Search…" id="${containerId}_search" value="${escHtml(filterVal)}"></div>${opts}</div></div>`
+    container.querySelector(`#${containerId}_trigger`).addEventListener('mousedown',e=>{
+      if(e.target.classList.contains('ms-pill-x'))return
+      const menu=container.querySelector(`#${containerId}_menu`)
+      const isOpen=menu.classList.contains('open')
+      document.querySelectorAll('.ms-menu.open').forEach(m=>m.classList.remove('open'))
+      if(!isOpen){menu.classList.add('open');container.querySelector(`#${containerId}_search`)?.focus()}
+    })
+    container.querySelectorAll('.ms-pill-x').forEach(x=>{
+      x.addEventListener('click',e=>{e.stopPropagation();selected.delete(x.dataset.id);onChange([...selected]);render()})
+    })
+    const searchEl=container.querySelector(`#${containerId}_search`)
+    if(searchEl)searchEl.addEventListener('input',e=>{
+      filterVal=e.target.value;render()
+      container.querySelector(`#${containerId}_menu`).classList.add('open')
+      container.querySelector(`#${containerId}_search`)?.focus()
+    })
+    container.querySelectorAll('.ms-option').forEach(opt=>{
+      opt.addEventListener('click',e=>{
+        e.stopPropagation()
+        const id=opt.dataset.id
+        if(selected.has(id))selected.delete(id);else selected.add(id)
+        onChange([...selected]);render()
+        container.querySelector(`#${containerId}_menu`).classList.add('open')
+      })
+    })
+  }
+  if(!document._msOutsideAttached){
+    document._msOutsideAttached=true
+    document.addEventListener('mousedown',e=>{
+      if(!e.target.closest('.ms-dropdown'))document.querySelectorAll('.ms-menu.open').forEach(m=>m.classList.remove('open'))
+    })
+  }
+  render()
+  return{getSelected:()=>[...selected]}
+}
+
+// ── Territory assignment modal ────────────────────────────────────
+async function openAssignTerritoryModal(uEncoded){
+  let u
+  try{u=JSON.parse(typeof uEncoded==='string'?uEncoded:JSON.stringify(uEncoded))}catch(e){showToast('Could not parse user data','error');return}
+  if(!window._territories||!window._territories.length){
+    try{const td=await api('/api/territories');window._territories=td.data||[]}
+    catch(e){showToast('Could not load territories: '+e.message,'error');return}
+  }
+  const currentIds=(u.territories||[]).map(t=>t.id)
+  window._terrMsSelected=[...currentIds]
+  showModal(`🗺 Assign WIB Territories — ${escHtml(u.full_name||u.email)}`,`
+    <div style="margin-bottom:10px;font-size:12px;color:var(--text2)">
+      Select one or more territories. When this user switches to <strong>"My Assigned WIBs"</strong>, they will only see WIBs in these territories.
+    </div>
+    <div class="form-group">
+      <div class="form-label" style="margin-bottom:6px">Assigned Territories</div>
+      <div id="terr-ms-wrap"></div>
+    </div>
+    <div id="terr-assign-status" style="margin-top:8px;font-size:11.5px;color:var(--text3)">
+      ${currentIds.length===0?'⚠️ No territories assigned — user sees all WIBs by default.':
+        `✓ Currently: ${(u.territories||[]).map(t=>t.name).join(', ')}`}
+    </div>`,
+  async()=>{
+    const selectedIds=window._terrMsSelected||currentIds
+    try{
+      await api('/api/users/'+u.id+'/territories','PUT',{territory_ids:selectedIds})
+      showToast(selectedIds.length?`${selectedIds.length} territory(s) assigned`:'Territory assignments cleared','success')
+      pageUsers()
+    }catch(e){showToast(e.message,'error');return false}
+  })
+  setTimeout(()=>{
+    createMultiSelect('terr-ms-wrap',window._territories,currentIds,ids=>{
+      window._terrMsSelected=ids
+      const s=document.getElementById('terr-assign-status')
+      if(s)s.textContent=ids.length===0?'⚠️ No territories — user will see all WIBs.':
+        `✓ Will assign: ${ids.map(id=>window._territories.find(t=>t.id===id)?.name||id).join(', ')}`
+    })
+  },80)
 }
 
 window._users=[]
@@ -3389,6 +3562,139 @@ function openEditUserModal(u){
     try{
       await api('/api/users/'+u.id,'PUT',{full_name:document.getElementById('eu-name').value,role:document.getElementById('eu-role').value,title:document.getElementById('eu-title').value||null,phone:document.getElementById('eu-phone').value||null,is_active:document.getElementById('eu-active').checked})
       showToast('User updated','success');pageUsers()
+    }catch(e){showToast(e.message,'error');return false}
+  })
+}
+
+/* ═══════════════════════════════════════════════════
+   WIB TERRITORIES — ADMIN MANAGEMENT PAGE
+═══════════════════════════════════════════════════ */
+async function pageTerritories(){
+  const isAdmin=['super_admin','admin'].includes(currentUser?.role)
+  setTopbar('WIB Territories','Manage & assign regional territories',
+    isAdmin?`<button class="btn btn-primary" onclick="openNewTerritoryModal()">+ New Territory</button>`:'')
+  clearViewbar()
+  document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading...</div>'
+  try{
+    const [terrRes,usersRes,wibsRes]=await Promise.all([
+      api('/api/territories'),
+      api('/api/users').catch(()=>({data:[]})),
+      api('/api/wibs?limit=1000').catch(()=>({data:[]}))
+    ])
+    const territories=terrRes.data||[]
+    const users=usersRes.data||[]
+    const wibs=wibsRes.data||[]
+    // WIB count per territory
+    const wibCount={}
+    wibs.forEach(w=>{if(w.territory_id)wibCount[w.territory_id]=(wibCount[w.territory_id]||0)+1})
+    // Users per territory (from many-to-many assignments)
+    const usersInTerritory={}
+    users.forEach(u=>{
+      (u.territories||[]).forEach(t=>{
+        if(!usersInTerritory[t.id])usersInTerritory[t.id]=[]
+        usersInTerritory[t.id].push(u)
+      })
+    })
+    document.getElementById('page-area').innerHTML=`
+      <div class="alert alert-info" style="margin-bottom:10px">🗺 Territories let you assign WIBs and users to regional groups. Users can then toggle between "All WIBs" and "My Assigned WIBs" on the Workforce Boards page.</div>
+      <div class="att-wrap">
+        <div class="att-toolbar"><div class="att-toolbar-l">
+          <span style="font-size:12px;color:var(--text2)">${territories.length} territories</span>
+        </div></div>
+        <table class="att-tbl"><thead><tr>
+          <th><div class="th-i">Territory</div></th>
+          <th><div class="th-i">States</div></th>
+          <th><div class="th-i">WIBs</div></th>
+          <th><div class="th-i">Assigned Users</div></th>
+          ${isAdmin?'<th><div class="th-i">Actions</div></th>':''}
+        </tr></thead>
+        <tbody>
+        ${territories.length?territories.map(t=>{
+          const tUsers=usersInTerritory[t.id]||[]
+          const tWibs=wibCount[t.id]||0
+          return`<tr>
+            <td><div style="font-weight:500">${escHtml(t.name)}</div>${t.description?`<div class="cell-dim" style="font-size:11px">${escHtml(t.description)}</div>`:''}</td>
+            <td class="cell-dim">${(t.states||[]).join(', ')||'—'}</td>
+            <td><span class="pill p-blue">${tWibs}</span></td>
+            <td><div class="terr-cell">${tUsers.length
+              ?tUsers.map(u=>`<span class="territory-badge">${escHtml(u.full_name||u.email)}</span>`).join('')
+              :'<span class="territory-badge unassigned">No users</span>'}</div></td>
+            ${isAdmin?`<td><div class="action-btns">
+              <button class="action-btn" onclick="openEditTerritoryModal(decodeURIComponent('${encodeURIComponent(JSON.stringify(t))}'))">Edit</button>
+              <button class="action-btn del" onclick="deleteTerritoryConfirm('${t.id}','${escHtml(t.name)}')">Delete</button>
+            </div></td>`:''}
+          </tr>`}).join('')
+        :`<tr><td colspan="${isAdmin?5:4}" style="text-align:center;padding:32px;color:var(--text3)">
+            No territories yet.${isAdmin?' <span style="cursor:pointer;color:var(--blue)" onclick="openNewTerritoryModal()">Create one →</span>':''}
+          </td></tr>`}
+        </tbody></table>
+      </div>`
+  }catch(e){
+    document.getElementById('page-area').innerHTML=`<div class="alert alert-error" style="margin:20px">⚠️ ${e.message}</div>`
+  }
+}
+
+function openNewTerritoryModal(){
+  showModal('New Territory',`
+    <div class="form-group">
+      <div class="form-label">Territory Name <span class="form-req">*</span></div>
+      <input id="nt-name" placeholder="e.g. Southwest Region">
+    </div>
+    <div class="form-group">
+      <div class="form-label">States (comma-separated)</div>
+      <input id="nt-states" placeholder="TX, NM, AZ">
+    </div>
+    <div class="form-group">
+      <div class="form-label">Description</div>
+      <input id="nt-desc" placeholder="Optional description">
+    </div>`,
+  async()=>{
+    const name=document.getElementById('nt-name').value.trim()
+    if(!name){showToast('Territory name required','error');return false}
+    const states=document.getElementById('nt-states').value.split(',').map(s=>s.trim()).filter(Boolean)
+    try{
+      await api('/api/territories','POST',{name,states,description:document.getElementById('nt-desc').value||''})
+      showToast('Territory created','success');pageTerritories()
+    }catch(e){showToast(e.message,'error');return false}
+  })
+}
+
+function openEditTerritoryModal(tEncoded){
+  let t
+  try{t=JSON.parse(typeof tEncoded==='string'?tEncoded:JSON.stringify(tEncoded))}catch(e){showToast('Parse error','error');return}
+  showModal(`Edit: ${escHtml(t.name)}`,`
+    <div class="form-group">
+      <div class="form-label">Territory Name <span class="form-req">*</span></div>
+      <input id="et-name" value="${escHtml(t.name)}">
+    </div>
+    <div class="form-group">
+      <div class="form-label">States (comma-separated)</div>
+      <input id="et-states" value="${(t.states||[]).join(', ')}">
+    </div>
+    <div class="form-group">
+      <div class="form-label">Description</div>
+      <input id="et-desc" value="${escHtml(t.description||'')}">
+    </div>`,
+  async()=>{
+    const name=document.getElementById('et-name').value.trim()
+    if(!name){showToast('Name required','error');return false}
+    const states=document.getElementById('et-states').value.split(',').map(s=>s.trim()).filter(Boolean)
+    try{
+      await api('/api/territories/'+t.id,'PUT',{name,states,description:document.getElementById('et-desc').value||''})
+      showToast('Territory updated','success');pageTerritories()
+    }catch(e){showToast(e.message,'error');return false}
+  })
+}
+
+function deleteTerritoryConfirm(id,name){
+  showModal('⚠️ Delete Territory',`
+    <div class="alert alert-error">
+      Deleting <strong>${escHtml(name)}</strong> will unassign it from all WIBs and users. This cannot be undone.
+    </div>`,
+  async()=>{
+    try{
+      await api('/api/territories/'+id,'DELETE')
+      showToast('Territory deleted','success');pageTerritories()
     }catch(e){showToast(e.message,'error');return false}
   })
 }
