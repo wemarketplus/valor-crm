@@ -1156,11 +1156,11 @@ function renderApp(){
         ${sbi('wibs','🏛','Workforce Boards')}
         ${sbi('funding','💰','Funding Opportuniti...')}
         ${sbi('applications','📋','Applications')}
+        ${sbi('territories','🗺','WIB Territories')}
         ${isAdmin?`
         <div class="sb-divider"></div>
         <div class="sb-section">Admin</div>
         ${sbi('users','👥','User Management')}
-        ${sbi('territories','🗺','WIB Territories')}
         ${sbi('auditlogs','🔍','Audit Logs')}
         ${sbi('settings','⚙','Settings')}
         `:''}
@@ -3652,7 +3652,7 @@ async function pageTerritories(){
     .wt-card-hd{padding:10px 14px;border-bottom:.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:6px}
     .wt-card-title{font-size:12px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:5px}
     .wt-card-body{padding:10px 14px}
-    #wt-map-wrap{background:var(--gray);border-radius:0;position:relative;flex:1;min-height:260px}
+    #wt-map-wrap{background:var(--gray);border-radius:0;position:relative;height:280px;min-height:280px;overflow:hidden}
     #wt-svg{display:block;width:100%;height:100%}
     .wt-tooltip{position:absolute;background:var(--white);border:.5px solid var(--border);border-radius:8px;padding:8px 11px;font-size:11px;pointer-events:none;display:none;z-index:10;max-width:200px;box-shadow:0 4px 12px rgba(0,0,0,.1)}
     .wt-state-path{cursor:pointer;transition:opacity .12s}
@@ -3728,7 +3728,7 @@ async function pageTerritories(){
     <div id="wt-right">
 
       <!-- US Map card -->
-      <div class="wt-card" style="flex:0 0 auto;display:flex;flex-direction:column">
+      <div class="wt-card" style="flex-shrink:0;display:flex;flex-direction:column;overflow:hidden">
         <div class="wt-card-hd" style="padding:8px 12px">
           <div class="wt-card-title">🗺 Nationwide WIB Coverage Map</div>
           <div style="display:flex;gap:6px;align-items:center">
@@ -3744,7 +3744,7 @@ async function pageTerritories(){
         </div>
         <div id="wt-map-wrap">
           <div class="wt-tooltip" id="wt-tt"></div>
-          <svg id="wt-svg" viewBox="0 0 900 480"></svg>
+          <svg id="wt-svg" style="display:block;width:100%;height:100%;position:absolute;top:0;left:0" viewBox="0 0 900 432"></svg>
         </div>
         <div class="wt-map-legend">
           <div class="wt-leg-item"><div class="wt-leg-dot" style="background:#0B1E3C"></div>15+ local boards</div>
@@ -3764,8 +3764,18 @@ async function pageTerritories(){
             <div class="wt-card-title" id="wt-detail-title">📌 State Detail</div>
             <button class="btn btn-xs" onclick="wtClearDetail()" style="font-size:10px">Clear</button>
           </div>
-          <div class="wt-card-body" id="wt-detail-body" style="overflow-y:auto;flex:1;font-size:11.5px;color:var(--text3);text-align:center;padding-top:30px">
-            Click any state on the map or a row in the directory
+          <div class="wt-card-body" id="wt-detail-body" style="overflow-y:auto;flex:1;font-size:11.5px;padding:12px 14px">
+            <div style="background:var(--amber-bg);border:.5px solid #f0c040;border-radius:9px;padding:11px 13px;margin-bottom:12px">
+              <div style="font-size:11px;font-weight:700;color:var(--amber-t);margin-bottom:5px">💰 How to Get WIOA / IWT Funding</div>
+              <div style="font-size:10.5px;color:var(--amber-t);line-height:1.6">
+                <strong>Step 1:</strong> Select a state on the map or in the directory below.<br>
+                <strong>Step 2:</strong> Contact the State WIB Director shown here — they oversee WIOA Title I Incumbent Worker Training (IWT) grants for employer upskilling.<br>
+                <strong>Step 3:</strong> Ask the AI assistant about local board contacts for site-specific applications.
+              </div>
+            </div>
+            <div style="color:var(--text3);font-size:11px;text-align:center;padding:8px 0">
+              👆 Click any state on the map or a row in the directory to load contact info
+            </div>
           </div>
         </div>
 
@@ -3776,11 +3786,11 @@ async function pageTerritories(){
             <span style="font-size:10px;background:var(--amber-bg);color:var(--amber-t);padding:1px 7px;border-radius:10px;font-weight:600">Claude AI</span>
           </div>
           <div class="wt-ai-chips" id="wt-chips">
-            <button class="wt-ai-chip" onclick="wtAskChip(this)">Who is the director for Texas?</button>
-            <button class="wt-ai-chip" onclick="wtAskChip(this)">Find WIBs in the Southeast</button>
-            <button class="wt-ai-chip" onclick="wtAskChip(this)">Which states have 20+ local boards?</button>
+            <button class="wt-ai-chip" onclick="wtAskChip(this)">Who approves IWT grants in Texas?</button>
+            <button class="wt-ai-chip" onclick="wtAskChip(this)">How do I apply for WIOA incumbent worker funding?</button>
             <button class="wt-ai-chip" onclick="wtAskChip(this)">Contact info for California WDB</button>
-            <button class="wt-ai-chip" onclick="wtAskChip(this)">Look up latest WIB news for Ohio</button>
+            <button class="wt-ai-chip" onclick="wtAskChip(this)">Which states have the most local boards?</button>
+            <button class="wt-ai-chip" onclick="wtAskChip(this)">Latest WIB news for Ohio</button>
           </div>
           <div id="wt-ai-msgs"></div>
           <div class="wt-ai-input-row">
@@ -3903,7 +3913,21 @@ function wtClearDetail(){
   window._wtSelected=null
   const body=document.getElementById('wt-detail-body')
   const title=document.getElementById('wt-detail-title')
-  if(body){body.style.textAlign='center';body.style.paddingTop='30px';body.style.color='var(--text3)';body.innerHTML='Click any state on the map or a row in the directory'}
+  if(body){
+    body.style.textAlign='left';body.style.paddingTop='0';body.style.color=''
+    body.innerHTML=`
+      <div style="background:var(--amber-bg);border:.5px solid #f0c040;border-radius:9px;padding:11px 13px;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:700;color:var(--amber-t);margin-bottom:5px">💰 How to Get WIOA / IWT Funding</div>
+        <div style="font-size:10.5px;color:var(--amber-t);line-height:1.6">
+          <strong>Step 1:</strong> Select a state on the map or in the directory below.<br>
+          <strong>Step 2:</strong> Contact the State WIB Director shown here — they oversee WIOA Title I Incumbent Worker Training (IWT) grants for employer upskilling.<br>
+          <strong>Step 3:</strong> Ask the AI assistant about local board contacts for site-specific applications.
+        </div>
+      </div>
+      <div style="color:var(--text3);font-size:11px;text-align:center;padding:8px 0">
+        👆 Click any state on the map or a row in the directory to load contact info
+      </div>`
+  }
   if(title)title.textContent='📌 State Detail'
   wtRenderDir(window._wtDirData||window._WIB_STATE_DATA)
   if(typeof d3!=='undefined'){
@@ -3924,35 +3948,43 @@ function wtShowDetail(d){
   body.style.textAlign='left';body.style.paddingTop='0';body.style.color='var(--text)'
   body.innerHTML=`
     <div style="margin-bottom:10px;padding-bottom:8px;border-bottom:.5px solid var(--gray2)">
-      <div style="font-size:12px;font-weight:600;margin-bottom:2px">${escHtml(d.board)}</div>
+      <div style="font-size:12px;font-weight:600;margin-bottom:4px">${escHtml(d.board)}</div>
       <span class="pill p-blue" style="font-size:9.5px">${d.localBoards} local boards</span>
       <span class="pill p-teal" style="font-size:9.5px;margin-left:4px">${escHtml(d.region)}</span>
     </div>
-    <div class="wt-detail-grid">
-      <div class="wt-detail-field" style="grid-column:1/-1">
-        <div class="wt-detail-label">Director / Contact</div>
-        <div style="font-weight:500">${escHtml(d.director)}</div>
-        <div style="font-size:11px;color:var(--text2)">${escHtml(d.title)}</div>
-      </div>
-      <div class="wt-detail-field">
-        <div class="wt-detail-label">Phone</div>
-        <a class="wt-cell-link" href="tel:${escHtml(d.phone)}">${escHtml(d.phone)}</a>
-      </div>
-      <div class="wt-detail-field">
-        <div class="wt-detail-label">Email</div>
-        <a class="wt-cell-link" href="mailto:${escHtml(d.email)}" style="word-break:break-all">${escHtml(d.email)}</a>
-      </div>
-      <div class="wt-detail-field" style="grid-column:1/-1">
-        <div class="wt-detail-label">State Board Website</div>
-        <a class="wt-cell-link" href="${escUrl(d.website)}" target="_blank" rel="noopener">${escHtml(d.website)}</a>
-      </div>
-      <div class="wt-detail-field" style="grid-column:1/-1">
-        <div class="wt-detail-label">Find Local Boards</div>
-        <a class="wt-cell-link" href="https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx" target="_blank" rel="noopener">CareerOneStop WDB Finder →</a>
+
+    <!-- WIOA / IWT Funding Contact — primary focus -->
+    <div style="background:var(--amber-bg);border:.5px solid #f0c040;border-radius:9px;padding:11px 13px;margin-bottom:11px">
+      <div style="font-size:10px;font-weight:700;color:var(--amber-t);letter-spacing:.4px;text-transform:uppercase;margin-bottom:7px">💰 WIOA / IWT Funding Contact</div>
+      <div style="font-size:12.5px;font-weight:700;color:var(--text);margin-bottom:1px">${escHtml(d.director)}</div>
+      <div style="font-size:10.5px;color:var(--text2);margin-bottom:8px">${escHtml(d.title)}</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <a class="wt-cell-link" href="tel:${escAttr(d.phone)}" style="font-size:11.5px;display:flex;align-items:center;gap:5px">
+          <span style="font-size:13px">📞</span> ${escHtml(d.phone)}
+        </a>
+        <a class="wt-cell-link" href="mailto:${escAttr(d.email)}" style="font-size:11.5px;display:flex;align-items:center;gap:5px;word-break:break-all">
+          <span style="font-size:13px">✉️</span> ${escHtml(d.email)}
+        </a>
+        <a class="wt-cell-link" href="${escUrl(d.website)}" target="_blank" rel="noopener" style="font-size:11.5px;display:flex;align-items:center;gap:5px">
+          <span style="font-size:13px">🌐</span> State Board Website →
+        </a>
       </div>
     </div>
+
+    <div class="wt-detail-grid">
+      <div class="wt-detail-field" style="grid-column:1/-1">
+        <div class="wt-detail-label">Find Local WIBs for Site-Specific IWT Applications</div>
+        <a class="wt-cell-link" href="https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx" target="_blank" rel="noopener">CareerOneStop WDB Finder — ${escHtml(d.state)} →</a>
+      </div>
+      <div class="wt-detail-field" style="grid-column:1/-1">
+        <div class="wt-detail-label">WIOA Incumbent Worker Training (IWT) — Federal Overview</div>
+        <a class="wt-cell-link" href="https://www.dol.gov/agencies/eta/wioa/about" target="_blank" rel="noopener">DOL WIOA Program Overview →</a>
+      </div>
+    </div>
+
     <div style="margin-top:10px;padding-top:8px;border-top:.5px solid var(--gray2);display:flex;gap:6px;flex-wrap:wrap">
       <button class="btn btn-xs" style="font-size:10px" onclick="wtAskAbout('${d.state.replace(/'/g,"\\'")}')">🤖 Ask AI about ${escHtml(d.state)}</button>
+      <button class="btn btn-xs" style="font-size:10px" onclick="wtAskAbout('WIOA IWT grant funding ${d.state.replace(/'/g,"\\'")}')">💰 IWT grant info</button>
       <button class="btn btn-xs" style="font-size:10px" onclick="wtAskAbout('latest WIB news ${d.state.replace(/'/g,"\\'")}')">🔍 Latest news</button>
     </div>`
 }
@@ -3988,9 +4020,10 @@ function wtDrawMap(){
   })
   const mapWrap=document.getElementById('wt-map-wrap')
   if(!mapWrap)return
-  const w=mapWrap.clientWidth||700, h=Math.round(w*0.48)
+  // Use fixed viewBox dimensions so projection is stable regardless of render timing
+  const w=900, h=432
   const svg=d3.select('#wt-svg').attr('viewBox',`0 0 ${w} ${h}`)
-  const projection=d3.geoAlbersUsa().scale(w*1.2).translate([w/2,h/2])
+  const projection=d3.geoAlbersUsa().scale(w*1.25).translate([w/2,h/2])
   const path=d3.geoPath(projection)
   const tt=document.getElementById('wt-tt')
   d3.json('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json').then(us=>{
@@ -4069,19 +4102,20 @@ async function wtAiSend(){
   const thinking=wtAiAppend('thinking','🤖 Thinking...')
 
   // Build system prompt with full WIB data baked in
-  const systemPrompt=`You are an expert WIB (Workforce Innovation Board / Workforce Development Board) territory assistant embedded in the Valor Workforce Funding CRM.
+  const systemPrompt=`You are an expert WIB (Workforce Innovation Board / Workforce Development Board) territory assistant embedded in the Valor Workforce Funding CRM. Users are workforce grant professionals seeking to obtain WIOA-funded Incumbent Worker Training (IWT) grants for employers.
 
 You have access to the following nationwide WIB state-level data (all 50 states):
 ${JSON.stringify(window._WIB_STATE_DATA,null,1)}
 
 Your job:
 1. Answer questions about WIB territories, contacts, phone numbers, emails, and websites using the data above.
-2. If asked about LOCAL boards within a state, note that the CareerOneStop WDB finder (https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx) lists all local boards, and use web_search to find specifics.
-3. For questions about RECENT news, director changes, or updated contact info — use web_search to find the latest.
-4. Be concise and CRM-practical. Format contact info clearly. When listing phone/email, put each on its own line.
-5. If the user seems to be preparing to contact a WIB, offer to summarize the key contact details in a copy-ready format.
+2. When asked about WIOA, IWT, or incumbent worker training grants: explain that the State WIB Director (listed in the data) is the primary point of contact. IWT grants are authorized under WIOA Title I and allow local boards to fund upskilling for currently employed workers. Employers typically need to demonstrate a skill gap and a commitment to retain workers.
+3. If asked about LOCAL boards within a state, note that the CareerOneStop WDB finder (https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx) lists all local boards. Use web_search to find specifics on local board directors.
+4. For questions about recent news, director changes, or updated contact info — use web_search to find the latest.
+5. When providing contact info, format it clearly: name, title, phone, email, and website each on their own line.
+6. If a user is preparing to reach out to a WIB about IWT funding, add a practical tip: mention employer size, number of incumbent workers to be trained, and the training topic when making first contact.
 
-Keep responses concise (under 200 words unless a detailed list is requested). Use plain text, no markdown headers.`
+Keep responses under 250 words unless a list is explicitly requested. Use plain text only, no markdown headers or bullets with dashes.`
 
   window._wtAiHistory.push({role:'user',content:q})
 
@@ -4100,11 +4134,15 @@ Keep responses concise (under 200 words unless a detailed list is requested). Us
     const data=await res.json()
     if(!res.ok)throw new Error(data.error?.message||'API error')
 
-    // Extract text from potentially mixed content blocks
+    // Extract text — content may mix text + tool_use blocks (web_search)
+    // When stop_reason is 'tool_use', the model made a search call but the
+    // final answer text block is still present in the same response after
+    // the tool_use block. Collect ALL text blocks to get the full answer.
     let reply=''
     if(data.content&&Array.isArray(data.content)){
       reply=data.content.filter(b=>b.type==='text').map(b=>b.text).join('\n').trim()
     }
+    if(!reply&&data.stop_reason==='tool_use')reply='🔍 Searching for that information...'
     if(!reply&&data.error)reply='Error: '+data.error.message
 
     // Add assistant turn to history (simplified)
