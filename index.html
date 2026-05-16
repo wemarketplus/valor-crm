@@ -2167,33 +2167,45 @@ async function loadWibTabData(tab){
 }
 
 function setNoteType(el,type){
-  document.querySelectorAll('.note-type-btn').forEach(b=>b.classList.remove('active'))
+  // Scope the active-state toggle to ONLY the composer that contains this button.
+  // Prevents WIB and Company composers from cross-contaminating each other's
+  // selected type when both happen to be in the DOM simultaneously.
+  const composer = el.closest('.note-composer') || el.closest('.note-compose') || el.parentElement
+  if(composer){
+    composer.querySelectorAll('.note-type-btn').forEach(b=>b.classList.remove('active'))
+  } else {
+    document.querySelectorAll('.note-type-btn').forEach(b=>b.classList.remove('active'))
+  }
   el.classList.add('active')
-  // "Aircall" type (dedicated button) OR "Call Summary" both trigger Aircall mode
+
   const isAircall = type==='Aircall'||type==='Call Summary'
-  ;['wib','co'].forEach(prefix=>{
-    const av=document.getElementById(prefix+'-note-av')
-    const author=document.getElementById(prefix+'-note-author')
-    const timeEl=document.getElementById(prefix+'-note-time')
-    if(!av||!author)return
+
+  // Update only the who-row inside this same composer
+  const avEl     = composer ? composer.querySelector('[id$="-note-av"]')     : null
+  const authorEl = composer ? composer.querySelector('[id$="-note-author"]') : null
+  const timeEl   = composer ? composer.querySelector('[id$="-note-time"]')   : null
+
+  if(avEl && authorEl){
     if(isAircall){
-      av.textContent='📞'
-      av.className='nc-av aircall'
-      author.textContent='Aircall'
+      avEl.textContent='📞'
+      avEl.className='nc-av aircall'
+      authorEl.textContent='Aircall'
     } else {
       const userName=currentUser?.full_name||currentUser?.email||'You'
-      av.textContent=userName.slice(0,2).toUpperCase()
-      av.className='nc-av'
-      author.textContent=userName
+      avEl.textContent=userName.slice(0,2).toUpperCase()
+      avEl.className='nc-av'
+      authorEl.textContent=userName
     }
     if(timeEl) timeEl.textContent=fmtNoteDateTime(new Date().toISOString())
-  })
+  }
 }
 
 async function saveWibNote(){
   const ta = document.getElementById('wib-note-ta'); if(!ta) return
   const w  = currentWib; if(!w) return
-  const activeType = document.querySelector('.note-type-btn.active')?.textContent || 'Note'
+  // Scope to the wib note composer to avoid picking up the company composer's active type
+  const wibComposer = ta.closest('.note-composer') || ta.closest('.note-compose')
+  const activeType = (wibComposer ? wibComposer.querySelector('.note-type-btn.active') : document.querySelector('.note-type-btn.active'))?.textContent || 'Note'
   let payload
   try{
     payload = buildNotePayload(ta.value, activeType, {
@@ -2214,7 +2226,8 @@ async function saveWibNote(){
     if(authorEl) authorEl.textContent = userName
     if(avEl){ avEl.textContent = userName.slice(0,2).toUpperCase(); avEl.className = 'nc-av' }
     if(timeEl)  timeEl.textContent = fmtNoteDateTime(new Date().toISOString())
-    document.querySelectorAll('.note-type-btn').forEach((b,i)=>{ b.classList.toggle('active', i===0) })
+    // Reset only this composer's type buttons
+    if(wibComposer){ wibComposer.querySelectorAll('.note-type-btn').forEach((b,i)=>{ b.classList.toggle('active', i===0) }) }
     loadWibTabData('notes')
   }catch(e){ showToast('Failed: '+e.message,'error') }
 }
@@ -2888,7 +2901,9 @@ async function loadCompanyTabData(tab){
 async function saveCompanyNote(){
   const ta = document.getElementById('co-note-ta'); if(!ta) return
   const c  = currentCompany; if(!c) return
-  const activeType = document.querySelector('.note-type-btn.active')?.textContent || 'Note'
+  // Scope to the company note composer
+  const coComposer = ta.closest('.note-composer') || ta.closest('.note-compose')
+  const activeType = (coComposer ? coComposer.querySelector('.note-type-btn.active') : document.querySelector('.note-type-btn.active'))?.textContent || 'Note'
   let payload
   try{
     payload = buildNotePayload(ta.value, activeType, {
@@ -2909,7 +2924,8 @@ async function saveCompanyNote(){
     if(authorEl) authorEl.textContent = userName
     if(avEl){ avEl.textContent = userName.slice(0,2).toUpperCase(); avEl.className = 'nc-av' }
     if(timeEl)  timeEl.textContent = fmtNoteDateTime(new Date().toISOString())
-    document.querySelectorAll('.note-type-btn').forEach((b,i)=>{ b.classList.toggle('active', i===0) })
+    // Reset only this composer's type buttons
+    if(coComposer){ coComposer.querySelectorAll('.note-type-btn').forEach((b,i)=>{ b.classList.toggle('active', i===0) }) }
     loadCompanyTabData('notes')
   }catch(e){ showToast('Failed: '+e.message,'error') }
 }
@@ -3886,7 +3902,14 @@ async function pageTerritories(){
     </div>
   </div>`
 
-  // Load territories list
+  // Render static data immediately — these don't need API data and must not be
+  // gated behind the async territory fetch (which was causing the map never to
+  // paint when the early-return fired inside the try block below).
+  wtRenderDir(window._WIB_STATE_DATA)
+  wtLoadMap()
+  wtAiAppend('ai', `👋 Hi! I'm your WIB Territory AI assistant. I have contact info for all 50 state workforce boards built in, and I can search the web for the latest news, director changes, and local board details. Ask me anything — or click a state on the map to get started.`)
+
+  // Load territories list (async — runs after map is already painted)
   try{
     const [terrRes,usersRes,wibsRes]=await Promise.all([
       api('/api/territories'),
@@ -3901,7 +3924,7 @@ async function pageTerritories(){
     const usersInTerritory={}
     users.forEach(u=>{(u.territories||[]).forEach(t=>{if(!usersInTerritory[t.id])usersInTerritory[t.id]=[];usersInTerritory[t.id].push(u)})})
     const terrList=document.getElementById('wt-terr-list')
-    if(!terrList)return
+    if(!terrList) return   // page was navigated away — safe to bail here only
     if(!territories.length){
       terrList.innerHTML=`<div style="padding:14px;text-align:center;font-size:11px;color:var(--text3)">No territories yet. ${isAdmin?'<span style="cursor:pointer;color:var(--blue)" onclick="openNewTerritoryModal()">Create one →</span>':''}</div>`
     } else {
@@ -3922,15 +3945,6 @@ async function pageTerritories(){
     const terrList=document.getElementById('wt-terr-list')
     if(terrList)terrList.innerHTML=`<div style="padding:10px;font-size:11px;color:var(--red-t)">Could not load territories</div>`
   }
-
-  // Render directory
-  wtRenderDir(window._WIB_STATE_DATA)
-
-  // Load map (D3 + TopoJSON via CDN)
-  wtLoadMap()
-
-  // Welcome AI message
-  wtAiAppend('ai', `👋 Hi! I'm your WIB Territory AI assistant. I have contact info for all 50 state workforce boards built in, and I can search the web for the latest news, director changes, and local board details. Ask me anything — or click a state on the map to get started.`)
 }
 
 /* ── Directory ── */
@@ -4172,13 +4186,21 @@ window._STATE_ABBR_MAP = {
 }
 
 function wtLoadMap(){
-  // Pure synchronous inline SVG — draws on next tick, no CDN needed
-  setTimeout(wtDrawInlineMap, 0)
+  // Use requestAnimationFrame so the browser has committed the innerHTML to
+  // the DOM before we try to find #wt-svg. Falls back to a setTimeout retry
+  // loop if the element still isn't present (e.g. first paint not yet done).
+  if(typeof requestAnimationFrame === 'function'){
+    requestAnimationFrame(function(){ setTimeout(wtDrawInlineMap, 0) })
+  } else {
+    setTimeout(wtDrawInlineMap, 0)
+  }
 }
 
 function wtDrawInlineMap(){
   const svg = document.getElementById('wt-svg')
-  if(!svg){ setTimeout(wtDrawInlineMap, 80); return }
+  if(!svg){ setTimeout(wtDrawInlineMap, 120); return }
+  // If already populated (e.g. re-navigation), skip
+  if(svg.children.length > 0) return
 
   // Build abbr→state lookup for quick access
   const stateByAbbr = {}
