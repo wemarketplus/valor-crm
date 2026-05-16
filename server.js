@@ -2464,6 +2464,505 @@ app.get('/api/template/:type', auth, (req, res) => {
   res.send(csv)
 })
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// NOTIFICATIONS API
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/notifications', auth, async (req, res) => {
+  const { limit = 50, unread_only } = req.query
+  try {
+    let q = supabase
+      .from('notifications')
+      .select('*, sender:user_profiles!sender_id(full_name,email)', { count: 'exact' })
+      .eq('recipient_id', req.user.id)
+      .order('created_at', { ascending: false })
+      .limit(Math.min(+limit, 100))
+
+    if (unread_only === 'true') q = q.eq('is_read', false)
+
+    const { data, error, count } = await q
+    if (error) return res.status(400).json({ error: error.message })
+
+    // Activity summary — quick counts for the sidebar widget
+    const weekAgo = new Date(Date.now() - 7*24*3600*1000).toISOString()
+    const [notesRes, tasksRes] = await Promise.all([
+      supabase.from('activity_log').select('id', { count:'exact', head:true })
+        .eq('action','NOTE').gte('created_at', weekAgo),
+      supabase.from('activity_log').select('id', { count:'exact', head:true })
+        .eq('action','TASK').gte('created_at', weekAgo),
+    ])
+
+    const notifications = (data||[]).map(n => ({
+      ...n,
+      sender_name: n.sender?.full_name || n.sender?.email || 'System'
+    }))
+    const unreadCount = notifications.filter(n => !n.is_read).length
+
+    res.json({
+      data:             notifications,
+      unread_count:     unreadCount,
+      activity_summary: {
+        notes_this_week: notesRes.count || 0,
+        tasks_completed: tasksRes.count || 0,
+        wibs_contacted:  null,
+        apps_submitted:  null,
+      }
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.put('/api/notifications/:id/read', auth, async (req, res) => {
+  const { error } = await supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('id', req.params.id)
+    .eq('recipient_id', req.user.id)  // IDOR guard — can only mark own notifications
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true })
+})
+
+app.post('/api/notifications/mark-all-read', auth, async (req, res) => {
+  const { error } = await supabase
+    .from('notifications')
+    .update({ is_read: true })
+    .eq('recipient_id', req.user.id)
+    .eq('is_read', false)
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true })
+})
+
+app.post('/api/notifications/:id/respond', auth, async (req, res) => {
+  const { action } = req.body  // 'accept' or 'deny'
+  const { data: notif } = await supabase
+    .from('notifications')
+    .select('*')
+    .eq('id', req.params.id)
+    .eq('recipient_id', req.user.id)
+    .single()
+  if (!notif) return res.status(404).json({ error: 'Notification not found' })
+
+  // Mark as read and record the response
+  await supabase.from('notifications').update({
+    is_read:        true,
+    responded_at:   new Date().toISOString(),
+    response_action: action,
+  }).eq('id', req.params.id)
+
+  res.json({ success: true, action })
+})
+
+// Helper: create a notification for a user (called internally by other endpoints)
+async function createNotification({ recipientId, senderId, type, title, body, recordType, recordId }) {
+  try {
+    await supabase.from('notifications').insert({
+      recipient_id: recipientId,
+      sender_id:    senderId    || null,
+      type:         type        || 'system',
+      title:        title       || '',
+      body:         body        || '',
+      record_type:  recordType  || null,
+      record_id:    recordId    || null,
+    })
+  } catch (e) {
+    console.warn('createNotification failed (non-fatal):', e.message)
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CHAT API
+// Messages persist to chat_messages table.
+// Supabase Realtime broadcasts new rows to all subscribed clients on that channel.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/chat/:channel', auth, async (req, res) => {
+  const channel = req.params.channel.substring(0, 100)  // max channel name length
+  const limit   = Math.min(+(req.query.limit||50), 200)
+
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .select('*, sender:user_profiles!sender_id(full_name,email)')
+    .eq('channel', channel)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (error) return res.status(400).json({ error: error.message })
+
+  const messages = (data||[]).map(m => ({
+    ...m,
+    sender_name: m.sender?.full_name || m.sender?.email || 'Team Member'
+  }))
+
+  res.json({ data: messages })
+})
+
+app.post('/api/chat/:channel', auth, async (req, res) => {
+  const channel = req.params.channel.substring(0, 100)
+  const content = (req.body.content || '').trim()
+
+  if (!content) return res.status(400).json({ error: 'Message content required' })
+  if (content.length > 5000) return res.status(400).json({ error: 'Message too long (max 5000 chars)' })
+
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .insert({
+      channel,
+      sender_id: req.user.id,
+      content,
+    })
+    .select('*, sender:user_profiles!sender_id(full_name,email)')
+    .single()
+
+  if (error) return res.status(400).json({ error: error.message })
+
+  const message = {
+    ...data,
+    sender_name: data.sender?.full_name || data.sender?.email || 'Team Member'
+  }
+
+  // Supabase Realtime automatically broadcasts the INSERT to all subscribers.
+  // No manual push needed — the DB change triggers it.
+  res.json(message)
+})
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GOOGLE DRIVE API
+// OAuth 2.0 + Drive API v3 proxy
+// Tokens stored in user_drive_tokens table; never exposed to frontend.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET
+const GOOGLE_REDIRECT_URI  = process.env.GOOGLE_REDIRECT_URI || 'https://valor-crm.onrender.com/api/auth/google/callback'
+const DRIVE_SCOPE          = 'https://www.googleapis.com/auth/drive.file'
+
+// Helper: get a valid access token for a user (refreshes automatically if expired)
+async function getDriveToken(userId) {
+  const { data: tokenRow } = await supabase
+    .from('user_drive_tokens')
+    .select('*')
+    .eq('user_id', userId)
+    .single()
+
+  if (!tokenRow) return null
+
+  // If token expires in the next 5 minutes, refresh it now
+  const expiresAt = new Date(tokenRow.expires_at)
+  if (expiresAt <= new Date(Date.now() + 5 * 60 * 1000)) {
+    const refreshed = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id:     GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: tokenRow.refresh_token,
+        grant_type:    'refresh_token',
+      })
+    })
+    const rd = await refreshed.json()
+    if (rd.access_token) {
+      const newExpiry = new Date(Date.now() + (rd.expires_in || 3600) * 1000).toISOString()
+      await supabase.from('user_drive_tokens').update({
+        access_token: rd.access_token,
+        expires_at:   newExpiry,
+      }).eq('user_id', userId)
+      return rd.access_token
+    }
+    return null  // refresh failed — user must re-authorize
+  }
+  return tokenRow.access_token
+}
+
+// Helper: make a Drive API call with automatic auth
+async function driveApi(userId, path, opts = {}) {
+  const accessToken = await getDriveToken(userId)
+  if (!accessToken) throw new Error('Google Drive not connected. Please reconnect in Settings.')
+
+  const url = path.startsWith('http') ? path : 'https://www.googleapis.com/drive/v3/' + path
+  const r = await fetch(url, {
+    ...opts,
+    headers: {
+      'Authorization': 'Bearer ' + accessToken,
+      ...(opts.headers || {})
+    }
+  })
+  if (r.status === 401) {
+    // Token truly invalid — wipe it so user sees connect prompt
+    await supabase.from('user_drive_tokens').delete().eq('user_id', userId)
+    throw new Error('Google Drive authorization expired. Please reconnect.')
+  }
+  return r
+}
+
+// ── OAuth flow ──────────────────────────────────────────────────────────────
+app.get('/api/auth/google', auth, (req, res) => {
+  if (!GOOGLE_CLIENT_ID) {
+    return res.status(503).send('GOOGLE_CLIENT_ID not configured. Add it to Render environment variables.')
+  }
+  // Store the user's CRM token so we can link the OAuth callback to the right user
+  const state = Buffer.from(JSON.stringify({ userId: req.user.id, token: req.query.token })).toString('base64url')
+  const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+    client_id:     GOOGLE_CLIENT_ID,
+    redirect_uri:  GOOGLE_REDIRECT_URI,
+    response_type: 'code',
+    scope:         DRIVE_SCOPE + ' https://www.googleapis.com/auth/userinfo.email',
+    access_type:   'offline',   // gives us a refresh_token
+    prompt:        'consent',   // always show consent screen to ensure refresh_token is issued
+    state,
+  })
+  res.redirect(authUrl)
+})
+
+app.get('/api/auth/google/callback', async (req, res) => {
+  const { code, state, error } = req.query
+  if (error) return res.redirect('/?drive_error=' + encodeURIComponent(error))
+  if (!code || !state) return res.redirect('/?drive_error=missing_code')
+
+  let stateData
+  try { stateData = JSON.parse(Buffer.from(state, 'base64url').toString('utf8')) }
+  catch { return res.redirect('/?drive_error=invalid_state') }
+
+  // Exchange code for tokens
+  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      code,
+      client_id:     GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      redirect_uri:  GOOGLE_REDIRECT_URI,
+      grant_type:    'authorization_code',
+    })
+  })
+  const tokenData = await tokenRes.json()
+
+  if (!tokenData.access_token) {
+    return res.redirect('/?drive_error=' + encodeURIComponent(tokenData.error_description || 'token_exchange_failed'))
+  }
+
+  const expiresAt = new Date(Date.now() + (tokenData.expires_in || 3600) * 1000).toISOString()
+
+  // Upsert — one token row per user
+  await supabase.from('user_drive_tokens').upsert({
+    user_id:       stateData.userId,
+    access_token:  tokenData.access_token,
+    refresh_token: tokenData.refresh_token || null,  // only returned on first auth
+    expires_at:    expiresAt,
+    scope:         tokenData.scope,
+  }, { onConflict: 'user_id' })
+
+  // Redirect back to the Drive page
+  res.redirect('/?page=drive&drive_connected=1')
+})
+
+// ── Drive status ─────────────────────────────────────────────────────────────
+app.get('/api/drive/status', auth, async (req, res) => {
+  const { data } = await supabase
+    .from('user_drive_tokens')
+    .select('expires_at, scope')
+    .eq('user_id', req.user.id)
+    .single()
+  res.json({ connected: !!data, expires_at: data?.expires_at })
+})
+
+// ── List files ───────────────────────────────────────────────────────────────
+app.get('/api/drive/files', auth, async (req, res) => {
+  const folderId = req.query.folder_id || 'root'
+  const mimeFilter = req.query.mime || null
+
+  let query = `'${folderId}' in parents and trashed=false`
+  if (mimeFilter) query += ` and mimeType='${mimeFilter}'`
+
+  try {
+    const r = await driveApi(req.user.id,
+      'files?q=' + encodeURIComponent(query) +
+      '&fields=files(id,name,mimeType,size,modifiedTime,webViewLink,owners,parents)' +
+      '&orderBy=folder,name&pageSize=100',
+      { headers: { 'Content-Type': 'application/json' } }
+    )
+    const data = await r.json()
+    if (!r.ok) return res.status(r.status).json({ error: data.error?.message || 'Drive API error' })
+    res.json({ files: data.files || [], breadcrumb: [] })
+  } catch (e) {
+    res.status(400).json({ error: e.message })
+  }
+})
+
+// ── Upload file ───────────────────────────────────────────────────────────────
+const multer = (() => { try { return require('multer') } catch { return null } })()
+const uploadMiddleware = multer ? multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } }) : null
+
+app.post('/api/drive/upload', auth, async (req, res) => {
+  if (!uploadMiddleware) {
+    return res.status(503).json({ error: 'File upload not available. Run: npm install multer' })
+  }
+  uploadMiddleware.single('file')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message })
+    const { folder_id = 'root' } = req.body
+    const file = req.file
+    if (!file) return res.status(400).json({ error: 'No file provided' })
+
+    // Step 1: Create file metadata
+    const meta = JSON.stringify({
+      name: file.originalname,
+      parents: [folder_id],
+    })
+
+    // Step 2: Multipart upload to Drive
+    // Build multipart upload using Buffer.concat (safe binary handling)
+    const boundary = 'valorcrm' + Date.now()
+    const partHead = Buffer.from(
+      '--' + boundary + '\r\n' +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      meta + '\r\n' +
+      '--' + boundary + '\r\n' +
+      'Content-Type: ' + file.mimetype + '\r\n\r\n',
+      'utf8'
+    )
+    const partTail = Buffer.from('\r\n--' + boundary + '--', 'utf8')
+    const uploadBody = Buffer.concat([partHead, file.buffer, partTail])
+    try {
+      const uploadToken = await getDriveToken(req.user.id)
+      if (!uploadToken) return res.status(403).json({ error: 'Google Drive not connected' })
+      const r = await fetch(
+        'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + uploadToken,
+            'Content-Type': 'multipart/related; boundary=' + boundary,
+          },
+          body: uploadBody,
+        }
+      )
+      const data = await r.json()
+      if (!r.ok) return res.status(r.status).json({ error: data.error?.message || 'Upload failed' })
+      try { await safeInsertLog({ user_id: req.user.id, action: 'DRIVE_UPLOAD', details: 'Uploaded: ' + file.originalname }) } catch(_){}
+      res.json({ file: data })
+    } catch (e) {
+      res.status(500).json({ error: e.message })
+    }
+  })
+})
+
+// ── Download file ─────────────────────────────────────────────────────────────
+app.get('/api/drive/download/:fileId', auth, async (req, res) => {
+  try {
+    // Get file metadata first for the filename
+    const metaR = await driveApi(req.user.id, 'files/' + req.params.fileId + '?fields=name,mimeType,size')
+    const meta = await metaR.json()
+    if (!metaR.ok) return res.status(metaR.status).json({ error: meta.error?.message })
+
+    // Download the file content
+    const fileR = await driveApi(req.user.id, 'files/' + req.params.fileId + '?alt=media')
+    if (!fileR.ok) return res.status(fileR.status).json({ error: 'Download failed' })
+
+    res.setHeader('Content-Type', meta.mimeType || 'application/octet-stream')
+    res.setHeader('Content-Disposition', 'attachment; filename="' + (meta.name||'file').replace(/"/g,'') + '"')
+    // Stream the response body directly to the client
+    const { Readable } = require('stream')
+    Readable.fromWeb(fileR.body).pipe(res)
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Create folder ─────────────────────────────────────────────────────────────
+app.post('/api/drive/folder', auth, async (req, res) => {
+  const { name, parent_id = 'root' } = req.body
+  if (!name?.trim()) return res.status(400).json({ error: 'Folder name required' })
+  try {
+    const r = await driveApi(req.user.id, 'files?fields=id,name,webViewLink', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name.trim(),
+        mimeType: 'application/vnd.google-apps.folder',
+        parents: [parent_id],
+      })
+    })
+    const data = await r.json()
+    if (!r.ok) return res.status(r.status).json({ error: data.error?.message })
+    res.json({ folder: data })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Delete (trash) file ───────────────────────────────────────────────────────
+app.delete('/api/drive/files/:fileId', auth, async (req, res) => {
+  try {
+    // PATCH to set trashed=true (reversible) instead of DELETE (permanent)
+    const r = await driveApi(req.user.id, 'files/' + req.params.fileId, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trashed: true })
+    })
+    if (!r.ok) {
+      const d = await r.json()
+      return res.status(r.status).json({ error: d.error?.message || 'Delete failed' })
+    }
+    res.json({ success: true })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ── Export to Drive ───────────────────────────────────────────────────────────
+app.post('/api/drive/export', auth, async (req, res) => {
+  const { type, file_name = 'valor-export.csv', folder_id = 'root' } = req.body
+  const config = EXPORT_CONFIG[type]
+  if (!config) return res.status(400).json({ error: 'Unknown export type: ' + type })
+
+  // Build CSV in memory (reuse existing export logic for small datasets)
+  let csvRows = [config.headers.map(esc).join(',')]
+  let offset = 0
+  while (true) {
+    const { data, error } = await supabase.from(config.table).select(config.select)
+      .order(config.order.col, { ascending: config.order.asc })
+      .range(offset, offset + 999)
+    if (error || !data?.length) break
+    data.forEach(r => csvRows.push(config.map(r).map(esc).join(',')))
+    offset += 1000
+    if (data.length < 1000) break
+  }
+  const csvContent = csvRows.join('\n')
+
+  try {
+    const accessToken = await getDriveToken(req.user.id)
+    if (!accessToken) return res.status(403).json({ error: 'Google Drive not connected' })
+
+    const boundary = '-------valorexportboundary'
+    const meta = JSON.stringify({ name: file_name, parents: [folder_id], mimeType: 'text/csv' })
+    const body = [
+      '--' + boundary, 'Content-Type: application/json; charset=UTF-8', '', meta,
+      '--' + boundary, 'Content-Type: text/csv', '', csvContent,
+      '--' + boundary + '--',
+    ].join('\r\n')
+
+    const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + accessToken,
+        'Content-Type': 'multipart/related; boundary=' + boundary,
+      },
+      body
+    })
+    const data = await r.json()
+    if (!r.ok) return res.status(r.status).json({ error: data.error?.message || 'Drive upload failed' })
+
+    try { await safeInsertLog({ user_id: req.user.id, action: 'DRIVE_EXPORT', details: 'Exported ' + type + ' to Drive: ' + file_name }) } catch(_){}
+    res.json({ file: data, drive_link: data.webViewLink })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+
 // ─── SERVE FRONTEND ───────────────────────────────────────────────────────────
 // Cache the HTML path on startup for performance
 let _htmlPath = null
