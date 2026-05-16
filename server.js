@@ -6,8 +6,16 @@ const { Pool } = require('pg')
 
 const app = express()
 
+/* ═══════════════════════════════
+   MIDDLEWARE
+═══════════════════════════════ */
+
 app.use(cors())
 app.use(express.json({ limit: '10mb' }))
+
+/* ═══════════════════════════════
+   DATABASE POOL (SAFE)
+═══════════════════════════════ */
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -17,120 +25,96 @@ const pool = new Pool({
       : false
 })
 
-/* ════════════════════════════════════════
-   SAFE MIGRATIONS (Render-safe)
-════════════════════════════════════════ */
+/* ═══════════════════════════════
+   SAFE DB CONNECT (RETRY LOOP)
+═══════════════════════════════ */
 
-async function runMigrations() {
-  try {
-    console.log('🔄 Running migrations...')
-
-    /* Ensure UUID extension exists (CRITICAL for gen_random_uuid) */
-    await pool.query(`
-      CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-    `)
-
-    /* TERRITORIES */
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS territories (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        name TEXT NOT NULL UNIQUE,
-        states TEXT[] DEFAULT '{}',
-        description TEXT DEFAULT '',
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-    `)
-
-    /* WIB RECORDS (safe ALTER) */
-    await pool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_name='wib_records'
-          AND column_name='territory_id'
-        ) THEN
-          ALTER TABLE wib_records
-          ADD COLUMN territory_id UUID;
-        END IF;
-      END $$;
-    `)
-
-    /* USER PROFILES (safe ALTER) */
-    await pool.query(`
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1
-          FROM information_schema.columns
-          WHERE table_name='user_profiles'
-          AND column_name='territory_id'
-        ) THEN
-          ALTER TABLE user_profiles
-          ADD COLUMN territory_id UUID;
-        END IF;
-      END $$;
-    `)
-
-    /* TASKS */
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS tasks (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        record_type TEXT NOT NULL,
-        record_id UUID NOT NULL,
-        title TEXT NOT NULL,
-        due_date DATE,
-        priority TEXT DEFAULT 'medium',
-        assignee_id UUID,
-        notes TEXT DEFAULT '',
-        completed BOOLEAN DEFAULT false,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-    `)
-
-    /* NOTIFICATIONS */
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS notifications (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id UUID,
-        title TEXT NOT NULL,
-        message TEXT DEFAULT '',
-        type TEXT DEFAULT 'info',
-        is_read BOOLEAN DEFAULT false,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-    `)
-
-    /* CHAT */
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS chat_messages (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        sender_id UUID,
-        channel TEXT NOT NULL,
-        message TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
-      );
-    `)
-
-    /* Schema refresh (non-blocking) */
+async function connectDB(retries = 10, delay = 3000) {
+  for (let i = 0; i < retries; i++) {
     try {
-      await pool.query(`SELECT pg_notify('pgrst', 'reload schema');`)
-    } catch (e) {
-      console.log('⚠️ Schema refresh skipped')
+      await pool.query('SELECT 1')
+      console.log('✅ Database connected')
+      return true
+    } catch (err) {
+      console.log(`⏳ DB not ready (attempt ${i + 1})`)
+      await new Promise(res => setTimeout(res, delay))
     }
-
-    console.log('✅ Migrations complete')
-  } catch (err) {
-    console.error('❌ Migration failure:', err)
-    throw err
   }
+
+  throw new Error('❌ Database connection failed after retries')
 }
 
-/* ════════════════════════════════════════
-   TERRITORIES API
-════════════════════════════════════════ */
+/* ═══════════════════════════════
+   MIGRATIONS (SAFE + IDENTITY PROOF)
+═══════════════════════════════ */
 
+async function runMigrations() {
+  console.log('🔄 Running migrations...')
+
+  await pool.query(`
+    CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS territories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL UNIQUE,
+      states TEXT[] DEFAULT '{}',
+      description TEXT DEFAULT '',
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      record_type TEXT NOT NULL,
+      record_id UUID NOT NULL,
+      title TEXT NOT NULL,
+      due_date DATE,
+      priority TEXT DEFAULT 'medium',
+      assignee_id UUID,
+      notes TEXT DEFAULT '',
+      completed BOOLEAN DEFAULT false,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID,
+      title TEXT NOT NULL,
+      message TEXT DEFAULT '',
+      type TEXT DEFAULT 'info',
+      is_read BOOLEAN DEFAULT false,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      sender_id UUID,
+      channel TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `)
+
+  console.log('✅ Migrations complete')
+}
+
+/* ═══════════════════════════════
+   API ROUTES
+═══════════════════════════════ */
+
+/* HEALTH CHECK (Render uses this internally sometimes) */
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' })
+})
+
+/* TERRITORIES */
 app.get('/api/territories', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -169,10 +153,7 @@ app.post('/api/territories', async (req, res) => {
   }
 })
 
-/* ════════════════════════════════════════
-   TASKS API
-════════════════════════════════════════ */
-
+/* TASKS */
 app.post('/api/tasks', async (req, res) => {
   try {
     const {
@@ -218,10 +199,7 @@ app.post('/api/tasks', async (req, res) => {
   }
 })
 
-/* ════════════════════════════════════════
-   NOTIFICATIONS API
-════════════════════════════════════════ */
-
+/* NOTIFICATIONS */
 app.get('/api/notifications', async (req, res) => {
   try {
     const result = await pool.query(`
@@ -237,27 +215,27 @@ app.get('/api/notifications', async (req, res) => {
   }
 })
 
-/* ════════════════════════════════════════
-   HEALTH CHECK
-════════════════════════════════════════ */
-
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok' })
-})
-
-/* ════════════════════════════════════════
-   START SERVER (Render-safe)
-════════════════════════════════════════ */
+/* ═══════════════════════════════
+   STARTUP SEQUENCE (PRODUCTION SAFE)
+═══════════════════════════════ */
 
 const PORT = process.env.PORT || 10000
 
-runMigrations()
-  .then(() => {
+async function startServer() {
+  try {
+    console.log('🚀 Starting server...')
+
+    await connectDB()
+    await runMigrations()
+
     app.listen(PORT, '0.0.0.0', () => {
       console.log(`✅ Server running on port ${PORT}`)
     })
-  })
-  .catch(err => {
-    console.error('❌ Fatal startup error:', err)
+
+  } catch (err) {
+    console.error('❌ Startup failed:', err)
     process.exit(1)
-  })
+  }
+}
+
+startServer()
