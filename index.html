@@ -550,6 +550,11 @@ textarea{resize:vertical;min-height:70px}
 
 /* Note composer */
 .note-composer{background:var(--white);border:.5px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px}
+.note-composer-who{display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--gray);border-radius:7px;margin-bottom:9px;border:.5px solid var(--border)}
+.note-composer-who .nc-av{width:22px;height:22px;border-radius:50%;background:var(--nv);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:var(--cream);flex-shrink:0}
+.note-composer-who .nc-av.aircall{background:#16a34a;color:#fff}
+.note-composer-who .nc-name{font-size:11.5px;font-weight:600;color:var(--text)}
+.note-composer-who .nc-time{font-size:10px;color:var(--text3);margin-left:auto}
 .note-types{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px}
 .note-type-btn{padding:3px 10px;border-radius:20px;font-size:10.5px;cursor:pointer;border:.5px solid var(--border);background:var(--white);color:var(--text2);transition:all .1s}
 .note-type-btn.active{background:var(--nv);color:var(--cream);border-color:var(--nv)}
@@ -1962,11 +1967,18 @@ function renderWibProfile(){
 
   else if(wibTab==='notes'){
     pa.style.padding='14px'
+    const userName = currentUser?.full_name || currentUser?.email || 'You'
+    const userInitials = userName.slice(0,2).toUpperCase()
     pa.innerHTML=`
     <div style="max-width:720px;margin:0 auto">
       <div class="note-composer">
         <div class="note-types">
           ${['Note','Call Summary','Meeting Notes','Email','Follow-up'].map((t,i)=>`<div class="note-type-btn${i===0?' active':''}" onclick="setNoteType(this,'${t}')">${t}</div>`).join('')}
+        </div>
+        <div class="note-composer-who" id="wib-note-who">
+          <div class="nc-av" id="wib-note-av">${userInitials}</div>
+          <div class="nc-name" id="wib-note-author">${escHtml(userName)}</div>
+          <div class="nc-time" id="wib-note-time">${fmtNoteDateTime(new Date().toISOString())}</div>
         </div>
         <textarea id="wib-note-ta" rows="4" placeholder="Add a note, call summary, or update..."></textarea>
         <div class="note-composer-foot">
@@ -2157,6 +2169,25 @@ async function loadWibTabData(tab){
 function setNoteType(el,type){
   document.querySelectorAll('.note-type-btn').forEach(b=>b.classList.remove('active'))
   el.classList.add('active')
+  // Update composer "posting as" header for all visible note composers
+  const isAircall = type==='Call Summary'
+  ;['wib','co'].forEach(prefix=>{
+    const av=document.getElementById(prefix+'-note-av')
+    const author=document.getElementById(prefix+'-note-author')
+    const timeEl=document.getElementById(prefix+'-note-time')
+    if(!av||!author)return
+    if(isAircall){
+      av.textContent='📞'
+      av.className='nc-av aircall'
+      author.textContent='Aircall'
+    } else {
+      const userName=currentUser?.full_name||currentUser?.email||'You'
+      av.textContent=userName.slice(0,2).toUpperCase()
+      av.className='nc-av'
+      author.textContent=userName
+    }
+    if(timeEl) timeEl.textContent=fmtNoteDateTime(new Date().toISOString())
+  })
 }
 
 async function saveWibNote(){
@@ -2185,13 +2216,10 @@ function renderNoteCard(n){
   const aircall = isAircallNote(n)
   const content = getNoteContent(n)
   const noteType = getNoteType(n)
-  const initials = (n.user?.full_name||n.user?.email||'?').slice(0,2).toUpperCase()
-  // Use explicit date+time instead of relative "X hours ago"
   const noteDateTime = fmtNoteDateTime(n.created_at)
   const meta = n.metadata || {}
 
   if(aircall){
-    // Format: "aircall/ May 15, 2026 at 3:47 PM" + duration and direction badges
     const durationBadge = meta.duration
       ? `<span style="background:var(--green-bg);color:var(--green-t);padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600;margin-left:6px">${meta.duration}m</span>`
       : ''
@@ -2199,30 +2227,34 @@ function renderNoteCard(n){
       ? `<span style="background:var(--blue-bg);color:var(--blue-t);padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600;margin-left:4px">${meta.direction}</span>`
       : ''
     return`<div class="aircall-card">
-      <div class="aircall-hd" style="display:flex;align-items:center;flex-wrap:wrap;gap:2px">
-        <span style="font-size:11px">📞</span>
-        <span style="font-weight:700;color:var(--green-t);margin-right:2px">aircall/</span>
-        <span style="font-weight:400;color:var(--text2)">${escHtml(noteDateTime)}</span>
+      <div class="aircall-hd" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
+        <div style="width:26px;height:26px;border-radius:50%;background:#16a34a;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0">📞</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:11.5px;font-weight:700;color:var(--green-t)">Aircall</div>
+          <div style="font-size:10px;color:var(--text3)">${escHtml(noteDateTime)}</div>
+        </div>
         ${durationBadge}${dirBadge}
         ${meta.recording_url?`<a href="${escUrl(meta.recording_url)}" target="_blank" style="font-size:9.5px;color:var(--blue-t);margin-left:auto;text-decoration:none">🔗 Recording</a>`:''}
+        <button class="action-btn del" onclick="deleteNote('${n.id}')">✕</button>
       </div>
-      <div style="font-size:11.5px;color:var(--text);line-height:1.65;margin-top:7px">${escHtml(content).replace(/\n/g,'<br>')}</div>
+      <div style="font-size:11.5px;color:var(--text);line-height:1.65;margin-top:8px">${escHtml(content).replace(/\n/g,'<br>')}</div>
     </div>`
   }
 
-  // Standard note: "[Full Name]  May 15, 2026 at 3:47 PM"
-  const authorName = escHtml(n.user?.full_name||n.user?.email||'System')
+  // Standard note
+  const authorName = n.user?.full_name || n.user?.email || 'System'
+  const initials = authorName.slice(0,2).toUpperCase()
   return`<div class="note-card">
-    <div class="note-meta">
-      <div class="note-av">${initials}</div>
-      <div>
-        <div class="note-author">${authorName}</div>
+    <div class="note-meta" style="align-items:flex-start">
+      <div class="note-av" style="margin-top:2px">${initials}</div>
+      <div style="flex:1;min-width:0">
+        <div class="note-author">${escHtml(authorName)}</div>
         <div class="note-time">${escHtml(noteDateTime)}</div>
       </div>
-      <span class="note-badge" style="margin-left:auto">${escHtml(noteType)}</span>
+      <span class="note-badge" style="margin-top:2px">${escHtml(noteType)}</span>
       <button class="action-btn del" onclick="deleteNote('${n.id}')">✕</button>
     </div>
-    <div class="note-content">${escHtml(content).replace(/\n/g,'<br>')}</div>
+    <div class="note-content" style="margin-top:6px">${escHtml(content).replace(/\n/g,'<br>')}</div>
   </div>`
 }
 
@@ -2672,11 +2704,18 @@ function renderCompanyProfile(){
   }
   else if(companyTab==='notes'){
     pa.style.padding='14px'
+    const userName = currentUser?.full_name || currentUser?.email || 'You'
+    const userInitials = userName.slice(0,2).toUpperCase()
     pa.innerHTML=`
     <div style="max-width:720px;margin:0 auto">
       <div class="note-composer">
         <div class="note-types">
           ${['Note','Call Summary','Meeting Notes','Email','Follow-up'].map((t,i)=>`<div class="note-type-btn${i===0?' active':''}" onclick="setNoteType(this,'${t}')">${t}</div>`).join('')}
+        </div>
+        <div class="note-composer-who" id="co-note-who">
+          <div class="nc-av" id="co-note-av">${userInitials}</div>
+          <div class="nc-name" id="co-note-author">${escHtml(userName)}</div>
+          <div class="nc-time" id="co-note-time">${fmtNoteDateTime(new Date().toISOString())}</div>
         </div>
         <textarea id="co-note-ta" rows="4" placeholder="Add a note, call summary, or update..."></textarea>
         <div class="note-composer-foot">
@@ -3999,16 +4038,21 @@ function wtStateColor(w){
 
 /* ── Map ── */
 function wtLoadMap(){
-  if(typeof d3!=='undefined'&&typeof topojson!=='undefined'){wtDrawMap();return}
-  const s1=document.createElement('script')
-  s1.src='https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js'
-  s1.onload=()=>{
-    const s2=document.createElement('script')
-    s2.src='https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js'
-    s2.onload=wtDrawMap
-    document.head.appendChild(s2)
-  }
-  document.head.appendChild(s1)
+  // Defer until next paint so the fixed-height container is fully laid out
+  requestAnimationFrame(()=>{
+    setTimeout(()=>{
+      if(typeof d3!=='undefined'&&typeof topojson!=='undefined'){wtDrawMap();return}
+      const s1=document.createElement('script')
+      s1.src='https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js'
+      s1.onload=()=>{
+        const s2=document.createElement('script')
+        s2.src='https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js'
+        s2.onload=wtDrawMap
+        document.head.appendChild(s2)
+      }
+      document.head.appendChild(s1)
+    }, 80)
+  })
 }
 
 function wtDrawMap(){
@@ -4026,7 +4070,7 @@ function wtDrawMap(){
   const projection=d3.geoAlbersUsa().scale(w*1.25).translate([w/2,h/2])
   const path=d3.geoPath(projection)
   const tt=document.getElementById('wt-tt')
-  d3.json('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json').then(us=>{
+  d3.json('https://unpkg.com/us-atlas@3/states-10m.json').then(us=>{
     const features=topojson.feature(us,us.objects.states).features
     svg.selectAll('.wt-state-path').data(features).join('path')
       .attr('class','wt-state-path')
