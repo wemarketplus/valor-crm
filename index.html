@@ -1,204 +1,409 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Valor CRM</title>
+```html
+<!-- ════════════════════════════════════════════════
+     REMOVE ALL HARDCODED WIB VIEW TABS
+     DELETE:
+     - Sam Orer's WIBs
+     - Carly Chavez's WIBs
+     - Sarah Cannon's WIBs
+     - Sarah Gantt's WIBs
+════════════════════════════════════════════════ -->
 
-  <!-- KEEP YOUR EXISTING STYLES HERE (UNCHANGED) -->
-  <!-- DO NOT REMOVE YOUR ORIGINAL CSS -->
-
-  <style>
-    /* only safety fallback variables (prevents white screen) */
-    :root {
-      --border: #e5e7eb;
-      --white: #ffffff;
-      --text: #111827;
-    }
-  </style>
-</head>
-
-<body>
-
-<!-- =====================================================
-     YOUR EXISTING HTML LAYOUT (UNCHANGED)
-     PASTE YOUR ORIGINAL UI HERE EXACTLY AS IS
-===================================================== -->
-
-<div id="app">
-
-  <!-- KEEP ALL YOUR EXISTING CONTENT -->
-
-</div>
-
-<!-- =====================================================
-     CRITICAL SAFETY PATCHES (DO NOT REMOVE)
-===================================================== -->
+<div id="territory-viewbar" class="viewbar"></div>
 
 <script>
 
-  /* =========================
-     SAFE GLOBAL GUARDS
-  ========================= */
+/* ════════════════════════════════════════════════
+   GLOBAL STATE
+════════════════════════════════════════════════ */
 
-  window.wibRecords = window.wibRecords || []
+let territories = []
+let currentWibView = 'all'
 
-  function escHtml(str = '') {
-    return String(str)
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#039;')
+/* ════════════════════════════════════════════════
+   LOAD TERRITORIES DYNAMICALLY
+════════════════════════════════════════════════ */
+
+async function loadTerritories() {
+
+  try {
+
+    const r = await fetch('/api/territories')
+    territories = await r.json()
+
+    renderTerritoryViews()
+
+  } catch (err) {
+
+    console.error(err)
+
   }
 
-  /* =========================
-     SAFE API WRAPPER (AI)
-  ========================= */
+}
 
-  async function apiAI(payload) {
-    try {
-      const r = await fetch('/api/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
+function renderTerritoryViews() {
 
-      const d = await r.json()
+  const el = document.getElementById('territory-viewbar')
 
-      return d
+  if (!el) return
 
-    } catch (err) {
-      console.error('AI error:', err)
-      return { error: 'AI request failed' }
-    }
-  }
+  let html = `
+    <div class="vb-view ${currentWibView === 'all' ? 'active' : ''}"
+         onclick="setWibView('all')">
+      All WIBs
+    </div>
+  `
 
-  /* =========================
-     SAFE WIB VIEW HANDLERS
-  ========================= */
+  territories.forEach(t => {
 
-  let currentWibView = 'all'
-  let territoryViews = []
+    html += `
+      <div class="vb-view ${currentWibView === t.id ? 'active' : ''}"
+           onclick="setWibView('${t.id}')">
 
-  async function loadWibViews() {
-    try {
-      const r = await fetch('/api/territories')
-      if (!r.ok) return
+        ${escHtml(t.name)}
 
-      territoryViews = await r.json()
-      populateWibViewDropdown()
-
-    } catch (err) {
-      console.error('territory load failed:', err)
-    }
-  }
-
-  function populateWibViewDropdown() {
-    const select = document.getElementById('wib-view-select')
-    if (!select) return
-
-    select.innerHTML = `
-      <option value="all">All WIBs</option>
-      <option value="contacted">Contacted WIBs</option>
-      <option value="by_state">WIBs by State</option>
-      <option value="by_locations">WIBs by Count of Locations</option>
+      </div>
     `
 
-    territoryViews.forEach(t => {
-      select.innerHTML += `
-        <option value="${t.id}">
-          ${escHtml(t.name)}
-        </option>
-      `
-    })
-  }
-
-  function changeWibView(viewId) {
-    currentWibView = viewId
-    renderWibTable()
-  }
-
-  function renderWibTable() {
-    let rows = window.wibRecords || []
-
-    switch (currentWibView) {
-      case 'contacted':
-        rows = rows.filter(r => r.last_contacted_at)
-        break
-
-      case 'by_state':
-        rows = rows.sort((a, b) =>
-          (a.state || '').localeCompare(b.state || '')
-        )
-        break
-
-      case 'by_locations':
-        rows = rows.sort((a, b) =>
-          (b.location_count || 0) - (a.location_count || 0)
-        )
-        break
-
-      default:
-        if (currentWibView !== 'all') {
-          rows = rows.filter(r =>
-            r.territory_id === currentWibView
-          )
-        }
-        break
-    }
-
-    if (typeof renderWibRows === 'function') {
-      renderWibRows(rows)
-    }
-  }
-
-  /* =========================
-     SAFE TASK FUNCTIONS
-  ========================= */
-
-  async function saveTask(record_type, record_id) {
-    try {
-      const payload = {
-        record_type,
-        record_id,
-        title: document.getElementById('task-title')?.value || '',
-        due_date: document.getElementById('task-due')?.value || '',
-        priority: document.getElementById('task-priority')?.value || 'medium',
-        notes: document.getElementById('task-notes')?.value || ''
-      }
-
-      const r = await fetch('/api/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      })
-
-      const d = await r.json()
-
-      if (!r.ok) throw new Error(d.error || 'Task failed')
-
-      alert('Task created successfully')
-
-    } catch (err) {
-      console.error(err)
-      alert(err.message)
-    }
-  }
-
-  /* =========================
-     INIT (SAFE)
-  ========================= */
-
-  document.addEventListener('DOMContentLoaded', () => {
-    try {
-      loadWibViews()
-    } catch (err) {
-      console.error('Init failed:', err)
-    }
   })
 
-</script>
+  el.innerHTML = html
 
-</body>
-</html>
+}
+
+function setWibView(viewId) {
+
+  currentWibView = viewId
+
+  renderWibTable()
+
+}
+
+/* ════════════════════════════════════════════════
+   FIX BLANK WIB TABLE
+════════════════════════════════════════════════ */
+
+function renderWibTable() {
+
+  let filtered = [...window.wibRecords]
+
+  /* DEFAULT = SHOW ALL */
+  if (currentWibView !== 'all') {
+
+    filtered = filtered.filter(r =>
+      r.territory_id === currentWibView
+    )
+
+  }
+
+  const tbody = document.getElementById('wib-table-body')
+
+  tbody.innerHTML = filtered.map(r => `
+    <tr>
+      <td>${escHtml(r.name)}</td>
+      <td>${escHtml(r.state)}</td>
+      <td>${escHtml(r.region || '')}</td>
+    </tr>
+  `).join('')
+
+}
+
+/* ════════════════════════════════════════════════
+   FIX AI ASSISTANT TYPEERROR
+════════════════════════════════════════════════ */
+
+async function apiAI(payload) {
+
+  try {
+
+    const r = await fetch('/api/ai', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    })
+
+    const d = await r.json()
+
+    if (
+      typeof d.error === 'string' &&
+      d.error.includes('ANTHROPIC_API_KEY')
+    ) {
+      throw new Error('Missing Anthropic API key')
+    }
+
+    if (
+      typeof d.error === 'string' &&
+      d.error.includes('quota')
+    ) {
+      throw new Error('Quota exceeded')
+    }
+
+    if (
+      typeof d.error === 'string' &&
+      d.error.includes('rate limit')
+    ) {
+      throw new Error('Rate limited')
+    }
+
+    return d
+
+  } catch (err) {
+
+    console.error(err)
+
+    return {
+      error: err.message || 'AI request failed'
+    }
+
+  }
+
+}
+
+/* ════════════════════════════════════════════════
+   COMPLETE TASK MODAL IMPLEMENTATION
+════════════════════════════════════════════════ */
+
+function openTaskModal(record_type, record_id) {
+
+  const html = `
+    <div class="modal-overlay" id="task-modal">
+
+      <div class="modal">
+
+        <div class="modal-hd">
+
+          <div class="modal-title">
+            Create Task
+          </div>
+
+          <button class="modal-close"
+                  onclick="closeTaskModal()">
+            ×
+          </button>
+
+        </div>
+
+        <div class="modal-body">
+
+          <div class="form-group">
+            <label class="form-label">
+              Title <span class="form-req">*</span>
+            </label>
+
+            <input type="text" id="task-title">
+          </div>
+
+          <div class="form-row">
+
+            <div class="form-group">
+
+              <label class="form-label">
+                Due Date
+              </label>
+
+              <input type="date" id="task-due">
+
+            </div>
+
+            <div class="form-group">
+
+              <label class="form-label">
+                Priority
+              </label>
+
+              <select id="task-priority">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+
+            </div>
+
+          </div>
+
+          <div class="form-group">
+
+            <label class="form-label">
+              Assignee
+            </label>
+
+            <select id="task-assignee">
+              <option value="">Unassigned</option>
+            </select>
+
+          </div>
+
+          <div class="form-group">
+
+            <label class="form-label">
+              Notes
+            </label>
+
+            <textarea id="task-notes"></textarea>
+
+          </div>
+
+        </div>
+
+        <div class="modal-foot">
+
+          <button class="btn"
+                  onclick="closeTaskModal()">
+            Cancel
+          </button>
+
+          <button class="btn btn-primary"
+                  onclick="saveTask('${record_type}','${record_id}')">
+
+            Save Task
+
+          </button>
+
+        </div>
+
+      </div>
+
+    </div>
+  `
+
+  document.body.insertAdjacentHTML('beforeend', html)
+
+}
+
+function closeTaskModal() {
+
+  document.getElementById('task-modal')?.remove()
+
+}
+
+async function saveTask(record_type, record_id) {
+
+  const payload = {
+
+    record_type,
+    record_id,
+
+    title:
+      document.getElementById('task-title').value.trim(),
+
+    due_date:
+      document.getElementById('task-due').value,
+
+    priority:
+      document.getElementById('task-priority').value,
+
+    assignee_id:
+      document.getElementById('task-assignee').value,
+
+    notes:
+      document.getElementById('task-notes').value.trim()
+
+  }
+
+  if (!payload.title) {
+
+    alert('Task title required')
+    return
+
+  }
+
+  try {
+
+    const r = await fetch('/api/tasks', {
+
+      method: 'POST',
+
+      headers: {
+        'Content-Type': 'application/json'
+      },
+
+      body: JSON.stringify(payload)
+
+    })
+
+    const d = await r.json()
+
+    if (!r.ok) {
+      throw new Error(d.error || 'Task save failed')
+    }
+
+    closeTaskModal()
+
+    alert('Task created successfully')
+
+  } catch (err) {
+
+    console.error(err)
+    alert(err.message)
+
+  }
+
+}
+
+/* ════════════════════════════════════════════════
+   IMPORT VALIDATION FIXES
+════════════════════════════════════════════════ */
+
+function validateCsvHeaders(headers) {
+
+  const normalized = headers.map(h =>
+    h.trim().toLowerCase()
+  )
+
+  const validNames = [
+    'location name',
+    'location_name',
+    'company name',
+    'employer name'
+  ]
+
+  const found = validNames.some(v =>
+    normalized.includes(v)
+  )
+
+  if (!found) {
+
+    throw new Error(
+      'CSV missing required Location Name column'
+    )
+
+  }
+
+}
+
+function validateRequiredMappings(mapping) {
+
+  const required = [
+    'company_name'
+  ]
+
+  const missing = required.filter(r =>
+    !mapping[r]
+  )
+
+  if (missing.length) {
+
+    throw new Error(
+      'Missing required mappings: ' +
+      missing.join(', ')
+    )
+
+  }
+
+  return true
+
+}
+
+/* ════════════════════════════════════════════════
+   INITIALIZE
+════════════════════════════════════════════════ */
+
+document.addEventListener('DOMContentLoaded', () => {
+
+  loadTerritories()
+
+})
+
+</script>
+```
