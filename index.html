@@ -1973,7 +1973,7 @@ function renderWibProfile(){
     <div style="max-width:720px;margin:0 auto">
       <div class="note-composer">
         <div class="note-types">
-          ${['Note','Call Summary','Meeting Notes','Email','Follow-up'].map((t,i)=>`<div class="note-type-btn${i===0?' active':''}" onclick="setNoteType(this,'${t}')">${t}</div>`).join('')}
+          ${['Note','Aircall','Call Summary','Meeting Notes','Email','Follow-up'].map((t,i)=>`<div class="note-type-btn${i===0?' active':''}" onclick="setNoteType(this,'${t}')">${t}</div>`).join('')}
         </div>
         <div class="note-composer-who" id="wib-note-who">
           <div class="nc-av" id="wib-note-av">${userInitials}</div>
@@ -2169,8 +2169,8 @@ async function loadWibTabData(tab){
 function setNoteType(el,type){
   document.querySelectorAll('.note-type-btn').forEach(b=>b.classList.remove('active'))
   el.classList.add('active')
-  // Update composer "posting as" header for all visible note composers
-  const isAircall = type==='Call Summary'
+  // "Aircall" type (dedicated button) OR "Call Summary" both trigger Aircall mode
+  const isAircall = type==='Aircall'||type==='Call Summary'
   ;['wib','co'].forEach(prefix=>{
     const av=document.getElementById(prefix+'-note-av')
     const author=document.getElementById(prefix+'-note-author')
@@ -2193,12 +2193,27 @@ function setNoteType(el,type){
 async function saveWibNote(){
   const ta=document.getElementById('wib-note-ta');if(!ta)return
   const text=ta.value.trim()
-  if(!text){showToast('Note cannot be empty','error');return}
+  if(!text){showToast('Note body is required','error');return}
   const w=currentWib;if(!w)return
+  // Gather required composer fields
+  const authorEl=document.getElementById('wib-note-author')
+  const timeEl=document.getElementById('wib-note-time')
+  const authorName=(authorEl?.textContent||'').trim()||currentUser?.full_name||currentUser?.email||''
+  const noteTimestamp=(timeEl?.textContent||'').trim()||fmtNoteDateTime(new Date().toISOString())
+  if(!authorName){showToast('Author name is required','error');return}
+  if(!noteTimestamp){showToast('Note timestamp is missing','error');return}
   const activeType=document.querySelector('.note-type-btn.active')?.textContent||'Note'
+  const isAircall=activeType==='Aircall'||activeType==='Call Summary'
   try{
-    await api('/api/notes','POST',{record_type:'wib_records',record_id:w.id,details:text,metadata:{note_type:activeType}})
+    await api('/api/notes','POST',{record_type:'wib_records',record_id:w.id,details:text,
+      metadata:{note_type:isAircall?'Aircall':activeType,is_aircall:isAircall,posted_as:authorName,composed_at:noteTimestamp}})
     showToast('Note saved','success');ta.value=''
+    // Reset composer author back to current user after saving
+    if(authorEl){const un=currentUser?.full_name||currentUser?.email||'You';authorEl.textContent=un}
+    const avEl=document.getElementById('wib-note-av')
+    if(avEl){avEl.textContent=(currentUser?.full_name||currentUser?.email||'You').slice(0,2).toUpperCase();avEl.className='nc-av'}
+    if(timeEl)timeEl.textContent=fmtNoteDateTime(new Date().toISOString())
+    document.querySelectorAll('.note-type-btn').forEach((b,i)=>{b.classList.toggle('active',i===0)})
     loadWibTabData('notes')
   }catch(e){showToast('Failed: '+e.message,'error')}
 }
@@ -2710,7 +2725,7 @@ function renderCompanyProfile(){
     <div style="max-width:720px;margin:0 auto">
       <div class="note-composer">
         <div class="note-types">
-          ${['Note','Call Summary','Meeting Notes','Email','Follow-up'].map((t,i)=>`<div class="note-type-btn${i===0?' active':''}" onclick="setNoteType(this,'${t}')">${t}</div>`).join('')}
+          ${['Note','Aircall','Call Summary','Meeting Notes','Email','Follow-up'].map((t,i)=>`<div class="note-type-btn${i===0?' active':''}" onclick="setNoteType(this,'${t}')">${t}</div>`).join('')}
         </div>
         <div class="note-composer-who" id="co-note-who">
           <div class="nc-av" id="co-note-av">${userInitials}</div>
@@ -2864,12 +2879,27 @@ async function loadCompanyTabData(tab){
 async function saveCompanyNote(){
   const ta=document.getElementById('co-note-ta');if(!ta)return
   const text=ta.value.trim()
-  if(!text){showToast('Note cannot be empty','error');return}
+  if(!text){showToast('Note body is required','error');return}
   const c=currentCompany;if(!c)return
+  // Gather required composer fields
+  const authorEl=document.getElementById('co-note-author')
+  const timeEl=document.getElementById('co-note-time')
+  const authorName=(authorEl?.textContent||'').trim()||currentUser?.full_name||currentUser?.email||''
+  const noteTimestamp=(timeEl?.textContent||'').trim()||fmtNoteDateTime(new Date().toISOString())
+  if(!authorName){showToast('Author name is required','error');return}
+  if(!noteTimestamp){showToast('Note timestamp is missing','error');return}
   const activeType=document.querySelector('.note-type-btn.active')?.textContent||'Note'
+  const isAircall=activeType==='Aircall'||activeType==='Call Summary'
   try{
-    await api('/api/notes','POST',{record_type:'companies',record_id:c.id,details:text,metadata:{note_type:activeType}})
+    await api('/api/notes','POST',{record_type:'companies',record_id:c.id,details:text,
+      metadata:{note_type:isAircall?'Aircall':activeType,is_aircall:isAircall,posted_as:authorName,composed_at:noteTimestamp}})
     showToast('Note saved','success');ta.value=''
+    // Reset composer after saving
+    if(authorEl){const un=currentUser?.full_name||currentUser?.email||'You';authorEl.textContent=un}
+    const avEl=document.getElementById('co-note-av')
+    if(avEl){avEl.textContent=(currentUser?.full_name||currentUser?.email||'You').slice(0,2).toUpperCase();avEl.className='nc-av'}
+    if(timeEl)timeEl.textContent=fmtNoteDateTime(new Date().toISOString())
+    document.querySelectorAll('.note-type-btn').forEach((b,i)=>{b.classList.toggle('active',i===0)})
     loadCompanyTabData('notes')
   }catch(e){showToast('Failed: '+e.message,'error')}
 }
@@ -3691,7 +3721,7 @@ async function pageTerritories(){
     .wt-card-hd{padding:10px 14px;border-bottom:.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:6px}
     .wt-card-title{font-size:12px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:5px}
     .wt-card-body{padding:10px 14px}
-    #wt-map-wrap{background:var(--gray);border-radius:0;position:relative;height:280px;min-height:280px;overflow:hidden}
+    #wt-map-wrap{background:var(--gray);border-radius:0;position:relative!important;height:280px;min-height:280px;overflow:hidden;display:block}
     #wt-svg{display:block;width:100%;height:100%}
     .wt-tooltip{position:absolute;background:var(--white);border:.5px solid var(--border);border-radius:8px;padding:8px 11px;font-size:11px;pointer-events:none;display:none;z-index:10;max-width:200px;box-shadow:0 4px 12px rgba(0,0,0,.1)}
     .wt-state-path{cursor:pointer;transition:opacity .12s}
@@ -3783,7 +3813,7 @@ async function pageTerritories(){
         </div>
         <div id="wt-map-wrap">
           <div class="wt-tooltip" id="wt-tt"></div>
-          <svg id="wt-svg" style="display:block;width:100%;height:100%;position:absolute;top:0;left:0" viewBox="0 0 900 432"></svg>
+          <svg id="wt-svg" style="display:block;width:100%;height:100%;position:absolute;inset:0" viewBox="0 0 900 432"></svg>
         </div>
         <div class="wt-map-legend">
           <div class="wt-leg-item"><div class="wt-leg-dot" style="background:#0B1E3C"></div>15+ local boards</div>
@@ -4038,21 +4068,52 @@ function wtStateColor(w){
 
 /* ── Map ── */
 function wtLoadMap(){
-  // Defer until next paint so the fixed-height container is fully laid out
-  requestAnimationFrame(()=>{
-    setTimeout(()=>{
-      if(typeof d3!=='undefined'&&typeof topojson!=='undefined'){wtDrawMap();return}
-      const s1=document.createElement('script')
-      s1.src='https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js'
-      s1.onload=()=>{
-        const s2=document.createElement('script')
-        s2.src='https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js'
-        s2.onload=wtDrawMap
-        document.head.appendChild(s2)
+  // Poll until #wt-svg is in the DOM and the container has positive dimensions,
+  // then load D3 + TopoJSON (or reuse if already loaded) and draw.
+  var attempts = 0
+  function tryDraw(){
+    attempts++
+    var svgEl = document.getElementById('wt-svg')
+    var wrap  = document.getElementById('wt-map-wrap')
+    if(!svgEl || !wrap){
+      if(attempts < 40){ setTimeout(tryDraw, 50) }
+      return
+    }
+    var rect = wrap.getBoundingClientRect()
+    if(rect.width < 10 || rect.height < 10){
+      if(attempts < 40){ setTimeout(tryDraw, 50) }
+      return
+    }
+    // Container is ready — load libraries if needed, then draw
+    if(typeof d3 !== 'undefined' && typeof topojson !== 'undefined'){
+      wtDrawMap(); return
+    }
+    var s1 = document.createElement('script')
+    s1.src = 'https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js'
+    s1.onerror = function(){
+      // CDN fallback
+      var sf = document.createElement('script')
+      sf.src = 'https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js'
+      sf.onload = loadTopo
+      document.head.appendChild(sf)
+    }
+    s1.onload = loadTopo
+    document.head.appendChild(s1)
+    function loadTopo(){
+      var s2 = document.createElement('script')
+      s2.src = 'https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js'
+      s2.onerror = function(){
+        var sf2 = document.createElement('script')
+        sf2.src = 'https://cdn.jsdelivr.net/npm/topojson-client@3/dist/topojson-client.min.js'
+        sf2.onload = wtDrawMap
+        document.head.appendChild(sf2)
       }
-      document.head.appendChild(s1)
-    }, 80)
-  })
+      s2.onload = wtDrawMap
+      document.head.appendChild(s2)
+    }
+  }
+  // First attempt after two animation frames to ensure layout is painted
+  requestAnimationFrame(function(){ requestAnimationFrame(tryDraw) })
 }
 
 function wtDrawMap(){
