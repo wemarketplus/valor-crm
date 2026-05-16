@@ -1,535 +1,204 @@
-```html
-<!-- ════════════════════════════════════════════════
-     REMOVE ALL HARDCODED WIB VIEWS
-════════════════════════════════════════════════ -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Valor CRM</title>
 
-<!-- DELETE:
-Sam Orer's WIBs
-Carly Chavez's WIBs
-Sarah Cannon's WIBs
-Sarah Gantt's WIBs
-Ashby WIB List
--->
+  <!-- KEEP YOUR EXISTING STYLES HERE (UNCHANGED) -->
+  <!-- DO NOT REMOVE YOUR ORIGINAL CSS -->
 
-<!-- ════════════════════════════════════════════════
-     VIEW SELECTOR
-════════════════════════════════════════════════ -->
+  <style>
+    /* only safety fallback variables (prevents white screen) */
+    :root {
+      --border: #e5e7eb;
+      --white: #ffffff;
+      --text: #111827;
+    }
+  </style>
+</head>
 
-<div class="view-selector-wrap">
+<body>
 
-  <select id="wib-view-select"
-          class="view-selector"
-          onchange="changeWibView(this.value)">
+<!-- =====================================================
+     YOUR EXISTING HTML LAYOUT (UNCHANGED)
+     PASTE YOUR ORIGINAL UI HERE EXACTLY AS IS
+===================================================== -->
 
-    <option value="all">
-      All WIBs
-    </option>
+<div id="app">
 
-  </select>
+  <!-- KEEP ALL YOUR EXISTING CONTENT -->
 
 </div>
 
-<style>
-
-.view-selector-wrap{
-  display:flex;
-  align-items:center;
-  gap:8px;
-}
-
-.view-selector{
-  min-width:240px;
-  padding:8px 12px;
-  border:.5px solid var(--border);
-  border-radius:8px;
-  background:var(--white);
-  color:var(--text);
-  font-size:12px;
-  font-weight:500;
-  outline:none;
-  cursor:pointer;
-}
-
-</style>
+<!-- =====================================================
+     CRITICAL SAFETY PATCHES (DO NOT REMOVE)
+===================================================== -->
 
 <script>
 
-/* ════════════════════════════════════════════════
-   GLOBAL STATE
-════════════════════════════════════════════════ */
+  /* =========================
+     SAFE GLOBAL GUARDS
+  ========================= */
 
-let currentWibView = 'all'
-let territoryViews = []
+  window.wibRecords = window.wibRecords || []
 
-/* ════════════════════════════════════════════════
-   LOAD TERRITORIES
-════════════════════════════════════════════════ */
-
-async function loadWibViews() {
-
-  try {
-
-    const r = await fetch('/api/territories')
-
-    if (!r.ok) {
-      throw new Error('Failed loading territories')
-    }
-
-    territoryViews = await r.json()
-
-    populateWibViewDropdown()
-
-  } catch (err) {
-
-    console.error(err)
-
+  function escHtml(str = '') {
+    return String(str)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;')
   }
 
-}
+  /* =========================
+     SAFE API WRAPPER (AI)
+  ========================= */
 
-/* ════════════════════════════════════════════════
-   POPULATE DROPDOWN
-════════════════════════════════════════════════ */
+  async function apiAI(payload) {
+    try {
+      const r = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
 
-function populateWibViewDropdown() {
+      const d = await r.json()
 
-  const select =
-    document.getElementById('wib-view-select')
+      return d
 
-  if (!select) return
+    } catch (err) {
+      console.error('AI error:', err)
+      return { error: 'AI request failed' }
+    }
+  }
 
-  select.innerHTML = `
-    <option value="all">
-      All WIBs
-    </option>
+  /* =========================
+     SAFE WIB VIEW HANDLERS
+  ========================= */
 
-    <option value="contacted">
-      Contacted WIBs
-    </option>
+  let currentWibView = 'all'
+  let territoryViews = []
 
-    <option value="by_state">
-      WIBs by State
-    </option>
+  async function loadWibViews() {
+    try {
+      const r = await fetch('/api/territories')
+      if (!r.ok) return
 
-    <option value="by_locations">
-      WIBs by Count of Locations
-    </option>
-  `
+      territoryViews = await r.json()
+      populateWibViewDropdown()
 
-  territoryViews.forEach(t => {
+    } catch (err) {
+      console.error('territory load failed:', err)
+    }
+  }
 
-    select.innerHTML += `
-      <option value="${t.id}">
-        ${escHtml(t.name)}
-      </option>
+  function populateWibViewDropdown() {
+    const select = document.getElementById('wib-view-select')
+    if (!select) return
+
+    select.innerHTML = `
+      <option value="all">All WIBs</option>
+      <option value="contacted">Contacted WIBs</option>
+      <option value="by_state">WIBs by State</option>
+      <option value="by_locations">WIBs by Count of Locations</option>
     `
 
+    territoryViews.forEach(t => {
+      select.innerHTML += `
+        <option value="${t.id}">
+          ${escHtml(t.name)}
+        </option>
+      `
+    })
+  }
+
+  function changeWibView(viewId) {
+    currentWibView = viewId
+    renderWibTable()
+  }
+
+  function renderWibTable() {
+    let rows = window.wibRecords || []
+
+    switch (currentWibView) {
+      case 'contacted':
+        rows = rows.filter(r => r.last_contacted_at)
+        break
+
+      case 'by_state':
+        rows = rows.sort((a, b) =>
+          (a.state || '').localeCompare(b.state || '')
+        )
+        break
+
+      case 'by_locations':
+        rows = rows.sort((a, b) =>
+          (b.location_count || 0) - (a.location_count || 0)
+        )
+        break
+
+      default:
+        if (currentWibView !== 'all') {
+          rows = rows.filter(r =>
+            r.territory_id === currentWibView
+          )
+        }
+        break
+    }
+
+    if (typeof renderWibRows === 'function') {
+      renderWibRows(rows)
+    }
+  }
+
+  /* =========================
+     SAFE TASK FUNCTIONS
+  ========================= */
+
+  async function saveTask(record_type, record_id) {
+    try {
+      const payload = {
+        record_type,
+        record_id,
+        title: document.getElementById('task-title')?.value || '',
+        due_date: document.getElementById('task-due')?.value || '',
+        priority: document.getElementById('task-priority')?.value || 'medium',
+        notes: document.getElementById('task-notes')?.value || ''
+      }
+
+      const r = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+
+      const d = await r.json()
+
+      if (!r.ok) throw new Error(d.error || 'Task failed')
+
+      alert('Task created successfully')
+
+    } catch (err) {
+      console.error(err)
+      alert(err.message)
+    }
+  }
+
+  /* =========================
+     INIT (SAFE)
+  ========================= */
+
+  document.addEventListener('DOMContentLoaded', () => {
+    try {
+      loadWibViews()
+    } catch (err) {
+      console.error('Init failed:', err)
+    }
   })
 
-}
-
-/* ════════════════════════════════════════════════
-   CHANGE VIEW
-════════════════════════════════════════════════ */
-
-function changeWibView(viewId) {
-
-  currentWibView = viewId
-
-  renderWibTable()
-
-}
-
-/* ════════════════════════════════════════════════
-   FIX BLANK TABLE
-════════════════════════════════════════════════ */
-
-function renderWibTable() {
-
-  let rows = [...window.wibRecords]
-
-  switch(currentWibView) {
-
-    case 'all':
-      break
-
-    case 'contacted':
-
-      rows = rows.filter(r =>
-        r.last_contacted_at
-      )
-
-      break
-
-    case 'by_state':
-
-      rows.sort((a,b) =>
-        (a.state || '')
-          .localeCompare(b.state || '')
-      )
-
-      break
-
-    case 'by_locations':
-
-      rows.sort((a,b) =>
-        (b.location_count || 0) -
-        (a.location_count || 0)
-      )
-
-      break
-
-    default:
-
-      rows = rows.filter(r =>
-        r.territory_id === currentWibView
-      )
-
-      break
-
-  }
-
-  renderWibRows(rows)
-
-}
-
-/* ════════════════════════════════════════════════
-   FIX AI ASSISTANT CRASH
-════════════════════════════════════════════════ */
-
-async function apiAI(payload) {
-
-  try {
-
-    const r = await fetch('/api/ai', {
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json'
-      },
-      body:JSON.stringify(payload)
-    })
-
-    const d = await r.json()
-
-    if (
-      typeof d.error === 'string' &&
-      d.error.includes('ANTHROPIC_API_KEY')
-    ) {
-
-      throw new Error(
-        'Missing Anthropic API key'
-      )
-
-    }
-
-    if (
-      typeof d.error === 'string' &&
-      d.error.includes('quota')
-    ) {
-
-      throw new Error(
-        'Quota exceeded'
-      )
-
-    }
-
-    if (
-      typeof d.error === 'string' &&
-      d.error.includes('rate limit')
-    ) {
-
-      throw new Error(
-        'Rate limited'
-      )
-
-    }
-
-    return d
-
-  } catch (err) {
-
-    console.error(err)
-
-    return {
-      error: err.message || 'AI request failed'
-    }
-
-  }
-
-}
-
-/* ════════════════════════════════════════════════
-   TASK MODAL
-════════════════════════════════════════════════ */
-
-function openTaskModal(
-  record_type,
-  record_id
-) {
-
-  const html = `
-    <div class="modal-overlay"
-         id="task-modal">
-
-      <div class="modal">
-
-        <div class="modal-hd">
-
-          <div class="modal-title">
-            Create Task
-          </div>
-
-          <button onclick="closeTaskModal()">
-            ×
-          </button>
-
-        </div>
-
-        <div class="modal-body">
-
-          <div class="form-group">
-
-            <label>
-              Title
-            </label>
-
-            <input type="text"
-                   id="task-title">
-
-          </div>
-
-          <div class="form-group">
-
-            <label>
-              Due Date
-            </label>
-
-            <input type="date"
-                   id="task-due">
-
-          </div>
-
-          <div class="form-group">
-
-            <label>
-              Priority
-            </label>
-
-            <select id="task-priority">
-
-              <option value="low">
-                Low
-              </option>
-
-              <option value="medium" selected>
-                Medium
-              </option>
-
-              <option value="high">
-                High
-              </option>
-
-            </select>
-
-          </div>
-
-          <div class="form-group">
-
-            <label>
-              Notes
-            </label>
-
-            <textarea id="task-notes"></textarea>
-
-          </div>
-
-        </div>
-
-        <div class="modal-foot">
-
-          <button onclick="closeTaskModal()">
-            Cancel
-          </button>
-
-          <button onclick="
-            saveTask(
-              '${record_type}',
-              '${record_id}'
-            )
-          ">
-
-            Save Task
-
-          </button>
-
-        </div>
-
-      </div>
-
-    </div>
-  `
-
-  document.body.insertAdjacentHTML(
-    'beforeend',
-    html
-  )
-
-}
-
-function closeTaskModal() {
-
-  document
-    .getElementById('task-modal')
-    ?.remove()
-
-}
-
-async function saveTask(
-  record_type,
-  record_id
-) {
-
-  const payload = {
-
-    record_type,
-    record_id,
-
-    title:
-      document
-        .getElementById('task-title')
-        .value
-        .trim(),
-
-    due_date:
-      document
-        .getElementById('task-due')
-        .value,
-
-    priority:
-      document
-        .getElementById('task-priority')
-        .value,
-
-    notes:
-      document
-        .getElementById('task-notes')
-        .value
-        .trim()
-
-  }
-
-  if (!payload.title) {
-
-    alert('Task title required')
-    return
-
-  }
-
-  try {
-
-    const r = await fetch('/api/tasks', {
-
-      method:'POST',
-
-      headers:{
-        'Content-Type':'application/json'
-      },
-
-      body:JSON.stringify(payload)
-
-    })
-
-    const d = await r.json()
-
-    if (!r.ok) {
-
-      throw new Error(
-        d.error || 'Task creation failed'
-      )
-
-    }
-
-    closeTaskModal()
-
-    alert('Task created successfully')
-
-  } catch (err) {
-
-    console.error(err)
-    alert(err.message)
-
-  }
-
-}
-
-/* ════════════════════════════════════════════════
-   IMPORT VALIDATION
-════════════════════════════════════════════════ */
-
-function validateCsvHeaders(headers) {
-
-  const normalized = headers.map(h =>
-    h.trim().toLowerCase()
-  )
-
-  const validHeaders = [
-
-    'location name',
-    'location_name',
-    'company name',
-    'employer name'
-
-  ]
-
-  const found = validHeaders.some(v =>
-    normalized.includes(v)
-  )
-
-  if (!found) {
-
-    throw new Error(
-      'CSV missing required Location Name column'
-    )
-
-  }
-
-}
-
-function validateRequiredMappings(mapping) {
-
-  const required = [
-    'company_name'
-  ]
-
-  const missing = required.filter(r =>
-    !mapping[r]
-  )
-
-  if (missing.length) {
-
-    throw new Error(
-      'Please map required field: ' +
-      missing.join(', ')
-    )
-
-  }
-
-  return true
-
-}
-
-/* ════════════════════════════════════════════════
-   INIT
-═══════════════════════════════════════════════ */
-
-document.addEventListener(
-  'DOMContentLoaded',
-  () => {
-
-    loadWibViews()
-
-  }
-)
-
 </script>
-```
+
+</body>
+</html>
