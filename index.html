@@ -3569,12 +3569,232 @@ function openEditUserModal(u){
 /* ═══════════════════════════════════════════════════
    WIB TERRITORIES — ADMIN MANAGEMENT PAGE
 ═══════════════════════════════════════════════════ */
+
+/* ── Embedded WIB state data (nationwide) ── */
+window._WIB_STATE_DATA = [
+  {state:'Alabama',abbr:'AL',region:'Southeast',board:'Alabama Workforce Investment Board',director:'Steve Walkley',title:'Division Chief, Workforce Development',phone:'334-242-5300',email:'steve.walkley@commerce.alabama.gov',website:'https://www.madeinalabama.com/workforce',localBoards:4},
+  {state:'Alaska',abbr:'AK',region:'West',board:'Alaska Workforce Investment Board',director:'Brad Thompson',title:'Executive Director',phone:'907-465-2700',email:'workforce@alaska.gov',website:'https://labor.alaska.gov/awib',localBoards:1},
+  {state:'Arizona',abbr:'AZ',region:'Southwest',board:'Arizona Workforce Connection',director:'State Board Chair',title:'Board Chair',phone:'602-542-5678',email:'wib@azcommerce.com',website:'https://des.az.gov/workforce',localBoards:5},
+  {state:'Arkansas',abbr:'AR',region:'Southeast',board:'Arkansas Workforce Development Board',director:'Charisse Childers',title:'Director, ADWS',phone:'501-682-3500',email:'workforce@arkansas.gov',website:'https://www.dws.arkansas.gov',localBoards:4},
+  {state:'California',abbr:'CA',region:'West',board:'California Workforce Development Board',director:'Josh Pechthalt',title:'Chair',phone:'916-327-5670',email:'info@cwdb.ca.gov',website:'https://cwdb.ca.gov',localBoards:49},
+  {state:'Colorado',abbr:'CO',region:'West',board:'Colorado Workforce Development Council',director:'Cher Haavind',title:'Executive Director',phone:'303-318-8000',email:'cwdc@state.co.us',website:'https://cwdc.colorado.gov',localBoards:10},
+  {state:'Connecticut',abbr:'CT',region:'Northeast',board:'Connecticut State Workforce Development Board',director:'Kelli-Marie Vallieres',title:'Chief Workforce Officer',phone:'860-256-3800',email:'ctdol.state.ct.us',website:'https://portal.ct.gov/dol',localBoards:5},
+  {state:'Delaware',abbr:'DE',region:'Northeast',board:'Delaware Workforce Development Board',director:'Josette Manning',title:'Secretary, DOLWD',phone:'302-761-8085',email:'workforce@delawareworks.com',website:'https://www.delawareworks.com',localBoards:1},
+  {state:'Florida',abbr:'FL',region:'Southeast',board:'CareerSource Florida',director:'Michelle Dennard',title:'President/CEO',phone:'850-921-1119',email:'info@careersourceflorida.com',website:'https://www.careersourceflorida.com',localBoards:24},
+  {state:'Georgia',abbr:'GA',region:'Southeast',board:'Georgia Workforce Development Board',director:'Tim Sheehan',title:'Executive Director',phone:'404-232-3500',email:'workforce@georgia.gov',website:'https://www.dol.state.ga.us',localBoards:16},
+  {state:'Hawaii',abbr:'HI',region:'West',board:'Hawaii Workforce Development Council',director:'Elaine Young',title:'Director, DLIR',phone:'808-586-8812',email:'dlir.hawaii.gov',website:'https://labor.hawaii.gov',localBoards:1},
+  {state:'Idaho',abbr:'ID',region:'West',board:'Idaho Workforce Development Council',director:'Jan Roeser',title:'Executive Director',phone:'208-332-3570',email:'workforce@labor.idaho.gov',website:'https://wdc.idaho.gov',localBoards:6},
+  {state:'Illinois',abbr:'IL',region:'Midwest',board:'Illinois Workforce Innovation Board',director:'Jane Oates',title:'Chair',phone:'312-793-5700',email:'iwib@illinois.gov',website:'https://www.illinoisworknet.com',localBoards:19},
+  {state:'Indiana',abbr:'IN',region:'Midwest',board:'Indiana State Workforce Development Board',director:'Scott Barnhart',title:'Executive Director, DWD',phone:'317-232-7670',email:'info@dwd.in.gov',website:'https://www.in.gov/dwd',localBoards:12},
+  {state:'Iowa',abbr:'IA',region:'Midwest',board:'Iowa Workforce Development Board',director:'Beth Townsend',title:'Director, IWD',phone:'515-281-5387',email:'iwd@iwd.iowa.gov',website:'https://www.iwd.iowa.gov',localBoards:16},
+  {state:'Kansas',abbr:'KS',region:'Midwest',board:'Kansas Workforce Development Board',director:'Amber Shultz',title:'Secretary, KDOL',phone:'785-296-5000',email:'kdolwib@ks.gov',website:'https://www.kansasworks.com',localBoards:5},
+  {state:'Kentucky',abbr:'KY',region:'Southeast',board:'Kentucky Workforce Innovation Board',director:'Eric Peake',title:'Commissioner, KEWES',phone:'502-564-7456',email:'workforceboard@ky.gov',website:'https://kycte.ky.gov',localBoards:10},
+  {state:'Louisiana',abbr:'LA',region:'Southeast',board:'Louisiana Workforce Commission',director:'Ava Dejoie',title:'Secretary',phone:'225-342-3111',email:'lwc@lwc.la.gov',website:'https://www.laworks.net',localBoards:8},
+  {state:'Maine',abbr:'ME',region:'Northeast',board:'Maine Workforce Development Board',director:'Laura Fortman',title:'Commissioner, MDOL',phone:'207-623-7981',email:'mdol.wdb@maine.gov',website:'https://www.maine.gov/labor',localBoards:4},
+  {state:'Maryland',abbr:'MD',region:'Northeast',board:'Maryland State Workforce Development Board',director:'Tiffany Robinson',title:'Secretary, MDOL',phone:'410-767-2400',email:'workforce@dllr.state.md.us',website:'https://www.dllr.state.md.us',localBoards:13},
+  {state:'Massachusetts',abbr:'MA',region:'Northeast',board:'Commonwealth Corporation / SWDB',director:'Nancy Snyder',title:'President/CEO',phone:'617-727-8158',email:'info@commcorp.org',website:'https://commcorp.org',localBoards:16},
+  {state:'Michigan',abbr:'MI',region:'Midwest',board:'Michigan Works! / Talent Investment Agency',director:'Susan Corbin',title:'Director, LEO',phone:'517-335-5858',email:'leo-wdb@michigan.gov',website:'https://www.michiganworks.org',localBoards:16},
+  {state:'Minnesota',abbr:'MN',region:'Midwest',board:'Minnesota Workforce Development Board',director:'Steve Grove',title:'Commissioner, DEED',phone:'651-296-3644',email:'deed.workforce@state.mn.us',website:'https://mn.gov/deed',localBoards:16},
+  {state:'Mississippi',abbr:'MS',region:'Southeast',board:'Mississippi Workforce Investment Network',director:'Robin Arnold',title:'Director, MDES',phone:'601-321-6000',email:'info@mdes.ms.gov',website:'https://www.mdes.ms.gov',localBoards:6},
+  {state:'Missouri',abbr:'MO',region:'Midwest',board:'Missouri Workforce Investment Board',director:'Ryan Burns',title:'Director, DWD',phone:'573-751-4091',email:'dwd.workforce@mo.gov',website:'https://jobs.mo.gov',localBoards:14},
+  {state:'Montana',abbr:'MT',region:'West',board:'Montana Workforce Innovation Board',director:'Sarah Swanson',title:'Administrator, DLI',phone:'406-444-2840',email:'workforce@mt.gov',website:'https://wsd.dli.mt.gov',localBoards:1},
+  {state:'Nebraska',abbr:'NE',region:'Midwest',board:'Nebraska Workforce Development Board',director:'John Albin',title:'Commissioner, NDOL',phone:'402-471-2600',email:'dol.wdb@nebraska.gov',website:'https://dol.nebraska.gov',localBoards:3},
+  {state:'Nevada',abbr:'NV',region:'West',board:"Nevada Governor's Workforce Development Board",director:'William Anderson',title:'Director, DETR',phone:'775-684-3911',email:'workforce@detr.nv.gov',website:'https://detr.nv.gov',localBoards:2},
+  {state:'New Hampshire',abbr:'NH',region:'Northeast',board:'New Hampshire Works / State WDB',director:'George Bald',title:'Chair',phone:'603-228-4062',email:'nhworks@nhes.nh.gov',website:'https://www.nhworks.org',localBoards:2},
+  {state:'New Jersey',abbr:'NJ',region:'Northeast',board:'NJ State Employment & Training Commission',director:'Robert Asaro-Angelo',title:'Commissioner, NJDOL',phone:'609-292-5005',email:'workforce@dol.nj.gov',website:'https://www.nj.gov/labor',localBoards:18},
+  {state:'New Mexico',abbr:'NM',region:'Southwest',board:'New Mexico Workforce Development Board',director:'Bill McCamley',title:'Secretary, NMDWS',phone:'505-841-8405',email:'workforce@state.nm.us',website:'https://www.dws.state.nm.us',localBoards:5},
+  {state:'New York',abbr:'NY',region:'Northeast',board:'New York State Workforce Development Board',director:'Roberta Reardon',title:'Commissioner, NYDOL',phone:'518-457-9000',email:'wdb@labor.ny.gov',website:'https://www.labor.ny.gov',localBoards:33},
+  {state:'North Carolina',abbr:'NC',region:'Southeast',board:'NC Commission on Workforce Development',director:'Gill Bloom',title:'Executive Director',phone:'919-814-0400',email:'ncworks@nccommerce.com',website:'https://ncworks.gov',localBoards:23},
+  {state:'North Dakota',abbr:'ND',region:'Midwest',board:'North Dakota Workforce Development Board',director:'Michelle Kommer',title:'Commissioner, Job Service ND',phone:'701-328-2836',email:'workforce@nd.gov',website:'https://www.jobsnd.com',localBoards:1},
+  {state:'Ohio',abbr:'OH',region:'Midwest',board:'Ohio State Workforce Development Board',director:'Matt Damschroder',title:'Director, OOD',phone:'614-466-2100',email:'workforce@jfs.ohio.gov',website:'https://jfs.ohio.gov',localBoards:20},
+  {state:'Oklahoma',abbr:'OK',region:'Southwest',board:'Oklahoma Workforce Development Board',director:'Shelley Zumwalt',title:'Secretary of Commerce',phone:'405-521-2471',email:'workforce@oesc.state.ok.us',website:'https://www.oesc.state.ok.us',localBoards:7},
+  {state:'Oregon',abbr:'OR',region:'West',board:'Oregon Workforce & Talent Development Board',director:'Gina Nikkel',title:'Chair',phone:'503-378-8648',email:'workforce@oregon.gov',website:'https://www.oregon.gov/employ',localBoards:9},
+  {state:'Pennsylvania',abbr:'PA',region:'Northeast',board:'Pennsylvania Workforce Development Board',director:'Jennifer Berrier',title:'Secretary, PADLI',phone:'717-787-3354',email:'RA-LI-PAWDB@pa.gov',website:'https://www.pa.gov/agencies/dli',localBoards:22},
+  {state:'Rhode Island',abbr:'RI',region:'Northeast',board:'Rhode Island Workforce Development Board',director:'Matt Weldon',title:'Director, DLT',phone:'401-462-8000',email:'wdb@dlt.ri.gov',website:'https://dlt.ri.gov',localBoards:1},
+  {state:'South Carolina',abbr:'SC',region:'Southeast',board:'South Carolina Works / WIOA State Board',director:'Dan Ellzey',title:'Executive Director, SCDEW',phone:'803-737-2400',email:'wib@dew.sc.gov',website:'https://www.jobs.sc.gov',localBoards:8},
+  {state:'South Dakota',abbr:'SD',region:'Midwest',board:'South Dakota Dept of Labor & Regulation',director:'Marcia Hultman',title:'Secretary, DLR',phone:'605-773-3101',email:'dolr.info@state.sd.us',website:'https://dlr.sd.gov',localBoards:1},
+  {state:'Tennessee',abbr:'TN',region:'Southeast',board:'Tennessee Workforce Development Board',director:'Jeff McCord',title:'Commissioner, TDLWD',phone:'615-741-6642',email:'tn.workforce@tn.gov',website:'https://www.tn.gov/workforce',localBoards:12},
+  {state:'Texas',abbr:'TX',region:'Southwest',board:'Texas Workforce Commission',director:'Bryan Daniel',title:'Chairman, TWC',phone:'512-463-0735',email:'commissioner.daniel@twc.texas.gov',website:'https://www.twc.texas.gov',localBoards:28},
+  {state:'Utah',abbr:'UT',region:'West',board:'Utah Workforce Development Board',director:'Tani Downing',title:'Executive Director, DWS',phone:'801-526-9675',email:'workforce@utah.gov',website:'https://jobs.utah.gov',localBoards:9},
+  {state:'Vermont',abbr:'VT',region:'Northeast',board:'Vermont Workforce Development Board',director:'Michael Harrington',title:'Commissioner, VDOL',phone:'802-828-4000',email:'workforce@vermont.gov',website:'https://www.vermontworkforceboard.net',localBoards:1},
+  {state:'Virginia',abbr:'VA',region:'Southeast',board:'Virginia Board of Workforce Development',director:'Adam Cooke',title:'Deputy Secretary',phone:'804-786-8269',email:'workforce@vec.virginia.gov',website:'https://www.vec.virginia.gov',localBoards:15},
+  {state:'Washington',abbr:'WA',region:'West',board:'Workforce Training & Education Coordinating Board',director:'Eleni Papadakis',title:'Executive Director',phone:'360-709-4600',email:'workforce@wtb.wa.gov',website:'https://www.wtb.wa.gov',localBoards:12},
+  {state:'West Virginia',abbr:'WV',region:'Southeast',board:'West Virginia Workforce Development Board',director:'Scott Adkins',title:'Cabinet Secretary, WVDW',phone:'304-558-7024',email:'workforce@wv.gov',website:'https://workforce.wv.gov',localBoards:7},
+  {state:'Wisconsin',abbr:'WI',region:'Midwest',board:'Wisconsin Fast Forward / State WDB',director:'Amy Pechacek',title:'Secretary, DWD',phone:'608-266-3131',email:'dwd.workforce@wisconsin.gov',website:'https://dwd.wisconsin.gov',localBoards:11},
+  {state:'Wyoming',abbr:'WY',region:'West',board:'Wyoming Workforce Development Council',director:'Joan Evans',title:'Director, DOE',phone:'307-777-5287',email:'workforce@wyoming.gov',website:'https://www.wyomingworkforce.org',localBoards:1},
+]
+
+window._FIPS_MAP = {
+  'Alabama':'01','Alaska':'02','Arizona':'04','Arkansas':'05','California':'06',
+  'Colorado':'08','Connecticut':'09','Delaware':'10','Florida':'12','Georgia':'13',
+  'Hawaii':'15','Idaho':'16','Illinois':'17','Indiana':'18','Iowa':'19',
+  'Kansas':'20','Kentucky':'21','Louisiana':'22','Maine':'23','Maryland':'24',
+  'Massachusetts':'25','Michigan':'26','Minnesota':'27','Mississippi':'28','Missouri':'29',
+  'Montana':'30','Nebraska':'31','Nevada':'32','New Hampshire':'33','New Jersey':'34',
+  'New Mexico':'35','New York':'36','North Carolina':'37','North Dakota':'38','Ohio':'39',
+  'Oklahoma':'40','Oregon':'41','Pennsylvania':'42','Rhode Island':'44','South Carolina':'45',
+  'South Dakota':'46','Tennessee':'47','Texas':'48','Utah':'49','Vermont':'50',
+  'Virginia':'51','Washington':'53','West Virginia':'54','Wisconsin':'55','Wyoming':'56'
+}
+
 async function pageTerritories(){
   const isAdmin=['super_admin','admin'].includes(currentUser?.role)
-  setTopbar('WIB Territories','Manage & assign regional territories',
+  setTopbar('WIB Territories','Nationwide map, contacts & AI assistant',
     isAdmin?`<button class="btn btn-primary" onclick="openNewTerritoryModal()">+ New Territory</button>`:'')
   clearViewbar()
-  document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading...</div>'
+
+  document.getElementById('page-area').innerHTML=`
+  <style>
+    #wt-wrap{display:flex;gap:12px;height:calc(100vh - 110px);overflow:hidden}
+    #wt-left{display:flex;flex-direction:column;gap:10px;width:300px;flex-shrink:0;overflow-y:auto;padding-right:2px}
+    #wt-right{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;overflow:hidden}
+    .wt-card{background:var(--white);border:.5px solid var(--border);border-radius:10px;overflow:hidden}
+    .wt-card-hd{padding:10px 14px;border-bottom:.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:6px}
+    .wt-card-title{font-size:12px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:5px}
+    .wt-card-body{padding:10px 14px}
+    #wt-map-wrap{background:var(--gray);border-radius:0;position:relative;flex:1;min-height:260px}
+    #wt-svg{display:block;width:100%;height:100%}
+    .wt-tooltip{position:absolute;background:var(--white);border:.5px solid var(--border);border-radius:8px;padding:8px 11px;font-size:11px;pointer-events:none;display:none;z-index:10;max-width:200px;box-shadow:0 4px 12px rgba(0,0,0,.1)}
+    .wt-state-path{cursor:pointer;transition:opacity .12s}
+    .wt-state-path:hover{opacity:.72}
+    .wt-map-legend{display:flex;gap:10px;flex-wrap:wrap;padding:6px 12px;border-top:.5px solid var(--border);font-size:10px;color:var(--text2);background:var(--gray)}
+    .wt-leg-item{display:flex;align-items:center;gap:4px}
+    .wt-leg-dot{width:10px;height:10px;border-radius:2px;flex-shrink:0}
+    #wt-dir-search{width:100%;border:.5px solid var(--border2);border-radius:7px;padding:7px 10px;font-size:11.5px;color:var(--text);font-family:inherit;outline:none;background:var(--white)}
+    #wt-dir-search:focus{border-color:var(--nv)}
+    .wt-dir-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:start;padding:8px 10px;border-bottom:.5px solid var(--gray2);cursor:pointer;transition:background .1s;font-size:11.5px}
+    .wt-dir-row:last-child{border-bottom:none}
+    .wt-dir-row:hover{background:var(--gray2)}
+    .wt-dir-row.selected{background:var(--blue-bg)}
+    .wt-dir-name{font-weight:500;font-size:12px;color:var(--text)}
+    .wt-dir-board{font-size:10.5px;color:var(--text2);margin-top:1px}
+    .wt-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .wt-detail-field{font-size:11.5px}
+    .wt-detail-label{font-size:10px;color:var(--text2);margin-bottom:2px;font-weight:500;text-transform:uppercase;letter-spacing:.5px}
+    .wt-cell-link{color:var(--blue);text-decoration:none;font-size:11px}
+    .wt-cell-link:hover{text-decoration:underline}
+    .wt-local-badge{display:inline-flex;align-items:center;padding:1px 6px;border-radius:10px;font-size:10px;font-weight:600;background:var(--blue-bg);color:var(--blue-t)}
+    /* AI chat styles */
+    #wt-ai-msgs{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px;min-height:0}
+    .wt-ai-msg{max-width:90%;border-radius:10px;padding:8px 11px;font-size:11.5px;line-height:1.55}
+    .wt-ai-msg.user{background:var(--nv);color:var(--cream);align-self:flex-end;border-bottom-right-radius:3px}
+    .wt-ai-msg.ai{background:var(--gray2);color:var(--text);align-self:flex-start;border-bottom-left-radius:3px}
+    .wt-ai-msg.thinking{background:var(--gray2);color:var(--text3);align-self:flex-start;font-style:italic;font-size:11px}
+    .wt-ai-input-row{display:flex;gap:6px;padding:8px 10px;border-top:.5px solid var(--border)}
+    .wt-ai-input{flex:1;border:.5px solid var(--border2);border-radius:7px;padding:7px 10px;font-size:11.5px;font-family:inherit;outline:none;resize:none;min-height:34px;max-height:80px;color:var(--text);background:var(--white)}
+    .wt-ai-input:focus{border-color:var(--nv)}
+    .wt-ai-chips{display:flex;gap:5px;flex-wrap:wrap;padding:6px 10px 0}
+    .wt-ai-chip{padding:3px 9px;border-radius:6px;border:.5px solid var(--border);background:var(--white);font-size:10.5px;color:var(--text2);cursor:pointer;transition:all .1s}
+    .wt-ai-chip:hover{background:var(--blue-bg);color:var(--blue-t);border-color:var(--blue)}
+    /* Territories table */
+    .wt-terr-tbl{width:100%;border-collapse:collapse}
+    .wt-terr-tbl th{text-align:left;padding:6px 10px;font-size:10px;color:var(--text2);font-weight:500;border-bottom:.5px solid var(--border);background:var(--gray)}
+    .wt-terr-tbl td{padding:8px 10px;font-size:11.5px;border-bottom:.5px solid var(--gray2)}
+    .wt-terr-tbl tr:last-child td{border-bottom:none}
+    .wt-terr-tbl tr:hover td{background:var(--gray)}
+  </style>
+
+  <div id="wt-wrap">
+
+    <!-- LEFT PANEL: territories list + state directory -->
+    <div id="wt-left">
+
+      <!-- Your territories card -->
+      <div class="wt-card" id="wt-terr-card">
+        <div class="wt-card-hd">
+          <div class="wt-card-title">🗺 Your Territories</div>
+          ${isAdmin?`<button class="btn btn-xs btn-primary" onclick="openNewTerritoryModal()">+ New</button>`:''}
+        </div>
+        <div class="wt-card-body" style="padding:0">
+          <div id="wt-terr-list"><div style="padding:14px;text-align:center;font-size:11px;color:var(--text3)">⏳ Loading...</div></div>
+        </div>
+      </div>
+
+      <!-- State WIB Directory -->
+      <div class="wt-card" style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div class="wt-card-hd">
+          <div class="wt-card-title">📋 State WIB Directory</div>
+          <span id="wt-dir-count" style="font-size:10px;color:var(--text3)">50 states</span>
+        </div>
+        <div style="padding:8px 10px;border-bottom:.5px solid var(--border)">
+          <input id="wt-dir-search" placeholder="Search state, board, contact..." oninput="wtFilterDir()">
+        </div>
+        <div id="wt-dir-body" style="overflow-y:auto;flex:1"></div>
+      </div>
+
+    </div>
+
+    <!-- RIGHT PANEL: map + detail + AI -->
+    <div id="wt-right">
+
+      <!-- US Map card -->
+      <div class="wt-card" style="flex:0 0 auto;display:flex;flex-direction:column">
+        <div class="wt-card-hd" style="padding:8px 12px">
+          <div class="wt-card-title">🗺 Nationwide WIB Coverage Map</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <select id="wt-region-filter" style="font-size:11px;padding:3px 7px;border:.5px solid var(--border2);border-radius:6px" onchange="wtFilterDir()">
+              <option value="">All regions</option>
+              <option value="Northeast">Northeast</option>
+              <option value="Southeast">Southeast</option>
+              <option value="Midwest">Midwest</option>
+              <option value="Southwest">Southwest</option>
+              <option value="West">West</option>
+            </select>
+          </div>
+        </div>
+        <div id="wt-map-wrap">
+          <div class="wt-tooltip" id="wt-tt"></div>
+          <svg id="wt-svg" viewBox="0 0 900 480"></svg>
+        </div>
+        <div class="wt-map-legend">
+          <div class="wt-leg-item"><div class="wt-leg-dot" style="background:#0B1E3C"></div>15+ local boards</div>
+          <div class="wt-leg-item"><div class="wt-leg-dot" style="background:#1e3d6e"></div>8-14 local boards</div>
+          <div class="wt-leg-item"><div class="wt-leg-dot" style="background:#2a72b5"></div>4-7 local boards</div>
+          <div class="wt-leg-item"><div class="wt-leg-dot" style="background:#6baed6"></div>1-3 local boards</div>
+          <div class="wt-leg-item"><div class="wt-leg-dot" style="background:#C9A84C"></div>Selected</div>
+        </div>
+      </div>
+
+      <!-- Bottom row: state detail + AI -->
+      <div style="display:flex;gap:10px;flex:1;min-height:0;overflow:hidden">
+
+        <!-- State detail card -->
+        <div class="wt-card" style="width:300px;flex-shrink:0;display:flex;flex-direction:column" id="wt-detail-card">
+          <div class="wt-card-hd">
+            <div class="wt-card-title" id="wt-detail-title">📌 State Detail</div>
+            <button class="btn btn-xs" onclick="wtClearDetail()" style="font-size:10px">Clear</button>
+          </div>
+          <div class="wt-card-body" id="wt-detail-body" style="overflow-y:auto;flex:1;font-size:11.5px;color:var(--text3);text-align:center;padding-top:30px">
+            Click any state on the map or a row in the directory
+          </div>
+        </div>
+
+        <!-- AI Assistant card -->
+        <div class="wt-card" style="flex:1;display:flex;flex-direction:column;min-width:0">
+          <div class="wt-card-hd">
+            <div class="wt-card-title">🤖 AI WIB Assistant</div>
+            <span style="font-size:10px;background:var(--amber-bg);color:var(--amber-t);padding:1px 7px;border-radius:10px;font-weight:600">Claude AI</span>
+          </div>
+          <div class="wt-ai-chips" id="wt-chips">
+            <button class="wt-ai-chip" onclick="wtAskChip(this)">Who is the director for Texas?</button>
+            <button class="wt-ai-chip" onclick="wtAskChip(this)">Find WIBs in the Southeast</button>
+            <button class="wt-ai-chip" onclick="wtAskChip(this)">Which states have 20+ local boards?</button>
+            <button class="wt-ai-chip" onclick="wtAskChip(this)">Contact info for California WDB</button>
+            <button class="wt-ai-chip" onclick="wtAskChip(this)">Look up latest WIB news for Ohio</button>
+          </div>
+          <div id="wt-ai-msgs"></div>
+          <div class="wt-ai-input-row">
+            <textarea class="wt-ai-input" id="wt-ai-input" placeholder="Ask about any WIB, state, contact, territory..." rows="1"
+              onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();wtAiSend()}"></textarea>
+            <button class="btn btn-primary btn-sm" onclick="wtAiSend()">Send</button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>`
+
+  // Load territories list
   try{
     const [terrRes,usersRes,wibsRes]=await Promise.all([
       api('/api/territories'),
@@ -3584,53 +3804,319 @@ async function pageTerritories(){
     const territories=terrRes.data||[]
     const users=usersRes.data||[]
     const wibs=wibsRes.data||[]
-    // WIB count per territory
     const wibCount={}
     wibs.forEach(w=>{if(w.territory_id)wibCount[w.territory_id]=(wibCount[w.territory_id]||0)+1})
-    // Users per territory (from many-to-many assignments)
     const usersInTerritory={}
-    users.forEach(u=>{
-      (u.territories||[]).forEach(t=>{
-        if(!usersInTerritory[t.id])usersInTerritory[t.id]=[]
-        usersInTerritory[t.id].push(u)
-      })
-    })
-    document.getElementById('page-area').innerHTML=`
-      <div class="alert alert-info" style="margin-bottom:10px">🗺 Territories let you assign WIBs and users to regional groups. Users can then toggle between "All WIBs" and "My Assigned WIBs" on the Workforce Boards page.</div>
-      <div class="att-wrap">
-        <div class="att-toolbar"><div class="att-toolbar-l">
-          <span style="font-size:12px;color:var(--text2)">${territories.length} territories</span>
-        </div></div>
-        <table class="att-tbl"><thead><tr>
-          <th><div class="th-i">Territory</div></th>
-          <th><div class="th-i">States</div></th>
-          <th><div class="th-i">WIBs</div></th>
-          <th><div class="th-i">Assigned Users</div></th>
-          ${isAdmin?'<th><div class="th-i">Actions</div></th>':''}
-        </tr></thead>
-        <tbody>
-        ${territories.length?territories.map(t=>{
+    users.forEach(u=>{(u.territories||[]).forEach(t=>{if(!usersInTerritory[t.id])usersInTerritory[t.id]=[];usersInTerritory[t.id].push(u)})})
+    const terrList=document.getElementById('wt-terr-list')
+    if(!terrList)return
+    if(!territories.length){
+      terrList.innerHTML=`<div style="padding:14px;text-align:center;font-size:11px;color:var(--text3)">No territories yet. ${isAdmin?'<span style="cursor:pointer;color:var(--blue)" onclick="openNewTerritoryModal()">Create one →</span>':''}</div>`
+    } else {
+      terrList.innerHTML=`<table class="wt-terr-tbl">
+        <thead><tr><th>Territory</th><th>States</th><th>WIBs</th><th>Users</th>${isAdmin?'<th></th>':''}</tr></thead>
+        <tbody>${territories.map(t=>{
           const tUsers=usersInTerritory[t.id]||[]
           const tWibs=wibCount[t.id]||0
           return`<tr>
-            <td><div style="font-weight:500">${escHtml(t.name)}</div>${t.description?`<div class="cell-dim" style="font-size:11px">${escHtml(t.description)}</div>`:''}</td>
-            <td class="cell-dim">${(t.states||[]).join(', ')||'—'}</td>
+            <td style="font-weight:500">${escHtml(t.name)}</td>
+            <td style="font-size:10px;color:var(--text2)">${(t.states||[]).join(', ')||'—'}</td>
             <td><span class="pill p-blue">${tWibs}</span></td>
-            <td><div class="terr-cell">${tUsers.length
-              ?tUsers.map(u=>`<span class="territory-badge">${escHtml(u.full_name||u.email)}</span>`).join('')
-              :'<span class="territory-badge unassigned">No users</span>'}</div></td>
-            ${isAdmin?`<td><div class="action-btns">
-              <button class="action-btn" onclick="openEditTerritoryModal(decodeURIComponent('${encodeURIComponent(JSON.stringify(t))}'))">Edit</button>
-              <button class="action-btn del" onclick="deleteTerritoryConfirm('${t.id}','${escHtml(t.name)}')">Delete</button>
-            </div></td>`:''}
-          </tr>`}).join('')
-        :`<tr><td colspan="${isAdmin?5:4}" style="text-align:center;padding:32px;color:var(--text3)">
-            No territories yet.${isAdmin?' <span style="cursor:pointer;color:var(--blue)" onclick="openNewTerritoryModal()">Create one →</span>':''}
-          </td></tr>`}
-        </tbody></table>
-      </div>`
+            <td style="font-size:10px">${tUsers.map(u=>`<span class="territory-badge">${escHtml((u.full_name||u.email||'').split(' ')[0])}</span>`).join('')||'<span class="territory-badge unassigned">None</span>'}</td>
+            ${isAdmin?`<td><button class="action-btn" style="font-size:10px;padding:2px 7px" onclick="openEditTerritoryModal(decodeURIComponent('${encodeURIComponent(JSON.stringify(t))}'))">Edit</button></td>`:''}</tr>`
+        }).join('')}</tbody></table>`
+    }
   }catch(e){
-    document.getElementById('page-area').innerHTML=`<div class="alert alert-error" style="margin:20px">⚠️ ${e.message}</div>`
+    const terrList=document.getElementById('wt-terr-list')
+    if(terrList)terrList.innerHTML=`<div style="padding:10px;font-size:11px;color:var(--red-t)">Could not load territories</div>`
+  }
+
+  // Render directory
+  wtRenderDir(window._WIB_STATE_DATA)
+
+  // Load map (D3 + TopoJSON via CDN)
+  wtLoadMap()
+
+  // Welcome AI message
+  wtAiAppend('ai', `👋 Hi! I'm your WIB Territory AI assistant. I have contact info for all 50 state workforce boards built in, and I can search the web for the latest news, director changes, and local board details. Ask me anything — or click a state on the map to get started.`)
+}
+
+/* ── Directory ── */
+window._wtSelected = null
+window._wtDirData = null
+
+function wtFilterDir(){
+  const q=(document.getElementById('wt-dir-search')?.value||'').toLowerCase()
+  const region=document.getElementById('wt-region-filter')?.value||''
+  const data=window._WIB_STATE_DATA.filter(d=>{
+    const mq=!q||(d.state+' '+d.board+' '+(d.director||'')).toLowerCase().includes(q)
+    const mr=!region||d.region===region
+    return mq&&mr
+  })
+  window._wtDirData=data
+  wtRenderDir(data)
+  // Grey out map states not in filter
+  if(typeof d3!=='undefined'){
+    const inSet=new Set(data.map(d=>d.state))
+    d3.selectAll('.wt-state-path').attr('opacity',d=>{
+      const name=d?.properties?.name
+      return(!q&&!region)||inSet.has(name)?1:0.2
+    })
+  }
+}
+
+function wtRenderDir(data){
+  const body=document.getElementById('wt-dir-body')
+  const cnt=document.getElementById('wt-dir-count')
+  if(!body)return
+  if(cnt)cnt.textContent=data.length+' states'
+  body.innerHTML=data.map(d=>`
+    <div class="wt-dir-row${window._wtSelected===d.state?' selected':''}" onclick="wtSelectState('${d.state.replace(/'/g,"\\'")}')">
+      <div>
+        <div class="wt-dir-name">${escHtml(d.state)}</div>
+        <div class="wt-dir-board">${escHtml(d.board)}</div>
+      </div>
+      <span class="wt-local-badge">${d.localBoards}</span>
+    </div>`).join('')
+}
+
+function wtSelectState(stateName){
+  window._wtSelected=window._wtSelected===stateName?null:stateName
+  const d=window._WIB_STATE_DATA.find(x=>x.state===stateName)
+  wtRenderDir(window._wtDirData||window._WIB_STATE_DATA)
+  wtShowDetail(d)
+  // Highlight map
+  if(typeof d3!=='undefined'){
+    d3.selectAll('.wt-state-path')
+      .attr('fill',p=>{
+        if(!p?.properties)return'#ccc'
+        const fips=String(p.id).padStart(2,'0')
+        const w=window._wtFipsMap?.[fips]
+        if(!w)return'#ccc'
+        if(w.state===window._wtSelected)return'#C9A84C'
+        return wtStateColor(w)
+      })
+  }
+}
+
+function wtClearDetail(){
+  window._wtSelected=null
+  const body=document.getElementById('wt-detail-body')
+  const title=document.getElementById('wt-detail-title')
+  if(body){body.style.textAlign='center';body.style.paddingTop='30px';body.style.color='var(--text3)';body.innerHTML='Click any state on the map or a row in the directory'}
+  if(title)title.textContent='📌 State Detail'
+  wtRenderDir(window._wtDirData||window._WIB_STATE_DATA)
+  if(typeof d3!=='undefined'){
+    d3.selectAll('.wt-state-path').attr('fill',p=>{
+      if(!p?.properties)return'#ccc'
+      const fips=String(p.id).padStart(2,'0')
+      const w=window._wtFipsMap?.[fips]
+      return w?wtStateColor(w):'#ccc'
+    })
+  }
+}
+
+function wtShowDetail(d){
+  const body=document.getElementById('wt-detail-body')
+  const title=document.getElementById('wt-detail-title')
+  if(!d||!body)return
+  if(title)title.textContent='📌 '+escHtml(d.state)
+  body.style.textAlign='left';body.style.paddingTop='0';body.style.color='var(--text)'
+  body.innerHTML=`
+    <div style="margin-bottom:10px;padding-bottom:8px;border-bottom:.5px solid var(--gray2)">
+      <div style="font-size:12px;font-weight:600;margin-bottom:2px">${escHtml(d.board)}</div>
+      <span class="pill p-blue" style="font-size:9.5px">${d.localBoards} local boards</span>
+      <span class="pill p-teal" style="font-size:9.5px;margin-left:4px">${escHtml(d.region)}</span>
+    </div>
+    <div class="wt-detail-grid">
+      <div class="wt-detail-field" style="grid-column:1/-1">
+        <div class="wt-detail-label">Director / Contact</div>
+        <div style="font-weight:500">${escHtml(d.director)}</div>
+        <div style="font-size:11px;color:var(--text2)">${escHtml(d.title)}</div>
+      </div>
+      <div class="wt-detail-field">
+        <div class="wt-detail-label">Phone</div>
+        <a class="wt-cell-link" href="tel:${escHtml(d.phone)}">${escHtml(d.phone)}</a>
+      </div>
+      <div class="wt-detail-field">
+        <div class="wt-detail-label">Email</div>
+        <a class="wt-cell-link" href="mailto:${escHtml(d.email)}" style="word-break:break-all">${escHtml(d.email)}</a>
+      </div>
+      <div class="wt-detail-field" style="grid-column:1/-1">
+        <div class="wt-detail-label">State Board Website</div>
+        <a class="wt-cell-link" href="${escUrl(d.website)}" target="_blank" rel="noopener">${escHtml(d.website)}</a>
+      </div>
+      <div class="wt-detail-field" style="grid-column:1/-1">
+        <div class="wt-detail-label">Find Local Boards</div>
+        <a class="wt-cell-link" href="https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx" target="_blank" rel="noopener">CareerOneStop WDB Finder →</a>
+      </div>
+    </div>
+    <div style="margin-top:10px;padding-top:8px;border-top:.5px solid var(--gray2);display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn btn-xs" style="font-size:10px" onclick="wtAskAbout('${d.state.replace(/'/g,"\\'")}')">🤖 Ask AI about ${escHtml(d.state)}</button>
+      <button class="btn btn-xs" style="font-size:10px" onclick="wtAskAbout('latest WIB news ${d.state.replace(/'/g,"\\'")}')">🔍 Latest news</button>
+    </div>`
+}
+
+function wtStateColor(w){
+  if(!w)return'#ccc'
+  if(w.localBoards>=15)return'#0B1E3C'
+  if(w.localBoards>=8)return'#1e3d6e'
+  if(w.localBoards>=4)return'#2a72b5'
+  return'#6baed6'
+}
+
+/* ── Map ── */
+function wtLoadMap(){
+  if(typeof d3!=='undefined'&&typeof topojson!=='undefined'){wtDrawMap();return}
+  const s1=document.createElement('script')
+  s1.src='https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js'
+  s1.onload=()=>{
+    const s2=document.createElement('script')
+    s2.src='https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js'
+    s2.onload=wtDrawMap
+    document.head.appendChild(s2)
+  }
+  document.head.appendChild(s1)
+}
+
+function wtDrawMap(){
+  const fipsToWib={}
+  window._wtFipsMap=fipsToWib
+  window._WIB_STATE_DATA.forEach(d=>{
+    const fips=window._FIPS_MAP[d.state]
+    if(fips)fipsToWib[fips]=d
+  })
+  const mapWrap=document.getElementById('wt-map-wrap')
+  if(!mapWrap)return
+  const w=mapWrap.clientWidth||700, h=Math.round(w*0.48)
+  const svg=d3.select('#wt-svg').attr('viewBox',`0 0 ${w} ${h}`)
+  const projection=d3.geoAlbersUsa().scale(w*1.2).translate([w/2,h/2])
+  const path=d3.geoPath(projection)
+  const tt=document.getElementById('wt-tt')
+  d3.json('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json').then(us=>{
+    const features=topojson.feature(us,us.objects.states).features
+    svg.selectAll('.wt-state-path').data(features).join('path')
+      .attr('class','wt-state-path')
+      .attr('d',path)
+      .attr('fill',d=>{
+        const fips=String(d.id).padStart(2,'0')
+        const wib=fipsToWib[fips]
+        return wib?wtStateColor(wib):'#ccc'
+      })
+      .attr('stroke','#fff')
+      .attr('stroke-width',0.6)
+      .on('mousemove',function(event,d){
+        const fips=String(d.id).padStart(2,'0')
+        const wib=fipsToWib[fips]
+        if(!wib||!tt)return
+        const rect=mapWrap.getBoundingClientRect()
+        tt.style.display='block'
+        tt.style.left=(event.clientX-rect.left+12)+'px'
+        tt.style.top=(event.clientY-rect.top+12)+'px'
+        tt.innerHTML=`<strong style="font-size:12px">${escHtml(wib.state)}</strong><br><span style="color:var(--text2)">${escHtml(wib.board)}</span><br><span style="font-size:10px">${wib.localBoards} local boards · ${escHtml(wib.region)}</span>`
+      })
+      .on('mouseleave',()=>{if(tt)tt.style.display='none'})
+      .on('click',(event,d)=>{
+        const fips=String(d.id).padStart(2,'0')
+        const wib=fipsToWib[fips]
+        if(wib)wtSelectState(wib.state)
+      })
+    svg.append('path')
+      .datum(topojson.mesh(us,us.objects.states,(a,b)=>a!==b))
+      .attr('fill','none').attr('stroke','#fff').attr('stroke-width',0.6).attr('d',path)
+  }).catch(()=>{
+    const wrap=document.getElementById('wt-map-wrap')
+    if(wrap)wrap.innerHTML='<div style="text-align:center;padding:30px;font-size:12px;color:var(--text3)">Map unavailable — use directory</div>'
+  })
+}
+
+/* ── AI Assistant ── */
+window._wtAiHistory=[]
+
+function wtAiAppend(role, text){
+  const msgs=document.getElementById('wt-ai-msgs')
+  if(!msgs)return
+  const div=document.createElement('div')
+  div.className='wt-ai-msg '+role
+  div.textContent=text
+  msgs.appendChild(div)
+  msgs.scrollTop=msgs.scrollHeight
+  return div
+}
+
+function wtAskChip(btn){
+  const q=btn.textContent
+  document.getElementById('wt-ai-input').value=q
+  wtAiSend()
+}
+
+function wtAskAbout(topic){
+  document.getElementById('wt-ai-input').value='Tell me about the WIB for '+topic
+  wtAiSend()
+}
+
+async function wtAiSend(){
+  const inp=document.getElementById('wt-ai-input')
+  if(!inp)return
+  const q=inp.value.trim()
+  if(!q)return
+  inp.value=''
+  // Hide chips after first use
+  const chips=document.getElementById('wt-chips')
+  if(chips)chips.style.display='none'
+
+  wtAiAppend('user',q)
+  const thinking=wtAiAppend('thinking','🤖 Thinking...')
+
+  // Build system prompt with full WIB data baked in
+  const systemPrompt=`You are an expert WIB (Workforce Innovation Board / Workforce Development Board) territory assistant embedded in the Valor Workforce Funding CRM.
+
+You have access to the following nationwide WIB state-level data (all 50 states):
+${JSON.stringify(window._WIB_STATE_DATA,null,1)}
+
+Your job:
+1. Answer questions about WIB territories, contacts, phone numbers, emails, and websites using the data above.
+2. If asked about LOCAL boards within a state, note that the CareerOneStop WDB finder (https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx) lists all local boards, and use web_search to find specifics.
+3. For questions about RECENT news, director changes, or updated contact info — use web_search to find the latest.
+4. Be concise and CRM-practical. Format contact info clearly. When listing phone/email, put each on its own line.
+5. If the user seems to be preparing to contact a WIB, offer to summarize the key contact details in a copy-ready format.
+
+Keep responses concise (under 200 words unless a detailed list is requested). Use plain text, no markdown headers.`
+
+  window._wtAiHistory.push({role:'user',content:q})
+
+  try{
+    const res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'claude-sonnet-4-20250514',
+        max_tokens:1000,
+        system:systemPrompt,
+        tools:[{type:'web_search_20250305',name:'web_search'}],
+        messages:window._wtAiHistory
+      })
+    })
+    const data=await res.json()
+    if(!res.ok)throw new Error(data.error?.message||'API error')
+
+    // Extract text from potentially mixed content blocks
+    let reply=''
+    if(data.content&&Array.isArray(data.content)){
+      reply=data.content.filter(b=>b.type==='text').map(b=>b.text).join('\n').trim()
+    }
+    if(!reply&&data.error)reply='Error: '+data.error.message
+
+    // Add assistant turn to history (simplified)
+    window._wtAiHistory.push({role:'assistant',content:reply||'No response.'})
+    // Keep history manageable (last 10 turns)
+    if(window._wtAiHistory.length>20)window._wtAiHistory=window._wtAiHistory.slice(-20)
+
+    if(thinking&&thinking.parentNode){thinking.parentNode.removeChild(thinking)}
+    wtAiAppend('ai',reply||'No response received.')
+  }catch(e){
+    if(thinking&&thinking.parentNode){thinking.parentNode.removeChild(thinking)}
+    wtAiAppend('ai','⚠️ Error: '+e.message)
   }
 }
 
@@ -3677,7 +4163,7 @@ async function openNewTerritoryModal(){
           try{
             // Fetch existing assignments for user, then add new territory
             const existing=await api('/api/users/'+uid+'/territories').catch(()=>({data:[]}))
-            const existingIds=(existing.data||[]).map(a=>a.territory_id||a.territories?.id).filter(Boolean)
+            const existingIds=(existing.data||[]).map(a=>a.id).filter(Boolean)
             const merged=[...new Set([...existingIds,newTerritoryId])]
             await api('/api/users/'+uid+'/territories','PUT',{territory_ids:merged})
           }catch(_){}
@@ -3740,7 +4226,7 @@ async function openEditTerritoryModal(tEncoded){
       await Promise.all(allUserIds.map(async uid=>{
         try{
           const existing=await api('/api/users/'+uid+'/territories').catch(()=>({data:[]}))
-          const existingIds=(existing.data||[]).map(a=>a.territory_id||a.territories?.id).filter(Boolean)
+          const existingIds=(existing.data||[]).map(a=>a.id).filter(Boolean)
           let merged
           if(selectedUserIds.includes(uid)){
             // Add this territory
