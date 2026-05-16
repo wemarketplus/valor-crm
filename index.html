@@ -3634,7 +3634,13 @@ async function pageTerritories(){
   }
 }
 
-function openNewTerritoryModal(){
+async function openNewTerritoryModal(){
+  // Pre-fetch users so the dropdown is ready when the modal opens
+  let allUsers=[]
+  try{const r=await api('/api/users');allUsers=(r.data||[]).filter(u=>u.is_active!==false)}catch(_){}
+  const userOptions=allUsers.length
+    ?allUsers.map(u=>`<option value="${u.id}">${escHtml(u.full_name||u.email)}</option>`).join('')
+    :'<option disabled>No users found</option>'
   showModal('New Territory',`
     <div class="form-group">
       <div class="form-label">Territory Name <span class="form-req">*</span></div>
@@ -3647,21 +3653,61 @@ function openNewTerritoryModal(){
     <div class="form-group">
       <div class="form-label">Description</div>
       <input id="nt-desc" placeholder="Optional description">
+    </div>
+    <div class="form-group">
+      <div class="form-label">Assign Users <span style="font-weight:400;color:var(--text3)">(optional)</span></div>
+      <div style="position:relative">
+        <select id="nt-users" multiple style="width:100%;min-height:110px;border:1px solid var(--border2);border-radius:8px;padding:6px;font-size:12px;color:var(--text);background:var(--white);outline:none;resize:vertical">
+          ${userOptions}
+        </select>
+      </div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">Hold <kbd style="font-size:10px;padding:1px 4px;border:1px solid var(--border2);border-radius:3px;background:var(--gray2)">Ctrl</kbd> / <kbd style="font-size:10px;padding:1px 4px;border:1px solid var(--border2);border-radius:3px;background:var(--gray2)">⌘</kbd> to select multiple users</div>
     </div>`,
   async()=>{
     const name=document.getElementById('nt-name').value.trim()
     if(!name){showToast('Territory name required','error');return false}
     const states=document.getElementById('nt-states').value.split(',').map(s=>s.trim()).filter(Boolean)
+    const selectedUserIds=[...document.getElementById('nt-users').selectedOptions].map(o=>o.value)
     try{
-      await api('/api/territories','POST',{name,states,description:document.getElementById('nt-desc').value||''})
-      showToast('Territory created','success');pageTerritories()
+      const created=await api('/api/territories','POST',{name,states,description:document.getElementById('nt-desc').value||''})
+      const newTerritoryId=(created.data||created)?.id
+      // Assign selected users to the new territory
+      if(selectedUserIds.length&&newTerritoryId){
+        await Promise.all(selectedUserIds.map(async uid=>{
+          try{
+            // Fetch existing assignments for user, then add new territory
+            const existing=await api('/api/users/'+uid+'/territories').catch(()=>({data:[]}))
+            const existingIds=(existing.data||[]).map(a=>a.territory_id||a.territories?.id).filter(Boolean)
+            const merged=[...new Set([...existingIds,newTerritoryId])]
+            await api('/api/users/'+uid+'/territories','PUT',{territory_ids:merged})
+          }catch(_){}
+        }))
+      }
+      showToast('Territory created'+(selectedUserIds.length?' & users assigned':''),'success')
+      pageTerritories()
     }catch(e){showToast(e.message,'error');return false}
   })
 }
 
-function openEditTerritoryModal(tEncoded){
+async function openEditTerritoryModal(tEncoded){
   let t
   try{t=JSON.parse(typeof tEncoded==='string'?tEncoded:JSON.stringify(tEncoded))}catch(e){showToast('Parse error','error');return}
+  // Fetch all users and currently assigned users for this territory
+  let allUsers=[],assignedIds=new Set()
+  try{
+    const [usersRes,assignedRes]=await Promise.all([
+      api('/api/users').catch(()=>({data:[]})),
+      api('/api/territories').catch(()=>({data:[]}))
+    ])
+    allUsers=(usersRes.data||[]).filter(u=>u.is_active!==false)
+    // Determine which users are already assigned to this territory
+    allUsers.forEach(u=>{
+      if((u.territories||[]).some(ut=>ut.id===t.id))assignedIds.add(u.id)
+    })
+  }catch(_){}
+  const userOptions=allUsers.length
+    ?allUsers.map(u=>`<option value="${u.id}"${assignedIds.has(u.id)?' selected':''}>${escHtml(u.full_name||u.email)}</option>`).join('')
+    :'<option disabled>No users found</option>'
   showModal(`Edit: ${escHtml(t.name)}`,`
     <div class="form-group">
       <div class="form-label">Territory Name <span class="form-req">*</span></div>
@@ -3674,13 +3720,40 @@ function openEditTerritoryModal(tEncoded){
     <div class="form-group">
       <div class="form-label">Description</div>
       <input id="et-desc" value="${escHtml(t.description||'')}">
+    </div>
+    <div class="form-group">
+      <div class="form-label">Assigned Users <span style="font-weight:400;color:var(--text3)">(optional)</span></div>
+      <select id="et-users" multiple style="width:100%;min-height:110px;border:1px solid var(--border2);border-radius:8px;padding:6px;font-size:12px;color:var(--text);background:var(--white);outline:none;resize:vertical">
+        ${userOptions}
+      </select>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">Hold <kbd style="font-size:10px;padding:1px 4px;border:1px solid var(--border2);border-radius:3px;background:var(--gray2)">Ctrl</kbd> / <kbd style="font-size:10px;padding:1px 4px;border:1px solid var(--border2);border-radius:3px;background:var(--gray2)">⌘</kbd> to select multiple users</div>
     </div>`,
   async()=>{
     const name=document.getElementById('et-name').value.trim()
     if(!name){showToast('Name required','error');return false}
     const states=document.getElementById('et-states').value.split(',').map(s=>s.trim()).filter(Boolean)
+    const selectedUserIds=[...document.getElementById('et-users').selectedOptions].map(o=>o.value)
     try{
       await api('/api/territories/'+t.id,'PUT',{name,states,description:document.getElementById('et-desc').value||''})
+      // Sync user assignments: add territory to selected users, remove from deselected
+      const allUserIds=allUsers.map(u=>u.id)
+      await Promise.all(allUserIds.map(async uid=>{
+        try{
+          const existing=await api('/api/users/'+uid+'/territories').catch(()=>({data:[]}))
+          const existingIds=(existing.data||[]).map(a=>a.territory_id||a.territories?.id).filter(Boolean)
+          let merged
+          if(selectedUserIds.includes(uid)){
+            // Add this territory
+            merged=[...new Set([...existingIds,t.id])]
+          }else{
+            // Remove this territory
+            merged=existingIds.filter(id=>id!==t.id)
+          }
+          // Only call API if assignment changed
+          const hadIt=assignedIds.has(uid),hasIt=selectedUserIds.includes(uid)
+          if(hadIt!==hasIt)await api('/api/users/'+uid+'/territories','PUT',{territory_ids:merged})
+        }catch(_){}
+      }))
       showToast('Territory updated','success');pageTerritories()
     }catch(e){showToast(e.message,'error');return false}
   })
