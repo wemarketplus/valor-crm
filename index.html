@@ -16,29 +16,23 @@
       --text: #111827;
     }
   </style>
-
-  <!-- ✅ GLOBAL ERROR SAFETY (PREVENTS BLANK PAGE CRASHES) -->
-  <script>
-    window.onerror = function (msg, src, line, col, err) {
-      console.error("GLOBAL ERROR:", msg, line, col, err)
-      return false
-    }
-  </script>
-
 </head>
 
 <body>
 
 <!-- =====================================================
      YOUR EXISTING HTML LAYOUT (UNCHANGED)
+     PASTE YOUR ORIGINAL UI HERE EXACTLY AS IS
 ===================================================== -->
 
 <div id="app">
-  <!-- YOUR FULL ORIGINAL CRM UI HERE -->
+
+  <!-- KEEP ALL YOUR EXISTING CONTENT -->
+
 </div>
 
 <!-- =====================================================
-     CRITICAL SAFETY PATCHES (CLEANED + NON-DUPLICATED)
+     CRITICAL SAFETY PATCHES (DO NOT REMOVE)
 ===================================================== -->
 
 <script>
@@ -71,6 +65,7 @@
       })
 
       const d = await r.json()
+
       return d
 
     } catch (err) {
@@ -80,7 +75,7 @@
   }
 
   /* =========================
-     WIB VIEW SYSTEM
+     SAFE WIB VIEW HANDLERS
   ========================= */
 
   let currentWibView = 'all'
@@ -159,7 +154,7 @@
   }
 
   /* =========================
-     TASK SYSTEM
+     SAFE TASK FUNCTIONS
   ========================= */
 
   async function saveTask(record_type, record_id) {
@@ -192,30 +187,17 @@
   }
 
   /* =========================
-     SAFE INIT (ONLY ONCE)
+     INIT (SAFE)
   ========================= */
 
   document.addEventListener('DOMContentLoaded', () => {
     try {
-      console.log("CRM INIT STARTED")
-
       loadWibViews()
+    } catch (err) {
+      console.error('Init failed:', err)
+    }
+  })
 
-  } catch (err) {
-    console.error('Init failed:', err)
-  }
-})
-</script>
-
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-  try {
-    console.log('CRM SAFE START')
-    loadWibViews()
-  } catch (err) {
-    console.error(err)
-  }
-})
 </script>
 
 </body>
