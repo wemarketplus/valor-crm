@@ -1592,6 +1592,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
       }
 
       const locBatch = []
+      console.log("BATCH ROWS COUNT:", rows.length, "FIRST:", JSON.stringify(rows[0]||{}))
       for (const row of rows) {
         if (results.errors.length === 0) console.log("FIRST ROW RAW:", JSON.stringify(rows[0] || {}))
         // Support CRM keys, Attio export headers, and any unrecognized column that looks like a name
