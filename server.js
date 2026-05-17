@@ -1425,6 +1425,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
       for (const row of rows) {
         const name = (nameKey ? row[nameKey] : null)?.trim()
           || getField(row, 'Company Name','company_name','Record','Name','Company','Employer','Organization','Account Name','Business Name')
+        console.log("FIRST ROW SAMPLE:", JSON.stringify(rows[0] || {}))
         if (!name) { results.errors.push('Skipped — no company name found'); continue }
 
         const rawStatus = (getField(row,'Status','Stage','status','stage','Record Stage','Company Stage') || '').toLowerCase().trim()
