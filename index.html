@@ -6969,10 +6969,38 @@ function importCSV(type){
   },'modal-xl','📥 Import')
 }
 
-function parseCSVLine(line){
+/* ── Shared delimiter detection: sniffs comma, tab, semicolon, pipe from the first line ── */
+function detectDelimiter(firstLine){
+  const candidates=[',','\t',';','|'];const counts={}
+  let inQ=false
+  for(let i=0;i<firstLine.length;i++){
+    const c=firstLine[i]
+    if(c==='"'){inQ=!inQ;continue}
+    if(!inQ) for(const d of candidates) if(c===d) counts[d]=(counts[d]||0)+1
+  }
+  let best=',',bestCount=0
+  for(const [d,n] of Object.entries(counts)) if(n>bestCount){best=d;bestCount=n}
+  return best
+}
+
+/* ── Universal delimited-line parser: handles comma/tab/semicolon/pipe + RFC-4180 quoting ── */
+function parseDelimitedLine(line,delim){
   const vals=[];let cur='',inQ=false,i=0
-  while(i<line.length){const c=line[i];if(c==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i+=2}else{inQ=!inQ;i++}}else if(c===','&&!inQ){vals.push(cur.trim());cur='';i++}else{cur+=c;i++}}
-  vals.push(cur.trim());return vals.map(v=>v.replace(/^"+|"+$/g,'').trim())
+  while(i<line.length){
+    const c=line[i]
+    if(c==='"'){
+      if(inQ&&line[i+1]==='"'){cur+='"';i+=2}
+      else{inQ=!inQ;i++}
+    } else if(c===delim&&!inQ){vals.push(cur.trim());cur='';i++}
+    else{cur+=c;i++}
+  }
+  vals.push(cur.trim())
+  return vals.map(v=>v.replace(/^"+|"+$/g,'').trim())
+}
+
+/* Legacy alias so any existing callers of parseCSVLine still work (auto-detects delimiter) */
+function parseCSVLine(line){
+  return parseDelimitedLine(line, detectDelimiter(line))
 }
 
 async function processImportFile(input,type){
@@ -6999,8 +7027,10 @@ async function processImportFile(input,type){
       const text=e.target.result
       const lines=text.split(/\r?\n/).filter(l=>l.trim())
       if(lines.length<2){preview.innerHTML='<div class="alert alert-error">File is empty or has no data rows</div>';return}
-      const headers=parseCSVLine(lines[0])
-      const dataRows=lines.slice(1).map(l=>{const vals=parseCSVLine(l);return Object.fromEntries(headers.map((h,i)=>[h,vals[i]||'']))}).filter(r=>Object.values(r).some(v=>String(v).trim()))
+      /* Detect delimiter once from the header row, then use it for every subsequent row */
+      const delim=detectDelimiter(lines[0])
+      const headers=parseDelimitedLine(lines[0],delim)
+      const dataRows=lines.slice(1).map(l=>{const vals=parseDelimitedLine(l,delim);return Object.fromEntries(headers.map((h,i)=>[h,vals[i]||'']))}).filter(r=>Object.values(r).some(v=>String(v).trim()))
       renderImportPreviewAndMap(dataRows,type,preview,file.name)
     }catch(err){preview.innerHTML=`<div class="alert alert-error">Failed to parse: ${err.message}</div>`}
   }
@@ -7036,12 +7066,15 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
   const requiredFields=fieldDefs.filter(f=>f.required)
   const mappedValues=Object.values(autoMap)
   const missingRequired=requiredFields.filter(f=>!mappedValues.includes(f.key))
+  /* Render each header as a compact inline badge so long names stay readable */
+  const headerBadges=sourceHeaders.map(h=>`<span style="display:inline-block;background:var(--gray2);border:.5px solid var(--border2);border-radius:4px;padding:1px 6px;font-size:10px;font-family:monospace;margin:2px 2px 2px 0;white-space:nowrap">${h}</span>`).join('')
   const requiredWarningHtml=missingRequired.length
     ? `<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px">
         ⚠️ <strong>Required column${missingRequired.length>1?'s':''} not found in your file:</strong>
         ${missingRequired.map(f=>`<strong>${f.label.split('(')[0].trim()}</strong>`).join(', ')}
-        <br><span style="font-size:11px">Your file has: ${sourceHeaders.map(h=>h.replace(/^"+|"+$/g,'')).join(', ')}<br>
-        Please add the missing column to your CSV, or map one of the existing columns to it using the dropdowns below.</span>
+        <br><span style="font-size:11px;display:block;margin-top:6px"><strong>Your file's ${sourceHeaders.length} columns:</strong></span>
+        <div style="margin-top:4px;line-height:1.8">${headerBadges}</div>
+        <span style="font-size:11px;display:block;margin-top:6px">Use the dropdowns below to map one of your existing columns to the required field, or add the missing column to your file and re-upload.</span>
       </div>`
     : ''
 
@@ -8223,24 +8256,15 @@ function iwizBack() {
 
 
 function parseCSVText(text) {
-  var lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n')
+  var lines = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n').filter(function(l){return l.trim()})
   if (!lines.length) return []
-  function parseLine(line) {
-    var fields=[],cur='',inQ=false
-    for(var i=0;i<line.length;i++){
-      var ch=line[i]
-      if(ch==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i++}else inQ=!inQ}
-      else if(ch===','&&!inQ){fields.push(cur);cur=''}
-      else cur+=ch
-    }
-    fields.push(cur); return fields
-  }
-  var headers=parseLine(lines[0]).map(function(h){return h.trim().replace(/^"|"$/g,'')})
-  var rows=[]
-  for(var i=1;i<lines.length;i++){
-    if(!lines[i].trim())continue
-    var vals=parseLine(lines[i]),row={}
-    headers.forEach(function(h,j){row[h]=(vals[j]||'').trim().replace(/^"|"$/g,'')})
+  /* Detect delimiter once from the header row */
+  var delim = detectDelimiter(lines[0])
+  var headers = parseDelimitedLine(lines[0], delim)
+  var rows = []
+  for (var i = 1; i < lines.length; i++) {
+    var vals = parseDelimitedLine(lines[i], delim), row = {}
+    headers.forEach(function(h, j){ row[h] = (vals[j]||'').trim().replace(/^"|"$/g,'') })
     rows.push(row)
   }
   return rows
