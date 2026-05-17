@@ -963,9 +963,14 @@ function closeModal(){document.getElementById('modal-container').innerHTML='';wi
 async function modalSave(){
   const btn=document.getElementById('modal-ok-btn')
   if(!btn||!window._modalSave)return
-  btn.disabled=true;btn.textContent='Saving...'
+  // Bail out silently if the button is already disabled by pre-flight validation
+  if(btn.disabled)return
+  const _origLabel=btn.textContent
+  btn.disabled=true
+  btn.textContent=_origLabel.includes('Import')?'Importing...':'Saving...'
   const result=await window._modalSave()
-  if(result===false){btn.disabled=false;btn.textContent='Save'}
+  // On failure: restore original label; the callee manages disabled state
+  if(result===false){btn.textContent=_origLabel}
   else closeModal()
 }
 
@@ -7117,11 +7122,10 @@ async function runFullImport(){
   const _missingReq=_requiredFields.filter(f=>!_mappedVals.includes(f.key))
   if(_missingReq.length){
     const _reqNames=_missingReq.map(f=>f.label.split('(')[0].trim()).join(', ')
-    if(preview) preview.innerHTML=`<div class="alert alert-error">
-      ⚠️ <strong>Cannot import — required column${_missingReq.length>1?'s are':' is'} not mapped: ${_reqNames}</strong><br>
-      <span style="font-size:11px">Use the dropdowns above to map one of your existing columns to ${_reqNames}, or add a <code>${_missingReq.map(f=>f.key).join(', ')}</code> column to your CSV file and re-upload.</span>
-    </div>`+((preview?.innerHTML||'').includes('field-map-row')?'':'')
+    // Refresh the warning banner in-place — never wipe the mapping dropdowns
+    _refreshRequiredWarning(type)
     showToast('Map the required field first: '+_reqNames,'error')
+    // Keep button disabled and correctly labelled
     if(btn){btn.textContent='📥 Import';btn.disabled=true;btn.style.opacity='0.45'}
     return false
   }
