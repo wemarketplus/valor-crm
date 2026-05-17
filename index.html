@@ -949,7 +949,7 @@ function showModal(title,body,onSave=null,size='',saveBtnLabel='Save'){
         <div class="modal-title">${escHtml(title)}</div>
         <button class="modal-close" onclick="closeModal()">✕</button>
       </div>
-      <div class="modal-body" id="modal-body">${body}</div>
+      <div class="modal-body" id="modal-body" style="max-height:72vh;overflow-y:auto;padding:18px 20px">${body}</div>
       <div class="modal-foot" id="modal-foot">
         <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
         ${onSave?`<button class="btn btn-primary" id="modal-ok-btn" onclick="modalSave()">${escHtml(saveBtnLabel)}</button>`:''}
@@ -7168,18 +7168,18 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
   const batchSize=50,totalBatches=Math.ceil(dataRows.length/batchSize)
 
   // Auto-map: savedMappings → synonym table → relational keyword scorer → fuzzy field-def
-  const _savedMaps = _loadAllMappings(type, sourceHeaders)
+  const _savedMaps=_loadAllMappings(type,sourceHeaders)
   const autoMap={}
   sourceHeaders.forEach(h=>{
     if(_savedMaps[h]){autoMap[h]=_savedMaps[h];return}
     const resolved=resolveImportHeader(h,type,fieldDefs)
     if(resolved&&resolved!=='__skip'){autoMap[h]=resolved;return}
-    // Direct key fallback
     const hn=h.toLowerCase().replace(/[^a-z0-9]/g,'')
-    const exact=fieldDefs.find(f=>f.key.replace(/_/g,'')===hn);if(exact){autoMap[h]=exact.key;return}
+    const exact=fieldDefs.find(f=>f.key.replace(/_/g,'')===hn)
+    if(exact){autoMap[h]=exact.key;return}
     const fuzzy=fieldDefs.find(f=>{
-      const fk=f.key.replace(/_/g,'');const fl=f.label.toLowerCase().replace(/[^a-z0-9]/g,'');const hnn=hn
-      return hnn===fk||hnn.includes(fk)||fk.includes(hnn)||hnn.includes(fl.slice(0,8))||fl.includes(hnn.slice(0,8))
+      const fk=f.key.replace(/_/g,''),fl=f.label.toLowerCase().replace(/[^a-z0-9]/g,'')
+      return hn===fk||hn.includes(fk)||fk.includes(hn)||hn.includes(fl.slice(0,8))||fl.includes(hn.slice(0,8))
     })
     if(fuzzy)autoMap[h]=fuzzy.key
   })
@@ -7187,74 +7187,127 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
   window._importRows=dataRows
   window._importType=type
 
-  // ── Pre-flight: check required fields are mapped ──
+  // Pre-flight: which required fields are still unmapped?
   const requiredFields=fieldDefs.filter(f=>f.required)
   const mappedValues=Object.values(autoMap)
   const missingRequired=requiredFields.filter(f=>!mappedValues.includes(f.key))
-  /* Render each header as a compact inline badge — flex-wrap so long lists don't overflow */
-  const headerBadges=sourceHeaders.map(h=>`<code style="display:inline-block;background:var(--gray2);border:.5px solid var(--border2);border-radius:4px;padding:2px 7px;font-size:10px;font-family:monospace;margin:2px 2px 2px 0;white-space:nowrap;color:var(--text)">${escHtml(h)}</code>`).join('')
-  const requiredWarningHtml=missingRequired.length
-    ? `<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px;display:block">
-        <div style="font-weight:600;margin-bottom:6px">⚠️ Required column${missingRequired.length>1?'s':''} not mapped: ${missingRequired.map(f=>`<strong>${escHtml(f.label.split('(')[0].trim())}</strong>`).join(', ')}</div>
-        <div style="font-size:11px;font-weight:600;color:var(--red-t);margin-bottom:5px">Your file's ${sourceHeaders.length} columns:</div>
-        <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px">${headerBadges}</div>
-        <div style="font-size:11px;color:var(--red-t)">Use the dropdowns below to map one of your columns to the required field, or add the missing column to your file and re-upload.</div>
-      </div>`
-    : ''
+
+  // Build header badges for the warning block
+  let headerBadgesHtml=''
+  sourceHeaders.forEach(h=>{
+    headerBadgesHtml+='<code style="display:inline-block;background:var(--gray2);border:.5px solid var(--border2);border-radius:4px;padding:2px 7px;font-size:10px;font-family:monospace;margin:2px 2px 2px 0;white-space:nowrap;color:var(--text)">'+escHtml(h)+'</code>'
+  })
+
+  // Warning banner — always rendered but empty string when no errors
+  let requiredWarningHtml=''
+  if(missingRequired.length){
+    const missingLabels=missingRequired.map(f=>'<strong>'+escHtml(f.label.split('(')[0].trim())+'</strong>').join(', ')
+    requiredWarningHtml='<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px">'
+      +'<div style="font-weight:600;margin-bottom:6px">&#9888;&#65039; Required column'+(missingRequired.length>1?'s':'')+' not mapped: '+missingLabels+'</div>'
+      +'<div style="font-size:11px;font-weight:600;color:var(--red-t);margin-bottom:5px">Your file&#39;s '+sourceHeaders.length+' columns:</div>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px">'+headerBadgesHtml+'</div>'
+      +'<div style="font-size:11px;color:var(--red-t)">Use the dropdowns below to map one of your columns to the required field.</div>'
+      +'</div>'
+  }
 
   document.getElementById('ws1')?.classList.add('done')
   document.getElementById('ws2')?.classList.add('active')
 
-  const safeId=h=>h.replace(/[^a-z0-9]/gi,'_')
+  // Disable/enable the Import button
+  const _btn=document.getElementById('modal-ok-btn')
+  if(_btn){
+    _btn.disabled=missingRequired.length>0
+    _btn.style.opacity=missingRequired.length>0?'0.45':''
+    _btn.title=missingRequired.length>0?'Map the required field(s) above before importing':''
+  }
 
-  const _hasErrors = missingRequired.length > 0
-  // Disable/enable the Import button to match validation state
-  ;(function(){ const btn=document.getElementById('modal-ok-btn'); if(btn){ btn.disabled=_hasErrors; btn.style.opacity=_hasErrors?'0.45':''; btn.title=_hasErrors?'Map the required field(s) above before importing':''; } })()
+  // ── Build mapping rows using string concatenation (safe inside any template context) ──
+  let rowsHtml=''
+  sourceHeaders.forEach((h,idx)=>{
+    const mappedVal=autoMap[h]||''
+    const fromMemory=!!_savedMaps[h]
+    const badge=fromMemory
+      ? '<span style="font-size:9px;background:var(--green-bg);color:var(--green-t);border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:600">&#128190; remembered</span>'
+      : (mappedVal&&mappedVal!=='__skip')
+        ? '<span style="font-size:9px;background:var(--blue-bg);color:var(--blue-t);border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:600">&#129504; smart match</span>'
+        : ''
 
-  preview.innerHTML=`
-  ${requiredWarningHtml}
-  <div class="alert alert-${missingRequired.length?'warn':'success'}" style="margin-bottom:8px">
-    ${missingRequired.length?'⚠️':'✅'} <strong>${dataRows.length.toLocaleString()} rows</strong> from <em>${filename}</em>${totalBatches>1?` · ${totalBatches} batches of ${batchSize}`:''}
-    ${missingRequired.length?'— fix the required column(s) above before importing':''}
-  </div>
-  <div style="margin:10px 0 6px;font-size:11px;font-weight:600;color:var(--text2)">📐 Field Mapping — ${sourceHeaders.length} source columns → ${fieldDefs.length} available target fields</div>
-  <div style="font-size:10.5px;color:var(--text3);margin-bottom:8px">
-    🧠 Smart-matched where possible (keyword + relational scoring). 
-    ${Object.keys(_savedMaps).length ? `<span style="color:var(--green-t)">✓ ${Object.keys(_savedMaps).length} column${Object.keys(_savedMaps).length>1?'s':''} restored from your saved mappings.</span>` : ''}
-    Adjust as needed — your choices are remembered for next time. ★ = required.
-  </div>
-  <div style="max-height:280px;overflow-y:auto;border:.5px solid var(--border);border-radius:8px;padding:6px">
-    ${sourceHeaders.map(h=>{
-      const mappedVal = autoMap[h]||''
-      const fromMemory = !!_savedMaps[h]
-      const fromKeyword = !fromMemory && !!mappedVal && mappedVal!=='__skip' && !resolveImportHeader(h,type,[]) || false
-      const badge = fromMemory
-        ? `<span style="font-size:9px;background:var(--green-bg);color:var(--green-t);border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:600">💾 remembered</span>`
-        : (mappedVal && mappedVal!=='__skip')
-          ? `<span style="font-size:9px;background:var(--blue-bg);color:var(--blue-t);border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:600">🧠 smart match</span>`
-          : ''
-      return `<div class="field-map-row" style="${mappedVal&&mappedVal!=='__skip'?'border-color:var(--border2)':''}">
-      <div class="fmr-source" title="${escHtml(h)}" style="display:flex;align-items:center;flex-wrap:wrap;gap:2px">${escHtml(h)}${badge}</div>
-      <div class="fmr-arrow">→</div>
-      <div class="fmr-target">
-        <select id="fmap-${safeId(h)}" onchange="window._importFieldMap[${JSON.stringify(h)}]=this.value;_saveMapping(${JSON.stringify(type)},${JSON.stringify(h)},this.value);_refreshRequiredWarning('${type}')" style="font-size:11px;padding:4px 7px;border:.5px solid var(--border2);border-radius:5px;background:#fff;width:100%;font-family:inherit;outline:none">
-          <option value="">— Skip this column —</option>
-          <option value="__notes__">→ Append to Notes</option>
-          <option value="__tags__">→ Add to Tags</option>
-          ${fieldDefs.map(f=>`<option value="${f.key}"${mappedVal==f.key?' selected':''}>${escHtml(f.label)}${f.required?' ★':''}</option>`).join('')}
-        </select>
-      </div>
-    </div>`
-    }).join('')}
-  </div>
-  <div style="margin:10px 0 6px;font-size:11px;font-weight:600;color:var(--text2)">👁 Preview — first ${previewRows.length} rows</div>
-  <div style="overflow-x:auto;max-height:140px;overflow-y:auto;border:.5px solid var(--border);border-radius:8px">
-    <table style="font-size:10px;width:100%;border-collapse:collapse">
-      <thead style="position:sticky;top:0"><tr>${sourceHeaders.map(h=>`<th style="padding:4px 8px;border:.5px solid var(--border);background:var(--gray);text-align:left;white-space:nowrap;font-weight:600">${h}</th>`).join('')}</tr></thead>
-      <tbody>${previewRows.map(r=>`<tr>${sourceHeaders.map(h=>`<td style="padding:3px 8px;border:.5px solid var(--border);white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis">${r[h]||''}</td>`).join('')}</tr>`).join('')}</tbody>
-    </table>
-  </div>
-  <div style="font-size:11px;color:var(--text2);margin-top:8px">Click <strong>📥 Import</strong> to import all <strong>${dataRows.length.toLocaleString()}</strong> rows using the mapping above.${dataRows.length>batchSize?` Automatic progress tracking for ${totalBatches} batches.`:''}</div>`
+    // Build options
+    let optionsHtml='<option value="">&#8212; Skip this column &#8212;</option>'
+      +'<option value="__notes__">&#8594; Append to Notes</option>'
+      +'<option value="__tags__">&#8594; Add to Tags</option>'
+    fieldDefs.forEach(f=>{
+      const sel=mappedVal===f.key?' selected':''
+      optionsHtml+='<option value="'+f.key+'"'+sel+'>'+escHtml(f.label)+(f.required?' &#9733;':'')+'</option>'
+    })
+
+    rowsHtml+='<div class="field-map-row" style="'+(mappedVal&&mappedVal!=='__skip'?'border-color:var(--border2)':'')+'">'
+      +'<div class="fmr-source" title="'+escHtml(h)+'" style="display:flex;align-items:center;flex-wrap:wrap;gap:2px">'+escHtml(h)+badge+'</div>'
+      +'<div class="fmr-arrow">&#8594;</div>'
+      +'<div class="fmr-target">'
+        +'<select data-col-idx="'+idx+'"'
+          +' onchange="_importOnChange(this,\''+type+'\')"'
+          +' style="font-size:11px;padding:4px 7px;border:.5px solid var(--border2);border-radius:5px;background:#fff;width:100%;font-family:inherit;outline:none">'
+          +optionsHtml
+        +'</select>'
+      +'</div>'
+      +'</div>'
+  })
+
+  // ── Build preview table rows ──
+  let previewThead='<tr>'
+  sourceHeaders.forEach(h=>{previewThead+='<th style="padding:4px 8px;border:.5px solid var(--border);background:var(--gray);text-align:left;white-space:nowrap;font-weight:600">'+escHtml(h)+'</th>'})
+  previewThead+='</tr>'
+  let previewTbody=''
+  previewRows.forEach(r=>{
+    previewTbody+='<tr>'
+    sourceHeaders.forEach(h=>{previewTbody+='<td style="padding:3px 8px;border:.5px solid var(--border);white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis">'+(r[h]||'')+'</td>'})
+    previewTbody+='</tr>'
+  })
+
+  const savedCount=Object.keys(_savedMaps).length
+  const statusAlert='<div class="alert alert-'+(missingRequired.length?'warn':'success')+'" style="margin-bottom:8px">'
+    +(missingRequired.length?'&#9888;&#65039;':'&#9989;')
+    +' <strong>'+dataRows.length.toLocaleString()+' rows</strong> from <em>'+escHtml(filename)+'</em>'
+    +(totalBatches>1?' &middot; '+totalBatches+' batches of '+batchSize:'')
+    +(missingRequired.length?' &mdash; fix the required column(s) above before importing':'')
+    +'</div>'
+
+  const subHint='<div style="font-size:10.5px;color:var(--text3);margin-bottom:8px">'
+    +'&#129504; Smart-matched where possible (keyword + relational scoring).'
+    +(savedCount?' <span style="color:var(--green-t)">&#10003; '+savedCount+' column'+(savedCount>1?'s':'')+' restored from saved mappings.</span>':'')
+    +' Adjust as needed &mdash; choices are remembered next time. &#9733; = required.'
+    +'</div>'
+
+  // Assemble final HTML — all safe string concatenation, no nested .map inside template literal
+  preview.innerHTML=''
+    +requiredWarningHtml
+    +statusAlert
+    +'<div style="margin:10px 0 6px;font-size:11px;font-weight:600;color:var(--text2)">&#128208; Field Mapping &mdash; '+sourceHeaders.length+' source columns &#8594; '+fieldDefs.length+' available target fields</div>'
+    +subHint
+    +'<div style="max-height:300px;overflow-y:auto;border:.5px solid var(--border);border-radius:8px;padding:6px">'
+      +rowsHtml
+    +'</div>'
+    +'<div style="margin:10px 0 6px;font-size:11px;font-weight:600;color:var(--text2)">&#128065; Preview &mdash; first '+previewRows.length+' rows</div>'
+    +'<div style="overflow-x:auto;max-height:140px;overflow-y:auto;border:.5px solid var(--border);border-radius:8px">'
+      +'<table style="font-size:10px;width:100%;border-collapse:collapse">'
+        +'<thead style="position:sticky;top:0">'+previewThead+'</thead>'
+        +'<tbody>'+previewTbody+'</tbody>'
+      +'</table>'
+    +'</div>'
+    +'<div style="font-size:11px;color:var(--text2);margin-top:8px">Click <strong>&#128229; Import</strong> to import all <strong>'+dataRows.length.toLocaleString()+'</strong> rows using the mapping above.'+(dataRows.length>batchSize?' Automatic progress tracking for '+totalBatches+' batches.':'')+'</div>'
+}
+
+/* _importOnChange: called by every mapping dropdown; updates map, saves to localStorage, refreshes warning */
+function _importOnChange(selectEl, type){
+  const idx=parseInt(selectEl.getAttribute('data-col-idx'),10)
+  const rows=window._importRows
+  if(!rows||!rows.length)return
+  const header=Object.keys(rows[0])[idx]
+  if(!header)return
+  window._importFieldMap[header]=selectEl.value
+  _saveMapping(type,header,selectEl.value)
+  _refreshRequiredWarning(type)
 }
 
 /* Live-refresh the required-field warning as user changes dropdowns */
