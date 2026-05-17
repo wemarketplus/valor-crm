@@ -941,7 +941,7 @@ function showToast(msg,type='info'){
   setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},3800)
 }
 
-function showModal(title,body,onSave=null,size=''){
+function showModal(title,body,onSave=null,size='',saveBtnLabel='Save'){
   document.getElementById('modal-container').innerHTML=`
   <div class="modal-overlay" onclick="handleOverlayClick(event)">
     <div class="modal ${size}" onclick="event.stopPropagation()">
@@ -952,7 +952,7 @@ function showModal(title,body,onSave=null,size=''){
       <div class="modal-body" id="modal-body">${body}</div>
       <div class="modal-foot" id="modal-foot">
         <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
-        ${onSave?'<button class="btn btn-primary" id="modal-ok-btn" onclick="modalSave()">Save</button>':''}
+        ${onSave?`<button class="btn btn-primary" id="modal-ok-btn" onclick="modalSave()">${escHtml(saveBtnLabel)}</button>`:''}
       </div>
     </div>
   </div>`
@@ -6005,7 +6005,7 @@ async function pageApplications(){
       <div class="ie-menu" id="app-ie">
         <div class="ie-menu-hd">Import & Export</div>
         <div class="ie-group-label">Import</div>
-        <div class="ie-item" onclick="closeAllIE();openImportModal('applications')"><span class="ie-icon">📥</span>Import from CSV / Excel<span class="ie-item-hint">Requires companies imported first</span></div>
+        <div class="ie-item" onclick="closeAllIE();importCSV('applications')"><span class="ie-icon">📥</span>Import from CSV / Excel<span class="ie-item-hint">Requires companies imported first</span></div>
         <div class="ie-sep"></div>
         <div class="ie-group-label">Export</div>
         <div class="ie-item" onclick="closeAllIE();exportCSV('applications')"><span class="ie-icon">📤</span>Export as CSV</div>
@@ -6955,7 +6955,7 @@ function importCSV(type){
   async()=>{
     if(!window._importRows?.length){showToast('Please select and preview a file first','warn');return false}
     return await runFullImport()
-  },'modal-xl')
+  },'modal-xl','📥 Import')
 }
 
 function parseCSVLine(line){
@@ -7181,19 +7181,71 @@ async function runImportDiagnostic(type){
   }catch(e){if(preview)preview.innerHTML=`<div class="alert alert-error">❌ Could not connect: ${e.message}</div>`}
 }
 
+/* ── Client-side CSV builder (fallback when API is unavailable) ── */
+function _getLocalData(type){
+  const map={
+    wibs:      window._wibs,
+    companies: window._companies,
+    locations: window._locations,
+    funding:   window._funding,
+    applications: window._applications,
+    revenue:   window._revenue,
+    users:     window._users,
+    audit:     window._auditLogs
+  }
+  return map[type]||null
+}
+
+function _buildCSVFromData(type){
+  const rows=_getLocalData(type)
+  if(!rows||!rows.length) return null
+  const fields=IMPORT_FIELD_DEFS[type]||Object.keys(rows[0]).map(k=>({key:k,label:k}))
+  const keys=fields.filter(f=>f.key!=='__skip').map(f=>f.key)
+  const labels=fields.filter(f=>f.key!=='__skip').map(f=>f.label.split('(')[0].trim())
+  const esc=v=>{const s=String(v==null?'':v);return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s}
+  const lines=[labels.join(',')]
+  rows.forEach(r=>lines.push(keys.map(k=>esc(r[k]??'')).join(',')))
+  return lines.join('\n')
+}
+
+function _downloadCSVBlob(csvText,filename){
+  const blob=new Blob([csvText],{type:'text/csv;charset=utf-8;'})
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=filename;a.click();URL.revokeObjectURL(a.href)
+}
+
 async function exportCSV(type){
   closeAllIE()
-  try{showToast(`Exporting ${type} as CSV...`,'info');await apiDownload(`/api/export/${type}`);showToast(`${type} exported`,'success')}
-  catch(e){showToast(`Export failed: ${e.message}`,'error')}
+  showToast(`Exporting ${type} as CSV...`,'info')
+  // Try API first, fall back to client-side data
+  try{
+    await apiDownload(`/api/export/${type}`)
+    showToast(`✅ ${type} exported`,'success')
+  }catch(e){
+    const csv=_buildCSVFromData(type)
+    if(csv){
+      const filename=`valor-${type}-${new Date().toISOString().split('T')[0]}.csv`
+      _downloadCSVBlob(csv,filename)
+      showToast(`✅ Exported ${filename}`,'success')
+    }else{
+      showToast(`Export failed: ${e.message}`,'error')
+    }
+  }
 }
 
 async function exportExcel(type){
   closeAllIE();showToast('Preparing Excel export...','info')
   try{
     if(!window.XLSX){await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=res;s.onerror=()=>rej(new Error('Failed to load Excel library'));document.head.appendChild(s)})}
-    const r=await fetch(`/api/export/${type}`,{headers:{'Authorization':`Bearer ${token}`}})
-    if(!r.ok){const d=await r.json().catch(()=>({}));throw new Error(d.error||'Export failed')}
-    const csvText=await r.text()
+    // Try API, fall back to client-side data
+    let csvText=null
+    try{
+      const r=await fetch(`/api/export/${type}`,{headers:{'Authorization':`Bearer ${token}`}})
+      if(r.ok) csvText=await r.text()
+    }catch(_){}
+    if(!csvText){
+      csvText=_buildCSVFromData(type)
+      if(!csvText){showToast('No data available to export','warn');return}
+    }
     const lines=csvText.split(/\r?\n/).filter(l=>l.trim())
     const rows=lines.map(l=>{const vals=[];let cur='',inQ=false;for(let i=0;i<l.length;i++){const c=l[i];if(c==='"'){if(inQ&&l[i+1]==='"'){cur+='"';i++}else inQ=!inQ}else if(c===','&&!inQ){vals.push(cur);cur=''}else cur+=c}vals.push(cur);return vals})
     const ws=XLSX.utils.aoa_to_sheet(rows)
