@@ -6995,7 +6995,9 @@ function parseDelimitedLine(line,delim){
     else{cur+=c;i++}
   }
   vals.push(cur.trim())
-  return vals.map(v=>v.replace(/^"+|"+$/g,'').trim())
+  // Strip ALL quote characters — RFC-4180 doubled-quote escapes inside quoted header names
+  // produce embedded literal " chars after decoding; no column name should ever contain quotes
+  return vals.map(v=>v.replace(/"/g,'').trim())
 }
 
 /* Legacy alias so any existing callers of parseCSVLine still work (auto-detects delimiter) */
@@ -7069,12 +7071,11 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
   /* Render each header as a compact inline badge — flex-wrap so long lists don't overflow */
   const headerBadges=sourceHeaders.map(h=>`<code style="display:inline-block;background:var(--gray2);border:.5px solid var(--border2);border-radius:4px;padding:2px 7px;font-size:10px;font-family:monospace;margin:2px 2px 2px 0;white-space:nowrap;color:var(--text)">${escHtml(h)}</code>`).join('')
   const requiredWarningHtml=missingRequired.length
-    ? `<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px">
-        ⚠️ <strong>Required column${missingRequired.length>1?'s':''} not found in your file:</strong>
-        ${missingRequired.map(f=>`<strong>${escHtml(f.label.split('(')[0].trim())}</strong>`).join(', ')}
-        <div style="margin-top:8px;font-size:11px;font-weight:600;color:var(--red-t)">Your file's ${sourceHeaders.length} columns:</div>
-        <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:5px">${headerBadges}</div>
-        <div style="font-size:11px;margin-top:8px;color:var(--red-t)">Use the dropdowns below to map one of your columns to the required field, or add the missing column to your file and re-upload.</div>
+    ? `<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px;display:block">
+        <div style="font-weight:600;margin-bottom:6px">⚠️ Required column${missingRequired.length>1?'s':''} not mapped: ${missingRequired.map(f=>`<strong>${escHtml(f.label.split('(')[0].trim())}</strong>`).join(', ')}</div>
+        <div style="font-size:11px;font-weight:600;color:var(--red-t);margin-bottom:5px">Your file's ${sourceHeaders.length} columns:</div>
+        <div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px">${headerBadges}</div>
+        <div style="font-size:11px;color:var(--red-t)">Use the dropdowns below to map one of your columns to the required field, or add the missing column to your file and re-upload.</div>
       </div>`
     : ''
 
