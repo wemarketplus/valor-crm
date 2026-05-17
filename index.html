@@ -7266,7 +7266,7 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
   })
 
   const savedCount=Object.keys(_savedMaps).length
-  const statusAlert='<div class="alert alert-'+(missingRequired.length?'warn':'success')+'" style="margin-bottom:8px">'
+  const statusAlert='<div id="import-status-alert" class="alert alert-'+(missingRequired.length?'warn':'success')+'" style="margin-bottom:8px">'
     +(missingRequired.length?'&#9888;&#65039;':'&#9989;')
     +' <strong>'+dataRows.length.toLocaleString()+' rows</strong> from <em>'+escHtml(filename)+'</em>'
     +(totalBatches>1?' &middot; '+totalBatches+' batches of '+batchSize:'')
@@ -7330,6 +7330,15 @@ function _refreshRequiredWarning(type){
   } else {
     if(existingWarn) existingWarn.remove()
     if(btn){btn.disabled=false;btn.style.opacity='';btn.title=''}
+    /* Flip the amber status banner → green now that all required fields are satisfied */
+    const statusBannerB=document.getElementById('import-status-alert')
+    if(statusBannerB){
+      statusBannerB.className='alert alert-success'
+      statusBannerB.innerHTML=statusBannerB.innerHTML
+        .replace(/&#9888;&#65039;|⚠️/g,'&#9989;')
+        .replace(/\s*&mdash;\s*fix the required column\(s\) above before importing/g,'')
+        .replace(/\s*— fix the required column\(s\) above before importing/g,'')
+    }
   }
 }
 
@@ -8143,6 +8152,15 @@ function _iwizRefreshWarn(type) {
   } else {
     if (warn) warn.remove()
     if (nextBtn) { nextBtn.disabled = false; nextBtn.style.opacity = ''; nextBtn.title = '' }
+    /* Flip the amber status banner → green now that all required fields are satisfied */
+    var statusBanner = document.getElementById('iwiz-status-alert')
+    if (statusBanner) {
+      statusBanner.className = 'alert alert-success'
+      statusBanner.innerHTML = statusBanner.innerHTML
+        .replace(/&#9888;&#65039;|⚠️/g, '&#9989;')
+        .replace(/\s*&mdash;\s*fix the required column\(s\) above before importing/g, '')
+        .replace(/\s*— fix the required column\(s\) above before importing/g, '')
+    }
   }
 }
 
@@ -8392,6 +8410,17 @@ async function iwizNext(type) {
           '</div>'
         : ''
 
+      /* Build the status-alert banner — id="iwiz-status-alert" lets _iwizRefreshWarn flip it live */
+      var statusAlertClass = missingNow.length ? 'alert alert-warn' : 'alert alert-success'
+      var statusAlertIcon  = missingNow.length ? '&#9888;&#65039;' : '&#9989;'
+      var statusAlertSuffix = missingNow.length ? ' &mdash; fix the required column(s) above before importing' : ''
+      var statusAlertHtml =
+        '<div id="iwiz-status-alert" class="' + statusAlertClass + '" style="margin-bottom:8px">' +
+          statusAlertIcon +
+          ' <strong>' + rows.length.toLocaleString() + ' rows</strong>' +
+          statusAlertSuffix +
+        '</div>'
+
       document.getElementById('iwiz-step2').innerHTML =
         /* Stats bar */
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
@@ -8404,6 +8433,8 @@ async function iwizNext(type) {
             (savedCount ? ' \u00b7 <span style="color:var(--green-t)">\ud83d\udcbe ' + savedCount + ' remembered</span>' : '') +
           '</div>' +
         '</div>' +
+        /* Live-reactive status alert — flips amber→green when required fields are satisfied */
+        statusAlertHtml +
         /* Required-field warning — rendered only when needed, disappears on fix */
         warnBannerHtml +
         /* Hint */
