@@ -3843,14 +3843,135 @@ window._IMPORT_SYNONYM_TABLE={
   'match requirement':'employer_match_pct',
   'website':{'companies':'domain','wibs':'source_url'},'next steps':'__skip','blockers':'__skip',
 }
-function resolveImportHeader(header,type){
-  if(!header)return '__skip'
-  const h=header.toLowerCase().trim().replace(/[_\-]+/g,' ').replace(/[^a-z0-9 ]/g,'').trim()
-  const syn=window._IMPORT_SYNONYM_TABLE[h]
-  if(syn){if(typeof syn==='object'&&syn[type])return syn[type];if(typeof syn==='string')return syn}
-  const hc=h.replace(/ /g,'')
-  for(const k of Object.keys(window._IMPORT_SYNONYM_TABLE)){const kc=k.replace(/[^a-z0-9]/g,'');if(kc===hc){const v=window._IMPORT_SYNONYM_TABLE[k];return typeof v==='object'?(v[type]||'__skip'):v}}
-  for(const k of Object.keys(window._IMPORT_SYNONYM_TABLE)){const kc=k.replace(/[^a-z0-9]/g,'');if(kc.length>3&&hc.length>3&&(hc.includes(kc)||kc.includes(hc))){const v=window._IMPORT_SYNONYM_TABLE[k];return typeof v==='object'?(v[type]||'__skip'):v}}
+/* ─────────────────────────────────────────────────────────────────────────
+   MAPPING MEMORY  — localStorage helpers
+   Key schema:  "valorMappingV1:<tab>:<normalised-header>"  →  fieldKey
+   ───────────────────────────────────────────────────────────────────────── */
+function _mappingStorageKey(type, header){
+  return 'valorMappingV1:' + type + ':' + header.toLowerCase().trim()
+}
+function _saveMapping(type, header, fieldKey){
+  try { localStorage.setItem(_mappingStorageKey(type,header), fieldKey) } catch(_){}
+}
+function _loadMapping(type, header){
+  try { return localStorage.getItem(_mappingStorageKey(type,header)) || null } catch(_){ return null }
+}
+/* Returns a map of {header→fieldKey} for all saved headers found in sourceHeaders */
+function _loadAllMappings(type, sourceHeaders){
+  const out={}
+  sourceHeaders.forEach(h=>{
+    const v=_loadMapping(type,h)
+    if(v) out[h]=v
+  })
+  return out
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   RELATIONAL-HEADER KEYWORD SCORER
+   Handles headers like "Zipcode > Regional WIB > Funding Opportunities > Status"
+   or "Parent Operator > Status Changed At".
+   Strategy:
+     1. Flatten to word-set by stripping separators and punctuation.
+     2. Score every candidate fieldKey by counting keyword hits.
+     3. Return the best-scoring key that clears a minimum threshold.
+   ───────────────────────────────────────────────────────────────────────── */
+window._FIELD_KEYWORDS = {
+  /* Locations */
+  location_name:      ['location','name','facility','site','operator','nursing','home','record'],
+  state:              ['state','st','province'],
+  city:               ['city','town','municipality'],
+  county:             ['county','parish'],
+  address:            ['address','street','addr'],
+  zip:                ['zip','zipcode','postal','code'],
+  status:             ['status','stage','lifecycle'],
+  employee_count:     ['employee','headcount','staff','bed','beds'],
+  parent_company_name:['parent','operator','company','owner'],
+  notes:              ['notes','comments','description','update'],
+  /* Companies */
+  company_name:       ['company','employer','organization','account','business','name'],
+  primary_contact_name:['contact','poc','name','primary'],
+  primary_contact_email:['email','contact','work','business'],
+  primary_contact_phone:['phone','mobile','cell','contact'],
+  /* WIBs */
+  wib_name:           ['wib','workforce','board','local'],
+  wib_email:          ['wib','email'],
+  wib_phone:          ['wib','phone'],
+  /* Funding */
+  opportunity_name:   ['opportunity','funding','grant','program','name'],
+  application_deadline:['deadline','close','application'],
+  award_amount_requested:['amount','award','requested'],
+}
+
+function _scoreHeaderAgainstField(words, fieldKey){
+  const kws = window._FIELD_KEYWORDS[fieldKey] || []
+  if(!kws.length) return 0
+  let score = 0
+  words.forEach(w=>{ if(kws.some(k=>w.includes(k)||k.includes(w))) score++ })
+  return score
+}
+
+function _resolveRelationalHeader(header, type, fieldDefs){
+  /* Tokenise: split on >, -, _, spaces, arrows, etc. then lower+alphanum */
+  const words = header.toLowerCase()
+    .split(/[\s>|\-_\/\\.,;:]+/)
+    .map(w=>w.replace(/[^a-z0-9]/g,''))
+    .filter(w=>w.length>1)
+  if(!words.length) return null
+
+  let best=null, bestScore=0
+  fieldDefs.forEach(f=>{
+    const s = _scoreHeaderAgainstField(words, f.key)
+    if(s > bestScore){ bestScore=s; best=f.key }
+  })
+  /* Require at least 1 keyword hit to suggest anything */
+  return bestScore >= 1 ? best : null
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   MAIN RESOLVER  (drop-in replacement — same signature)
+   Priority order:
+     1. Saved mapping from localStorage  (user's own past choices)
+     2. Exact synonym-table hit
+     3. Collapsed-key exact match
+     4. Substring synonym-table match
+     5. Relational-header keyword scorer  ← NEW
+     6. Field-def fuzzy fallback
+   ───────────────────────────────────────────────────────────────────────── */
+function resolveImportHeader(header, type, fieldDefs){
+  if(!header) return '__skip'
+
+  /* 1. Saved mapping */
+  const saved = _loadMapping(type, header)
+  if(saved) return saved
+
+  const h = header.toLowerCase().trim().replace(/[_\-]+/g,' ').replace(/[^a-z0-9 >]/g,'').trim()
+  const hClean = h.replace(/[^a-z0-9]/g,'')
+
+  /* 2. Exact synonym */
+  const syn = window._IMPORT_SYNONYM_TABLE[h.replace(/ *> */g,' ').trim()] ||
+              window._IMPORT_SYNONYM_TABLE[h]
+  if(syn){ return typeof syn==='object' ? (syn[type]||'__skip') : syn }
+
+  /* 3. Collapsed-key exact */
+  for(const k of Object.keys(window._IMPORT_SYNONYM_TABLE)){
+    const kc=k.replace(/[^a-z0-9]/g,'')
+    if(kc===hClean){ const v=window._IMPORT_SYNONYM_TABLE[k]; return typeof v==='object'?(v[type]||'__skip'):v }
+  }
+
+  /* 4. Substring synonym */
+  for(const k of Object.keys(window._IMPORT_SYNONYM_TABLE)){
+    const kc=k.replace(/[^a-z0-9]/g,'')
+    if(kc.length>3&&hClean.length>3&&(hClean.includes(kc)||kc.includes(hClean))){
+      const v=window._IMPORT_SYNONYM_TABLE[k]; return typeof v==='object'?(v[type]||'__skip'):v
+    }
+  }
+
+  /* 5. Relational keyword scorer (handles "Zipcode > Regional WIB > Funding Opportunities > Status") */
+  if(fieldDefs && fieldDefs.length){
+    const kwMatch = _resolveRelationalHeader(header, type, fieldDefs)
+    if(kwMatch) return kwMatch
+  }
+
   return '__skip'
 }
 
@@ -7046,10 +7167,12 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
   const previewRows=dataRows.slice(0,3)
   const batchSize=50,totalBatches=Math.ceil(dataRows.length/batchSize)
 
-  // Auto-map using resolveImportHeader (covers 100+ external platform column headers)
+  // Auto-map: savedMappings → synonym table → relational keyword scorer → fuzzy field-def
+  const _savedMaps = _loadAllMappings(type, sourceHeaders)
   const autoMap={}
   sourceHeaders.forEach(h=>{
-    const resolved=resolveImportHeader(h,type)
+    if(_savedMaps[h]){autoMap[h]=_savedMaps[h];return}
+    const resolved=resolveImportHeader(h,type,fieldDefs)
     if(resolved&&resolved!=='__skip'){autoMap[h]=resolved;return}
     // Direct key fallback
     const hn=h.toLowerCase().replace(/[^a-z0-9]/g,'')
@@ -7095,20 +7218,34 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
     ${missingRequired.length?'— fix the required column(s) above before importing':''}
   </div>
   <div style="margin:10px 0 6px;font-size:11px;font-weight:600;color:var(--text2)">📐 Field Mapping — ${sourceHeaders.length} source columns → ${fieldDefs.length} available target fields</div>
-  <div style="font-size:10.5px;color:var(--text3);margin-bottom:8px">Auto-mapped where possible. Adjust as needed. ★ = required field.</div>
+  <div style="font-size:10.5px;color:var(--text3);margin-bottom:8px">
+    🧠 Smart-matched where possible (keyword + relational scoring). 
+    ${Object.keys(_savedMaps).length ? `<span style="color:var(--green-t)">✓ ${Object.keys(_savedMaps).length} column${Object.keys(_savedMaps).length>1?'s':''} restored from your saved mappings.</span>` : ''}
+    Adjust as needed — your choices are remembered for next time. ★ = required.
+  </div>
   <div style="max-height:280px;overflow-y:auto;border:.5px solid var(--border);border-radius:8px;padding:6px">
-    ${sourceHeaders.map(h=>`<div class="field-map-row">
-      <div class="fmr-source" title="${escHtml(h)}">${escHtml(h)}</div>
+    ${sourceHeaders.map(h=>{
+      const mappedVal = autoMap[h]||''
+      const fromMemory = !!_savedMaps[h]
+      const fromKeyword = !fromMemory && !!mappedVal && mappedVal!=='__skip' && !resolveImportHeader(h,type,[]) || false
+      const badge = fromMemory
+        ? `<span style="font-size:9px;background:var(--green-bg);color:var(--green-t);border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:600">💾 remembered</span>`
+        : (mappedVal && mappedVal!=='__skip')
+          ? `<span style="font-size:9px;background:var(--blue-bg);color:var(--blue-t);border-radius:4px;padding:1px 5px;margin-left:4px;font-weight:600">🧠 smart match</span>`
+          : ''
+      return `<div class="field-map-row" style="${mappedVal&&mappedVal!=='__skip'?'border-color:var(--border2)':''}">
+      <div class="fmr-source" title="${escHtml(h)}" style="display:flex;align-items:center;flex-wrap:wrap;gap:2px">${escHtml(h)}${badge}</div>
       <div class="fmr-arrow">→</div>
       <div class="fmr-target">
-        <select id="fmap-${safeId(h)}" onchange="window._importFieldMap[${JSON.stringify(h)}]=this.value;_refreshRequiredWarning('${type}')" style="font-size:11px;padding:4px 7px;border:.5px solid var(--border2);border-radius:5px;background:#fff;width:100%;font-family:inherit;outline:none">
+        <select id="fmap-${safeId(h)}" onchange="window._importFieldMap[${JSON.stringify(h)}]=this.value;_saveMapping(${JSON.stringify(type)},${JSON.stringify(h)},this.value);_refreshRequiredWarning('${type}')" style="font-size:11px;padding:4px 7px;border:.5px solid var(--border2);border-radius:5px;background:#fff;width:100%;font-family:inherit;outline:none">
           <option value="">— Skip this column —</option>
           <option value="__notes__">→ Append to Notes</option>
           <option value="__tags__">→ Add to Tags</option>
-          ${fieldDefs.map(f=>`<option value="${f.key}"${(autoMap[h]||'')==f.key?' selected':''}>${escHtml(f.label)}${f.required?' ★':''}</option>`).join('')}
+          ${fieldDefs.map(f=>`<option value="${f.key}"${mappedVal==f.key?' selected':''}>${escHtml(f.label)}${f.required?' ★':''}</option>`).join('')}
         </select>
       </div>
-    </div>`).join('')}
+    </div>`
+    }).join('')}
   </div>
   <div style="margin:10px 0 6px;font-size:11px;font-weight:600;color:var(--text2)">👁 Preview — first ${previewRows.length} rows</div>
   <div style="overflow-x:auto;max-height:140px;overflow-y:auto;border:.5px solid var(--border);border-radius:8px">
