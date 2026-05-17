@@ -909,9 +909,24 @@ function startSessionTimer(){
     setTimeout(()=>logout(),800)
   }, 60*60*1000)
   // Reset on any user activity
-  if(window._sessResetFn){['click','keydown','mousemove','touchstart'].forEach(ev=>document.removeEventListener(ev,window._sessResetFn))}
-  window._sessResetFn=()=>{if(!_sessionWarned)startSessionTimer()}
-  ;['click','keydown','mousemove','touchstart'].forEach(ev=>document.addEventListener(ev,window._sessResetFn))
+  // Persistent listeners on window (not document) across all 4 interaction
+  // types. Remove stale references first to prevent duplicate bindings.
+  // Using window instead of document captures scroll events from all elements.
+  if(window._sessResetFn){
+    ;['click','keydown','mousemove','scroll'].forEach(ev=>{
+      window.removeEventListener(ev, window._sessResetFn, true)
+    })
+  }
+  window._sessResetFn = function(){
+    if(!_sessionWarned){
+      clearTimeout(_sessionWarnTimer)
+      clearTimeout(_sessionLogoutTimer)
+      startSessionTimer()
+    }
+  }
+  ;['click','keydown','mousemove','scroll'].forEach(ev=>{
+    window.addEventListener(ev, window._sessResetFn, {passive:true, capture:true})
+  })
 }
 function extendSession(){
   const ov=document.getElementById('session-warn-overlay')
@@ -1544,14 +1559,14 @@ async function pageWibs(){
   window._wibs          = data.data || []
   window._territories   = terrData.data || []
   window._myTerritories = viewPref.territories || []
-  // FIX 1: Never show 0 rows. If saved mode is 'my_territories' but no WIBs match,
-  // fall back to 'all' so the table always has visible data on load.
-  const _savedMode = viewPref.view_mode || 'all'
-  const _modeHasData = _savedMode !== 'my_territories' || (
+  // FIX 1: guard modeHasData — if saved mode is my_territories but no WIBs match,
+  // fall back to 'all' so the table is never silently empty.
+  const savedMode = viewPref.view_mode || 'all'
+  const modeHasData = savedMode !== 'my_territories' || (
     window._myTerritories.length > 0 &&
-    window._wibs.some(w => window._myTerritories.some(t => t.id === w.territory_id))
+    (window._wibs).some(w => window._myTerritories.some(t => t.id === w.territory_id))
   )
-  window._wibViewMode = _modeHasData ? _savedMode : 'all'
+  window._wibViewMode   = modeHasData ? savedMode : 'all'
   const total = data.count || window._wibs.length
 
   // Build the view-mode toggle widget
@@ -1576,7 +1591,7 @@ async function pageWibs(){
       <div class="ie-menu" id="wib-ie">
         <div class="ie-menu-hd">Import & Export</div>
         <div class="ie-group-label">Import</div>
-        <div class="ie-item" onclick="closeAllIE();importCSV('wibs')"><span class="ie-icon">📥</span>Import from CSV / Excel<span class="ie-item-hint">Any format</span></div>
+        <div class="ie-item" onclick="closeAllIE();importCSV(\'wibs\')"><span class="ie-icon">📥</span>Import from CSV / Excel<span class="ie-item-hint">Any format</span></div>
         <div class="ie-sep"></div>
         <div class="ie-group-label">Export</div>
         <div class="ie-item" onclick="closeAllIE();exportCSV('wibs')"><span class="ie-icon">📤</span>Export as CSV</div>
@@ -1596,8 +1611,9 @@ async function pageWibs(){
   ],'all',[],
   'READONLY In-Network 4-5 Star Locations -daily')
 
-  // FIX 1b: Always use the full array on first render so the table is never empty
+  // FIX 1b: always render full array on first load — stale mode never empties the table
   renderWibTable(window._wibs)
+  window._wibViewMode = modeHasData ? savedMode : 'all'
   // Async enrichment: load contacts, locations, funding to populate extra columns
   Promise.all([
     api('/api/locations?limit=5000').catch(()=>({data:[]})),
@@ -2496,8 +2512,9 @@ async function pageCompanies(){
 }
 
 function renderCompaniesTable(companies){
-  const _seen=new Set()
-  let d=[...companies].filter(c=>{if(!c||_seen.has(c.id))return false;_seen.add(c.id);return true})
+  // FIX 2d: dedup by ID — safety net against double-render race
+  const _s=new Set()
+  let d=[...companies].filter(c=>{if(!c||_s.has(c.id))return false;_s.add(c.id);return true})
   const q=window._coFilters.search
   const st=window._coFilters.status
   const rt=window._coFilters.rating
@@ -4059,45 +4076,59 @@ function wtShowDetail(d){
   if(title)title.textContent='📌 '+escHtml(d.state)
   body.style.textAlign='left';body.style.paddingTop='0';body.style.color='var(--text)'
 
-  // FIX 4a: Collect ALL matching WIBs. Imperative for-loop renders every board.
-  // The old nested-backtick ternary silently dropped loop results.
+  // FIX 4a: Collect ALL local WIBs for this state and render every one.
+  // Imperative for-loop replaces the broken nested-backtick ternary that
+  // silently stopped iterating after the first match.
   const stateWibs=(window._wibs||[]).filter(w=>(w.state||'').toUpperCase()===d.abbr.toUpperCase())
-  const _cc=stateWibs.length,_tb=d.localBoards,_mc=Math.max(0,_tb-_cc)
-  function _bCard(w){
-    let _ec=[];try{_ec=JSON.parse(w.contacts_json||'[]')}catch(_){}
-    const _sl=(w.status||'').replace(/_/g,' ')
-    const _scc={funding_available:'#166534',follow_up_needed:'#92400e',funding_not_available:'#991b1b',network_member:'#134e4a',contacted:'#1e40af'}[w.status]||'var(--text3)'
-    let _h='<div onclick="openWibProfile(\''+w.id+'\')" style="background:var(--white);border:.5px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;margin-bottom:6px;transition:background .1s" onmouseover="this.style.background=\'var(--blue-bg)\'" onmouseout="this.style.background=\'var(--white)\'">';
-    _h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
-    _h+='<div style="font-size:11.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:72%">'+escHtml(w.wib_name)+'</div>'
-    _h+='<span style="font-size:9px;color:'+_scc+';font-weight:600;flex-shrink:0">'+escHtml(_sl||'\u2014')+'</span>'
-    _h+='</div><div style="display:flex;flex-direction:column;gap:3px;font-size:10.5px">'
-    if(w.wib_type) _h+='<span style="color:var(--text2)">\uD83C\uDFDB\uFE0F '+escHtml(w.wib_type)+'</span>'
-    if(w.wib_email) _h+='<a href="mailto:'+escAttr(w.wib_email)+'" onclick="event.stopPropagation()" style="color:var(--blue);text-decoration:none">\u2709\uFE0F '+escHtml(w.wib_email)+'</a>'
-    if(w.wib_phone) _h+='<a href="tel:'+escAttr(w.wib_phone)+'" onclick="event.stopPropagation()" style="color:var(--blue);text-decoration:none">\uD83D\uDCDE '+escHtml(w.wib_phone)+'</a>'
-    if(w.source_url) _h+='<a href="'+escUrl(w.source_url)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--blue);text-decoration:none">\uD83C\uDF10 Website \u2192</a>'
-    if(w.max_award_per_ein) _h+='<span style="color:var(--green-t);font-weight:600">\uD83D\uDCB0 Max $'+Number(w.max_award_per_ein).toLocaleString()+'/EIN</span>'
-    _h+='</div>'
-    if(_ec.length){
-      _h+='<div style="margin-top:6px;padding-top:6px;border-top:.5px solid var(--border2)">'
-      for(var _ci=0;_ci<_ec.length;_ci++){const _c=_ec[_ci];_h+='<div style="font-size:10px;color:var(--text2);margin-bottom:2px"><strong style="color:var(--text)">'+escHtml(_c.name||'')+'</strong>'+(_c.title?' \u2014 '+escHtml(_c.title):'');if(_c.email)_h+='<a href="mailto:'+escAttr(_c.email)+'" onclick="event.stopPropagation()" style="display:block;color:var(--blue);text-decoration:none">\u2709\uFE0F '+escHtml(_c.email)+'</a>';if(_c.phone)_h+='<a href="tel:'+escAttr(_c.phone)+'" onclick="event.stopPropagation()" style="display:block;color:var(--blue);text-decoration:none">\uD83D\uDCDE '+escHtml(_c.phone)+'</a>';_h+='</div>'}
-      _h+='</div>'
+  const _crmCount=stateWibs.length
+  const _totalBoards=d.localBoards
+  const _missing=Math.max(0,_totalBoards-_crmCount)
+
+  function _mkCard(w){
+    var ec=[];try{ec=JSON.parse(w.contacts_json||'[]')}catch(x){}
+    var sl=(w.status||'').replace(/_/g,' ')
+    var SC={funding_available:'#166534',follow_up_needed:'#92400e',funding_not_available:'#991b1b',network_member:'#134e4a',contacted:'#1e40af'}
+    var scol=SC[w.status]||'var(--text3)'
+    var h='<div onclick="openWibProfile(\''+w.id+'\')" style="background:var(--white);border:.5px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;margin-bottom:6px;transition:background .1s" onmouseover="this.style.background=\'var(--blue-bg)\'" onmouseout="this.style.background=\'var(--white)\'">'
+    h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px">'
+    h+='<div style="font-size:11.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:72%">'+escHtml(w.wib_name)+'</div>'
+    h+='<span style="font-size:9px;color:'+scol+';font-weight:600;flex-shrink:0">'+escHtml(sl||'\u2014')+'</span></div>'
+    h+='<div style="display:flex;flex-direction:column;gap:3px;font-size:10.5px">'
+    if(w.wib_type)h+='<span style="color:var(--text2)">\uD83C\uDFDB '+escHtml(w.wib_type)+'</span>'
+    if(w.wib_email)h+='<a href="mailto:'+escAttr(w.wib_email)+'" onclick="event.stopPropagation()" style="color:var(--blue);text-decoration:none">\u2709\uFE0F '+escHtml(w.wib_email)+'</a>'
+    if(w.wib_phone)h+='<a href="tel:'+escAttr(w.wib_phone)+'" onclick="event.stopPropagation()" style="color:var(--blue);text-decoration:none">\uD83D\uDCDE '+escHtml(w.wib_phone)+'</a>'
+    if(w.source_url)h+='<a href="'+escUrl(w.source_url)+'" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:var(--blue);text-decoration:none">\uD83C\uDF10 Website \u2192</a>'
+    if(w.max_award_per_ein)h+='<span style="color:var(--green-t);font-weight:600">\uD83D\uDCB0 Max $'+Number(w.max_award_per_ein).toLocaleString()+'/EIN</span>'
+    h+='</div>'
+    if(ec.length){
+      h+='<div style="margin-top:6px;padding-top:6px;border-top:.5px solid var(--border2)">'
+      for(var ci=0;ci<ec.length;ci++){
+        var cc=ec[ci]
+        h+='<div style="font-size:10px;color:var(--text2);margin-bottom:2px">'
+        h+='<strong style="color:var(--text)">'+escHtml(cc.name||'')+'</strong>'
+        if(cc.title)h+='\u2014 '+escHtml(cc.title)
+        if(cc.email)h+='<a href="mailto:'+escAttr(cc.email)+'" onclick="event.stopPropagation()" style="display:block;color:var(--blue);text-decoration:none">\u2709\uFE0F '+escHtml(cc.email)+'</a>'
+        if(cc.phone)h+='<a href="tel:'+escAttr(cc.phone)+'" onclick="event.stopPropagation()" style="display:block;color:var(--blue);text-decoration:none">\uD83D\uDCDE '+escHtml(cc.phone)+'</a>'
+        h+='</div>'
+      }
+      h+='</div>'
     }
-    _h+='<div style="text-align:right;margin-top:3px"><span style="font-size:9px;color:var(--blue-t)">Full profile \u2192</span></div></div>'
-    return _h
+    h+='<div style="text-align:right;margin-top:3px"><span style="font-size:9px;color:var(--blue-t)">Full profile \u2192</span></div>'
+    h+='</div>'
+    return h
   }
+
   let localWibsHtml='<div style="margin-top:11px">'
   localWibsHtml+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px">'
-  localWibsHtml+='<div style="font-size:10px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px">\uD83C\uDFDB\uFE0F Local Boards \u2014 '+escHtml(d.state)+'</div>'
-  localWibsHtml+='<span style="font-size:10px;background:var(--blue-bg);color:var(--blue-t);padding:1px 7px;border-radius:10px;font-weight:600">'+_tb+' total</span>'
-  localWibsHtml+='</div>'
-  if(_cc>0){
-    localWibsHtml+='<div style="max-height:310px;overflow-y:auto;padding-right:2px">'
-    for(var _wi=0;_wi<stateWibs.length;_wi++){ localWibsHtml+=_bCard(stateWibs[_wi]) }
-    if(_mc>0){localWibsHtml+='<div style="padding:8px 10px;background:var(--gray2);border-radius:7px;font-size:10.5px;color:var(--text3);text-align:center;margin-top:4px">'+_mc+' more local board'+(_mc>1?'s':'')+' not yet in CRM \u2014 <a class="wt-cell-link" href="https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx" target="_blank" rel="noopener">find on CareerOneStop \u2192</a></div>'}
+  localWibsHtml+='<div style="font-size:10px;font-weight:700;color:var(--text2);text-transform:uppercase;letter-spacing:.5px">\uD83C\uDFDB Local Boards \u2014 '+escHtml(d.state)+'</div>'
+  localWibsHtml+='<span style="font-size:10px;background:var(--blue-bg);color:var(--blue-t);padding:1px 7px;border-radius:10px;font-weight:600">'+_totalBoards+' total</span></div>'
+  if(_crmCount>0){
+    localWibsHtml+='<div style="max-height:320px;overflow-y:auto;padding-right:2px">'
+    for(var _wi=0;_wi<stateWibs.length;_wi++){localWibsHtml+=_mkCard(stateWibs[_wi])}
+    if(_missing>0){localWibsHtml+='<div style="padding:8px 10px;background:var(--gray2);border-radius:7px;font-size:10.5px;color:var(--text3);text-align:center;margin-top:4px">'+_missing+' more local board'+(_missing>1?'s':'')+' not yet in CRM \u2014 <a class="wt-cell-link" href="https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx" target="_blank" rel="noopener">find on CareerOneStop \u2192</a></div>'}
     localWibsHtml+='</div>'
   } else {
-    localWibsHtml+='<div style="padding:10px 12px;background:var(--gray2);border-radius:7px;font-size:11px;color:var(--text3)">'+_tb+' local boards in '+escHtml(d.state)+' \u2014 none imported to CRM yet.<a class="wt-cell-link" style="display:block;margin-top:4px" href="https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx" target="_blank" rel="noopener">Find on CareerOneStop \u2192</a><button class="btn btn-xs btn-primary" style="margin-top:8px" onclick="closeAllIE();importCSV(\'wibs\')">+ Import Boards from CSV</button></div>'
+    localWibsHtml+='<div style="padding:10px 12px;background:var(--gray2);border-radius:7px;font-size:11px;color:var(--text3)">'+_totalBoards+' local boards in '+escHtml(d.state)+' \u2014 none imported to CRM yet.<a class="wt-cell-link" style="display:block;margin-top:4px" href="https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx" target="_blank" rel="noopener">Find on CareerOneStop \u2192</a><button class="btn btn-xs btn-primary" style="margin-top:8px;display:block" onclick="closeAllIE();importCSV(\'wibs\')">+ Import Boards from CSV</button></div>'
   }
   localWibsHtml+='</div>'
 
@@ -4227,13 +4258,18 @@ window._STATE_ABBR_MAP = {
 }
 
 function wtLoadMap(){
-  // Use requestAnimationFrame so the browser has committed the innerHTML to
-  // the DOM before we try to find #wt-svg. Falls back to a setTimeout retry
-  // loop if the element still isn't present (e.g. first paint not yet done).
+  // Double-rAF + 80ms: guarantees browser completes full layout paint before
+  // the map measures #wt-svg's container dimensions. The first rAF waits for
+  // the current frame commit; the inner rAF + timeout waits for the next frame
+  // plus any deferred style calculations (flex sizing, scrollbar recalc, etc.)
   if(typeof requestAnimationFrame === 'function'){
-    requestAnimationFrame(function(){ setTimeout(wtDrawInlineMap, 0) })
+    requestAnimationFrame(function(){
+      requestAnimationFrame(function(){
+        setTimeout(wtDrawInlineMap, 80)
+      })
+    })
   } else {
-    setTimeout(wtDrawInlineMap, 0)
+    setTimeout(wtDrawInlineMap, 80)
   }
 }
 
@@ -4353,21 +4389,62 @@ Keep responses under 250 words unless a list is explicitly requested. Use plain 
 
   window._wtAiHistory.push({role:'user',content:q})
 
-  // FIX 3: Route through server-side /api/ai proxy (apiAI). Direct browser
-  // calls to api.anthropic.com are CORS-blocked. Never call Anthropic directly.
-  const _hCtx=window._wtAiHistory.slice(-8).map(m=>(m.role==='user'?'User: ':'Assistant: ')+m.content).join('\n')
-  const _fp=(_hCtx?_hCtx+'\n\nUser: '+q:q)+'\n\n[Context: WIB Territory AI in Valor CRM. Selected state: '+(window._wtSelected||'none')+'. Answer concisely, plain text only, no markdown bullets.]'
+  // Route through /api/ai (server-side proxy that holds ANTHROPIC_API_KEY).
+  // Direct browser→api.anthropic.com is blocked by CORS — the server never
+  // sends Access-Control-Allow-Origin so the preflight always fails.
+  //
+  // We embed the full WIB context + conversation history into the prompt so
+  // the backend can return a rich, state-aware answer without needing sessions.
+  const _histCtx = window._wtAiHistory.slice(-10).map(m=>
+    (m.role==='user' ? 'User: ' : 'Assistant: ') + m.content
+  ).join('\n')
+
+  const _stateCtx = window._wtSelected
+    ? (function(){
+        const sd = window._WIB_STATE_DATA.find(d=>d.state===window._wtSelected)
+        return sd ? '\n\nCurrently selected state: '+sd.state+
+          '\nState WIB: '+sd.board+
+          '\nDirector: '+sd.director+' — '+sd.title+
+          '\nPhone: '+sd.phone+
+          '\nEmail: '+sd.email+
+          '\nWebsite: '+sd.website+
+          '\nLocal boards: '+sd.localBoards
+        : ''
+      })()
+    : ''
+
+  const _fullPrompt = systemPrompt +
+    '\n\n--- CONVERSATION HISTORY ---\n' + _histCtx +
+    _stateCtx +
+    '\n\n--- CURRENT USER MESSAGE ---\n' + q
+
   try{
-    const _reply=await apiAI(_fp,JSON.stringify({system:systemPrompt,wib_context:'territory_assistant',selected_state:window._wtSelected||null}))
-    window._wtAiHistory.push({role:'assistant',content:_reply})
-    if(window._wtAiHistory.length>20)window._wtAiHistory=window._wtAiHistory.slice(-20)
+    const reply = await apiAI(_fullPrompt, JSON.stringify({
+      wib_context     : 'territory_assistant',
+      selected_state  : window._wtSelected || null,
+      history_length  : window._wtAiHistory.length
+    }))
+
+    if(!reply || reply.trim() === ''){
+      throw new Error('Empty response from AI proxy. Check ANTHROPIC_API_KEY is set in Render environment variables.')
+    }
+
+    window._wtAiHistory.push({role:'assistant', content:reply})
+    if(window._wtAiHistory.length > 20) window._wtAiHistory = window._wtAiHistory.slice(-20)
     if(thinking&&thinking.parentNode){thinking.parentNode.removeChild(thinking)}
-    wtAiAppend('ai',_reply||'No response received.')
+    wtAiAppend('ai', reply)
   }catch(e){
     if(thinking&&thinking.parentNode){thinking.parentNode.removeChild(thinking)}
-    wtAiAppend('ai','\u26a0\ufe0f '+(e.message||'AI connection error'))
+    const errMsg = e.message || 'Network error'
+    const hint = errMsg.includes('API_KEY') || errMsg.includes('not configured')
+      ? '\n\nFix: Add ANTHROPIC_API_KEY to your Render environment variables, then redeploy.'
+      : errMsg.includes('fetch') || errMsg.includes('network')
+        ? '\n\nThe AI request was routed to /api/ai but the server did not respond. Check Render logs.'
+        : ''
+    wtAiAppend('ai', '⚠️ ' + errMsg + hint)
   }
 }
+
 
 async function openNewTerritoryModal(){
   // Pre-fetch users so the dropdown is ready when the modal opens
@@ -6573,74 +6650,93 @@ function pageEmails(){
    AIRCALL NOTE
 ═══════════════════════════════════════════════════ */
 function addAircallNote(recordId='',recordType=''){
-  // FIX 4b: ISO date YYYY-MM-DD for global_date so DB filter matches the Notes feed
-  let _rl='';if(recordId&&recordType==='wib_records'&&window._wibs){const _w=(window._wibs).find(x=>x.id===recordId);if(_w)_rl=' \u2014 '+_w.wib_name}if(recordId&&recordType==='companies'&&window._companies){const _c=(window._companies).find(x=>x.id===recordId);if(_c)_rl=' \u2014 '+_c.company_name}
-  showModal('\uD83D\uDCDE Log Aircall Note'+_rl,`
-    <div class="alert alert-info" style="margin-bottom:10px">\uD83D\uDCCB <strong>Auto cross-posting ON:</strong> saves to record Notes tab <em>and</em> global Notes feed under today's date.</div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Call Notes / Summary <span class="form-req">*</span></div><textarea id="aircall-notes" rows="5" placeholder="Call with WIB Director &#x2014; discussed Q3 funding cycle..."></textarea></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Duration</div><input id="aircall-dur" placeholder="15m"></div><div class="form-group"><div class="form-label">Direction</div><select id="aircall-dir"><option>Outbound</option><option>Inbound</option></select></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">\uD83D\uDD17 Recording URL (optional)</div><input id="aircall-url" type="url" placeholder="https://assets.aircall.io/calls/..."></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Caller / Contact Name (optional)</div><input id="aircall-caller" placeholder="e.g. Amy Pechacek"></div></div>
+  // FIX 4b: cross-post uses ISO date (YYYY-MM-DD) so the global daily feed DB filter matches
+  let recLabel=''
+  if(recordId&&recordType==='wib_records'&&window._wibs){const w=(window._wibs).find(x=>x.id===recordId);if(w)recLabel=' \u2014 '+w.wib_name}
+  if(recordId&&recordType==='companies'&&window._companies){const c=(window._companies).find(x=>x.id===recordId);if(c)recLabel=' \u2014 '+c.company_name}
+  showModal('\uD83D\uDCDE Log Aircall Note'+recLabel,`
+    <div class="alert alert-info" style="margin-bottom:10px">
+      \uD83D\uDCCB <strong>Auto cross-posting ON.</strong> Saves under the record's Notes tab <em>and</em> posts to the global Notes daily feed — including the recording link.
+    </div>
+    <div class="form-row form-full"><div class="form-group"><div class="form-label">Call Notes / Summary <span class="form-req">*</span></div>
+      <textarea id="aircall-notes" rows="5" placeholder="Call with WIB Director — discussed Q3 funding cycle...&#10;Key points: Program open until June 30, max $50K per employer...&#10;Follow-up: Send application template by Friday"></textarea>
+    </div></div>
+    <div class="form-row">
+      <div class="form-group"><div class="form-label">Duration</div><input id="aircall-dur" placeholder="15m"></div>
+      <div class="form-group"><div class="form-label">Direction</div><select id="aircall-dir"><option>Outbound</option><option>Inbound</option></select></div>
+    </div>
+    <div class="form-row form-full"><div class="form-group">
+      <div class="form-label">\uD83D\uDD17 Recording URL (Aircall audio link — optional)</div>
+      <input id="aircall-url" type="url" placeholder="https://assets.aircall.io/calls/...">
+    </div></div>
+    <div class="form-row form-full"><div class="form-group">
+      <div class="form-label">Caller / Contact Name (optional)</div>
+      <input id="aircall-caller" placeholder="e.g. Amy Pechacek, WIB Director">
+    </div></div>
     <label class="chk-row" style="margin-top:6px"><input type="checkbox" id="aircall-global" checked> Also post to global Notes feed (daily tracker)</label>`,
   async()=>{
-    const notes=document.getElementById('aircall-notes').value.trim()
-    const dur=document.getElementById('aircall-dur').value.trim()
-    const dir=document.getElementById('aircall-dir').value
-    const url=document.getElementById('aircall-url').value.trim()
-    const caller=document.getElementById('aircall-caller').value.trim()
-    const doGlobal=document.getElementById('aircall-global').checked
+    const notes  = document.getElementById('aircall-notes').value.trim()
+    const dur    = document.getElementById('aircall-dur').value.trim()
+    const dir    = document.getElementById('aircall-dir').value
+    const url    = document.getElementById('aircall-url').value.trim()
+    const caller = document.getElementById('aircall-caller').value.trim()
+    const doGlobal = document.getElementById('aircall-global').checked
     if(!notes){showToast('Please enter call notes','warn');return false}
-    const _ns=new Date().toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'})
-    const _id=new Date().toISOString().slice(0,10)
-    const _hd=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})
-    const _fc=['Call ('+(dur||'?')+'m) \u2014 '+dir+(caller?' \u2014 '+caller:''),'Date: '+_ns,'',notes,url?'\n\uD83D\uDD17 Recording: '+url:''].filter(x=>x!==undefined).join('\n').trim()
-    const _m={duration:dur||null,direction:dir,caller:caller||null,recording_url:url||null,call_date:new Date().toISOString(),is_aircall:true,note_type:'Aircall',global_date:_id,global_date_human:_hd}
-    let payload;try{payload=buildNotePayload(_fc,'Aircall',{record_type:recordType||null,record_id:recordId||null,metadata:_m})}catch(e){showToast(e.message,'error');return false}
+    const nowStr = new Date().toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'})
+    const isoDate    = new Date().toISOString().slice(0,10)  // YYYY-MM-DD — matches DB filter
+    const humanDate  = new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})
+    const fullContent = ['Call ('+(dur||'?')+'m) \u2014 '+dir+(caller?' \u2014 '+caller:''),'Date: '+nowStr,'',notes,url?'\n\uD83D\uDD17 Recording: '+url:''].filter(x=>x!==undefined).join('\n').trim()
+    const meta = {duration:dur||null,direction:dir,caller:caller||null,recording_url:url||null,call_date:new Date().toISOString(),is_aircall:true,note_type:'Aircall',global_date:isoDate,global_date_human:humanDate}
+    let payload
+    try{payload=buildNotePayload(fullContent,'Aircall',{record_type:recordType||null,record_id:recordId||null,metadata:meta})}catch(e){showToast(e.message,'error');return false}
     try{
       await api('/api/notes','POST',payload)
       if(doGlobal){
-        let _ctx='';if(recordType==='wib_records'&&window._wibs){const _gw=(window._wibs).find(x=>x.id===recordId);if(_gw)_ctx='WIB: '+_gw.wib_name+(_gw.state?' ('+_gw.state+')':'')+' \n'}if(recordType==='companies'&&window._companies){const _gc=(window._companies).find(x=>x.id===recordId);if(_gc)_ctx='Company: '+_gc.company_name+'\n'}
-        const _gc2=['\uD83D\uDCDE Aircall Log \u2014 '+_hd,_ctx,'Call ('+(dur||'?')+'m) \u2014 '+dir+(caller?' \u2014 '+caller:''),'',notes,url?'\n\uD83D\uDD17 Recording: '+url:''].filter(x=>x!==undefined).join('\n').trim()
-        let _gp;try{_gp=buildNotePayload(_gc2,'Aircall',{metadata:Object.assign({},_m,{cross_posted_from:recordId||null,cross_posted_type:recordType||null,global_date:_id,global_date_human:_hd})})}catch(_){}
-        if(_gp) api('/api/notes','POST',_gp).catch(()=>{})
+        let ctx=''
+        if(recordType==='wib_records'&&window._wibs){const w=(window._wibs).find(x=>x.id===recordId);if(w)ctx='WIB: '+w.wib_name+(w.state?' ('+w.state+')':'')+'\n'}
+        if(recordType==='companies'&&window._companies){const c=(window._companies).find(x=>x.id===recordId);if(c)ctx='Company: '+c.company_name+'\n'}
+        const gc=['\uD83D\uDCDE Aircall Log \u2014 '+humanDate,ctx,'Call ('+(dur||'?')+'m) \u2014 '+dir+(caller?' \u2014 '+caller:''),'',notes,url?'\n\uD83D\uDD17 Recording: '+url:''].filter(x=>x!==undefined).join('\n').trim()
+        const gm=Object.assign({},meta,{cross_posted_from:recordId||null,cross_posted_type:recordType||null,global_date:isoDate,global_date_human:humanDate})
+        let gp;try{gp=buildNotePayload(gc,'Aircall',{metadata:gm})}catch(_){}
+        if(gp)api('/api/notes','POST',gp).catch(()=>{})
       }
       showToast(doGlobal?'\u2705 Call logged & cross-posted to global Notes':'\uD83D\uDCDE Call note saved','success')
-      if(currentPage==='wib-profile') loadWibTabData(wibTab)
+      if(currentPage==='wib-profile')    loadWibTabData(wibTab)
       if(currentPage==='company-profile') loadCompanyTabData(companyTab)
-      if(currentPage==='calls') pageCalls()
-      if(currentPage==='notes') loadPage('notes')
+      if(currentPage==='calls')           pageCalls()
+      if(currentPage==='notes')           loadPage('notes')
     }catch(e){showToast(e.message,'error');return false}
   })
 }
 
-// Aircall webhook listener — auto-logs calls from Chrome extension
+// ── Aircall postMessage webhook — auto-fires on call completion ──────────────
 window._aircallListenerActive=false
 function initAircallWebhookListener(){
   if(window._aircallListenerActive)return
   window._aircallListenerActive=true
   window.addEventListener('message',function(evt){
-    const _tr=['https://phone.aircall.io','https://app.aircall.io']
-    if(!_tr.some(o=>evt.origin.startsWith(o))&&evt.origin!==window.location.origin)return
-    const _d=evt.data||{}
-    if(_d.type!=='call_ended'&&_d.type!=='call_hangup'&&_d.name!=='callEnded'&&_d.event!=='call.ended')return
-    const _cd=_d.data||_d.call||_d
-    const _dur=_cd.duration?Math.ceil(_cd.duration/60)+'m':'?'
-    const _dir=(_cd.direction||_cd.call_direction||'outbound');const _dirc=_dir.charAt(0).toUpperCase()+_dir.slice(1)
-    const _ag=_cd.user?.name||_cd.user_name||currentUser?.full_name||''
-    const _ru=_cd.recording||_cd.recording_url||''
-    const _ph=_cd.number?.digits||_cd.customer?.phone_number||_cd.phone_number||''
-    const _ns=new Date().toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'})
-    const _id=new Date().toISOString().slice(0,10)
-    const _hd=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})
-    const _ac=['\uD83D\uDCDE Aircall \u2014 '+_dirc+' ('+_dur+')'+((_ph)?' with '+_ph:''),'Agent: '+(_ag||'Unknown'),'Date: '+_ns,_ru?'\uD83D\uDD17 Recording: '+_ru:''].filter(Boolean).join('\n')
-    const _mt={duration:_dur,direction:_dirc,caller:_ag||null,recording_url:_ru||null,phone_number:_ph||null,call_date:new Date().toISOString(),is_aircall:true,note_type:'Aircall',auto_logged:true,global_date:_id,global_date_human:_hd}
-    const _ri=currentPage==='wib-profile'?currentWib?.id:currentPage==='company-profile'?currentCompany?.id:null
-    const _rt=currentPage==='wib-profile'?'wib_records':currentPage==='company-profile'?'companies':null
-    if(_ri&&_rt){let _p;try{_p=buildNotePayload(_ac,'Aircall',{record_type:_rt,record_id:_ri,metadata:_mt})}catch(_){};if(_p)api('/api/notes','POST',_p).catch(()=>{})}
-    const _gc='\uD83D\uDCDE Aircall Log \u2014 '+_hd+'\n\n'+_ac
-    let _gp;try{_gp=buildNotePayload(_gc,'Aircall',{metadata:Object.assign({},_mt,{cross_posted_from:_ri,cross_posted_type:_rt})})}catch(_){}
-    if(_gp)api('/api/notes','POST',_gp).catch(()=>{})
-    showToast('\uD83D\uDCDE Aircall auto-logged ('+_dirc+' '+_dur+')','success')
+    const trusted=['https://phone.aircall.io','https://app.aircall.io']
+    if(!trusted.some(o=>evt.origin.startsWith(o))&&evt.origin!==window.location.origin)return
+    const d=evt.data||{}
+    if(d.type!=='call_ended'&&d.type!=='call_hangup'&&d.name!=='callEnded'&&d.event!=='call.ended')return
+    const cd=d.data||d.call||d
+    const dur=cd.duration?Math.ceil(cd.duration/60)+'m':'?'
+    const dirRaw=(cd.direction||cd.call_direction||'outbound')
+    const dir=dirRaw.charAt(0).toUpperCase()+dirRaw.slice(1)
+    const agent=cd.user?.name||cd.user_name||currentUser?.full_name||''
+    const recUrl=cd.recording||cd.recording_url||''
+    const phone=cd.number?.digits||cd.customer?.phone_number||cd.phone_number||''
+    const nowStr=new Date().toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'})
+    const isoDate=new Date().toISOString().slice(0,10)
+    const humanDate=new Date().toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})
+    const autoContent=['\uD83D\uDCDE Aircall \u2014 '+dir+' ('+dur+')'+(phone?' with '+phone:''),'Agent: '+(agent||'Unknown'),'Date: '+nowStr,recUrl?'\uD83D\uDD17 Recording: '+recUrl:''].filter(Boolean).join('\n')
+    const meta={duration:dur,direction:dir,caller:agent||null,recording_url:recUrl||null,phone_number:phone||null,call_date:new Date().toISOString(),is_aircall:true,note_type:'Aircall',auto_logged:true,global_date:isoDate,global_date_human:humanDate}
+    const recId=currentPage==='wib-profile'?currentWib?.id:currentPage==='company-profile'?currentCompany?.id:null
+    const recType=currentPage==='wib-profile'?'wib_records':currentPage==='company-profile'?'companies':null
+    if(recId&&recType){let p;try{p=buildNotePayload(autoContent,'Aircall',{record_type:recType,record_id:recId,metadata:meta})}catch(_){};if(p)api('/api/notes','POST',p).catch(()=>{})}
+    let gp;try{gp=buildNotePayload('\uD83D\uDCDE Aircall Log \u2014 '+humanDate+'\n\n'+autoContent,'Aircall',{metadata:Object.assign({},meta,{cross_posted_from:recId,cross_posted_type:recType})})}catch(_){}
+    if(gp)api('/api/notes','POST',gp).catch(()=>{})
+    showToast('\uD83D\uDCDE Aircall auto-logged ('+dir+' '+dur+')','success')
   })
 }
 if(document.readyState==='complete'||document.readyState==='interactive'){initAircallWebhookListener()}
@@ -6914,46 +7010,176 @@ async function runFullImport(){
     return mapped
   }).filter(r=>Object.keys(r).length>0)
 
-  // FIX 2: Pre-flight dedup — cross-reference incoming rows against window._companies
-  // by Name, Email, Phone. Drops matches BEFORE any DB write.
-  function _n(s){ return String(s||'').toLowerCase().replace(/[\s\-\.,()']/g,'') }
-  function _p(p){ return String(p||'').replace(/\D/g,'').replace(/^1/,'') }
-  let finalRows = mappedRows
-  if(type==='companies' && window._companies && window._companies.length){
-    const _ds=new Set()
+  // ── Dedup helpers ────────────────────────────────────────────────────────
+  function _normS(s){ return String(s||'').toLowerCase().replace(/[\s\-\.,()']/g,'') }
+  function _normP(p){ return String(p||'').replace(/\D/g,'').replace(/^1/,'') }
+
+  // ── Build lookup sets from existing CRM records ───────────────────────────
+  const _existingKeys = new Set()
+  const _existingMap  = {}   // normalised-key → existing CRM record (for merge)
+  if(type === 'companies' && window._companies && window._companies.length){
     window._companies.forEach(c=>{
-      if(c.company_name) _ds.add('n:'+_n(c.company_name))
-      if(c.primary_contact_email) _ds.add('e:'+_n(c.primary_contact_email))
-      const _ph=_p(c.primary_contact_phone||'');if(_ph.length>=7) _ds.add('p:'+_ph)
+      const nk = 'n:'+_normS(c.company_name||'')
+      const ek = c.primary_contact_email ? 'e:'+_normS(c.primary_contact_email) : null
+      const ph = _normP(c.primary_contact_phone||'')
+      const pk = ph.length >= 7 ? 'p:'+ph : null
+      if(nk){_existingKeys.add(nk);_existingMap[nk]=c}
+      if(ek){_existingKeys.add(ek);_existingMap[ek]=c}
+      if(pk){_existingKeys.add(pk);_existingMap[pk]=c}
     })
-    const _bc=mappedRows.length
-    finalRows=mappedRows.filter(row=>{
-      if(!row.company_name) return true
-      if(_ds.has('n:'+_n(row.company_name))) return false
-      if(row.primary_contact_email && _ds.has('e:'+_n(row.primary_contact_email))) return false
-      const _rp=_p(row.primary_contact_phone||'');if(_rp.length>=7 && _ds.has('p:'+_rp)) return false
-      return true
-    })
-    const _sk=_bc-finalRows.length
-    if(_sk>0) showToast('FIX2: '+_sk+' duplicate company row'+(_sk>1?'s':'')+' blocked before DB write','warn')
   }
-  if(type==='wibs' && window._wibs && window._wibs.length){
-    const _wds=new Set()
+  if(type === 'wibs' && window._wibs && window._wibs.length){
     window._wibs.forEach(w=>{
-      if(w.wib_name) _wds.add('n:'+_n(w.wib_name))
-      if(w.wib_email) _wds.add('e:'+_n(w.wib_email))
+      const nk='n:'+_normS(w.wib_name||'')
+      const ek=w.wib_email?'e:'+_normS(w.wib_email):null
+      if(nk){_existingKeys.add(nk);_existingMap[nk]=w}
+      if(ek){_existingKeys.add(ek);_existingMap[ek]=w}
     })
-    const _wb=finalRows.length
-    finalRows=finalRows.filter(row=>{
-      if(!row.wib_name) return true
-      if(_wds.has('n:'+_n(row.wib_name))) return false
-      if(row.wib_email && _wds.has('e:'+_n(row.wib_email))) return false
-      return true
-    })
-    const _ws=_wb-finalRows.length
-    if(_ws>0) showToast('FIX2: '+_ws+' duplicate WIB row'+(_ws>1?'s':'')+' blocked before DB write','warn')
   }
-  if(finalRows.length===0) finalRows=mappedRows
+
+  // ── Identify duplicates and present interactive resolution modal ──────────
+  function _matchKey(row){
+    if(type==='companies'){
+      const nk='n:'+_normS(row.company_name||'')
+      if(_existingKeys.has(nk))return nk
+      if(row.primary_contact_email){const ek='e:'+_normS(row.primary_contact_email);if(_existingKeys.has(ek))return ek}
+      const ph=_normP(row.primary_contact_phone||'');if(ph.length>=7){const pk='p:'+ph;if(_existingKeys.has(pk))return pk}
+    } else if(type==='wibs'){
+      const nk='n:'+_normS(row.wib_name||'')
+      if(_existingKeys.has(nk))return nk
+      if(row.wib_email){const ek='e:'+_normS(row.wib_email);if(_existingKeys.has(ek))return ek}
+    }
+    return null
+  }
+
+  // Separate clean rows from duplicate rows
+  const cleanRows  = []
+  const dupRows    = []
+  mappedRows.forEach(row=>{
+    const mk = _matchKey(row)
+    if(mk){ dupRows.push({row, matchKey:mk, existingRecord:_existingMap[mk]}) }
+    else   { cleanRows.push(row) }
+  })
+
+  // If duplicates exist, show the interactive resolution modal and wait for user decisions
+  let finalRows = cleanRows
+  if(dupRows.length > 0){
+    const resolutions = await new Promise(resolve=>{
+      const decisions = dupRows.map(()=>'discard')  // default: discard
+
+      const rowsHtml = dupRows.map((item,i)=>{
+        const inName  = item.row.company_name||item.row.wib_name||'(no name)'
+        const exName  = item.existingRecord?.company_name||item.existingRecord?.wib_name||'Existing record'
+        const matchOn = item.matchKey.startsWith('n:')?'Name':item.matchKey.startsWith('e:')?'Email':'Phone'
+        return `<div style="border:.5px solid var(--amber);border-radius:9px;padding:12px 14px;margin-bottom:10px;background:var(--amber-bg)" id="dup-card-${i}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="background:var(--amber);color:#fff;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:700">⚠ DUPLICATE</span>
+            <span style="font-size:11px;color:var(--amber-t)">Matched on <strong>${matchOn}</strong></span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+            <div style="background:var(--white);border-radius:7px;padding:9px 11px;border:.5px solid var(--border)">
+              <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px;font-weight:700">📥 Incoming row ${i+1}</div>
+              <div style="font-size:12px;font-weight:600">${escHtml(inName)}</div>
+              ${item.row.primary_contact_email||item.row.wib_email?'<div style="font-size:10px;color:var(--text3)">'+escHtml(item.row.primary_contact_email||item.row.wib_email||'')+'</div>':''}
+            </div>
+            <div style="background:var(--white);border-radius:7px;padding:9px 11px;border:.5px solid var(--border)">
+              <div style="font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;margin-bottom:3px;font-weight:700">📋 Existing in CRM</div>
+              <div style="font-size:12px;font-weight:600;color:var(--nv)">${escHtml(exName)}</div>
+              ${item.existingRecord?.status?'<div style="font-size:10px;color:var(--text3)">Status: '+item.existingRecord.status+'</div>':''}
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+            <button class="btn btn-xs dup-btn" data-idx="${i}" data-action="merge"
+              style="background:var(--green-bg);color:var(--green-t);border-color:var(--green);padding:7px;text-align:center;cursor:pointer"
+              onclick="window._dupSetDecision(${i},'merge')">
+              🔀 Merge<br><span style="font-size:9px;font-weight:400">Add new fields to existing</span>
+            </button>
+            <button class="btn btn-xs dup-btn" data-idx="${i}" data-action="discard"
+              style="background:var(--red-bg);color:var(--red-t);border-color:var(--red);padding:7px;text-align:center;cursor:pointer"
+              onclick="window._dupSetDecision(${i},'discard')">
+              🗑 Discard<br><span style="font-size:9px;font-weight:400">Skip this row</span>
+            </button>
+            <button class="btn btn-xs dup-btn" data-idx="${i}" data-action="insert"
+              style="padding:7px;text-align:center;cursor:pointer"
+              onclick="window._dupSetDecision(${i},'insert')">
+              ➕ Keep Going<br><span style="font-size:9px;font-weight:400">Insert anyway</span>
+            </button>
+          </div>
+        </div>`
+      }).join('')
+
+      document.getElementById('modal-container').innerHTML=`
+      <div class="modal-overlay" onclick="event.stopPropagation()">
+        <div class="modal modal-xl" onclick="event.stopPropagation()" style="max-height:90vh;display:flex;flex-direction:column">
+          <div class="modal-hd">
+            <div class="modal-title">⚠️ ${dupRows.length} Duplicate${dupRows.length>1?'s':''} Found — Choose Action</div>
+          </div>
+          <div class="modal-body" style="flex:1;overflow-y:auto">
+            <div class="alert alert-warn" style="margin-bottom:12px">
+              These incoming rows match records already in the CRM. Choose what to do with each one, then click <strong>Apply Decisions</strong>.
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:14px;padding-bottom:12px;border-bottom:.5px solid var(--border)">
+              <span style="font-size:11px;color:var(--text2);align-self:center">Apply to all:</span>
+              <button class="btn btn-xs" style="background:var(--green-bg);color:var(--green-t)" onclick="window._dupSetAll('merge')">🔀 Merge All</button>
+              <button class="btn btn-xs" style="background:var(--red-bg);color:var(--red-t)" onclick="window._dupSetAll('discard')">🗑 Discard All</button>
+              <button class="btn btn-xs" onclick="window._dupSetAll('insert')">➕ Keep All</button>
+            </div>
+            ${rowsHtml}
+          </div>
+          <div class="modal-foot">
+            <button class="btn btn-ghost" onclick="window._dupResolve(null)">Cancel Import</button>
+            <button class="btn btn-primary" onclick="window._dupResolve(window._dupDecisions)">Apply Decisions & Continue Import</button>
+          </div>
+        </div>
+      </div>`
+
+      window._dupDecisions = [...decisions]
+
+      window._dupSetDecision = function(idx, action){
+        window._dupDecisions[idx] = action
+        const card = document.getElementById('dup-card-'+idx)
+        if(card){
+          card.querySelectorAll('.dup-btn').forEach(b=>{
+            const isSel = b.dataset.action === action
+            b.style.opacity = isSel ? '1' : '0.4'
+            b.style.transform = isSel ? 'scale(1.04)' : 'scale(1)'
+          })
+        }
+      }
+
+      window._dupSetAll = function(action){
+        window._dupDecisions = window._dupDecisions.map(()=>action)
+        dupRows.forEach((_,i)=>window._dupSetDecision(i,action))
+      }
+
+      window._dupResolve = function(decisions){
+        document.getElementById('modal-container').innerHTML=''
+        window._dupSetDecision=null; window._dupSetAll=null; window._dupResolve=null
+        resolve(decisions)
+      }
+    })
+
+    if(resolutions === null){
+      // User cancelled
+      if(btn){btn.textContent='Import';btn.disabled=false}
+      return false
+    }
+
+    // Apply decisions: merge rows get flagged for server-side merge; insert rows added as-is; discard rows dropped
+    const mergeRows   = []
+    const insertExtra = []
+    resolutions.forEach((action,i)=>{
+      const item = dupRows[i]
+      if(action === 'merge'){
+        mergeRows.push({...item.row, _merge_into_id: item.existingRecord.id, _action:'merge'})
+      } else if(action === 'insert'){
+        insertExtra.push(item.row)
+      }
+      // 'discard' → nothing added
+    })
+    finalRows = [...cleanRows, ...insertExtra, ...mergeRows]
+  }
+
   const CHUNK=50,totalBatches=Math.ceil(finalRows.length/CHUNK)
   let totalCreated=0,totalErrors=[]
 
@@ -7007,7 +7233,7 @@ async function runFullImport(){
     <div class="import-summary">
       <div class="import-summary-item"><div class="isn" style="color:var(--green-t)">${totalCreated.toLocaleString()}</div><div class="isl">Records imported</div></div>
       <div class="import-summary-item"><div class="isn" style="color:${totalErrors.length?'var(--amber-t)':'var(--text3)'}">${totalErrors.length}</div><div class="isl">Rows skipped</div></div>
-      <div class="import-summary-item"><div class="isn">${finalRows.length.toLocaleString()}</div><div class="isl">Rows processed</div></div>
+      <div class="import-summary-item"><div class="isn">${(finalRows?.length||0).toLocaleString()}</div><div class="isl">Rows processed</div></div>
     </div>${totalErrors.length?`<div class="alert alert-warn" style="margin-top:10px">⚠️ ${totalErrors.length} skipped: ${totalErrors.slice(0,3).join('; ')}${totalErrors.length>3?'...':''}</div>`:''}`
 
     showToast(`✅ Imported ${totalCreated.toLocaleString()} records${totalErrors.length?' ('+totalErrors.length+' skipped)':''}`,totalErrors.length?'warn':'success')
