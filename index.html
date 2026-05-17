@@ -7203,10 +7203,11 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
   if(missingRequired.length){
     const missingLabels=missingRequired.map(f=>'<strong>'+escHtml(f.label.split('(')[0].trim())+'</strong>').join(', ')
     requiredWarningHtml='<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px">'
-      +'<div style="font-weight:600;margin-bottom:6px">&#9888;&#65039; Required column'+(missingRequired.length>1?'s':'')+' not mapped: '+missingLabels+'</div>'
-      +'<div style="font-size:11px;font-weight:600;color:var(--red-t);margin-bottom:5px">Your file&#39;s '+sourceHeaders.length+' columns:</div>'
-      +'<div style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px">'+headerBadgesHtml+'</div>'
-      +'<div style="font-size:11px;color:var(--red-t)">Use the dropdowns below to map one of your columns to the required field.</div>'
+      +'<div style="font-weight:600;margin-bottom:4px">&#9888;&#65039; Required column'+(missingRequired.length>1?'s':'')+' not mapped: '+missingLabels+'</div>'
+      +'<div style="font-size:11px;color:var(--red-t);margin-bottom:0">Use the dropdowns below to map one of your columns to the required field.</div>'
+      +'<details style="margin-top:6px"><summary style="font-size:10.5px;font-weight:600;color:var(--red-t);cursor:pointer">Your file\'s '+sourceHeaders.length+' columns (click to expand)</summary>'
+      +'<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:5px">'+headerBadgesHtml+'</div>'
+      +'</details>'
       +'</div>'
   }
 
@@ -7320,9 +7321,9 @@ function _refreshRequiredWarning(type){
   const btn=document.getElementById('modal-ok-btn')
   if(missingRequired.length){
     const html=`<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px">
-      ⚠️ <strong>Still missing required column${missingRequired.length>1?'s':''}:</strong>
-      ${missingRequired.map(f=>`<strong>${f.label.split('(')[0].trim()}</strong>`).join(', ')}
-      — map one of your columns to it above.
+      <div style="font-weight:600;margin-bottom:4px">⚠️ <strong>Still missing required column${missingRequired.length>1?'s':''}:</strong>
+      ${missingRequired.map(f=>`<strong>${f.label.split('(')[0].trim()}</strong>`).join(', ')}</div>
+      <div style="font-size:11px;color:var(--red-t)">Use the dropdowns below to map one of your columns to the required field.</div>
     </div>`
     if(existingWarn) existingWarn.outerHTML=html
     else{const prev=document.getElementById('import-preview');if(prev)prev.insertAdjacentHTML('afterbegin',html)}
