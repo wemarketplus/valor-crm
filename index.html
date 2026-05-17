@@ -3836,6 +3836,18 @@ window._IMPORT_SYNONYM_TABLE={
   'submission date':'submission_date','submitted':'submission_date','decision date':'decision_date',
   'hubspot company id':'__skip','record id':'__skip','create date':'__skip','created time':'__skip',
   'account id':'__skip','sf id':'__skip','salesforce id':'__skip','annual revenue':'__skip',
+  /* Relational path columns from CRM exports — always skip */
+  'parent operator > status':'__skip',
+  'parent operator > status changed at':'__skip',
+  'parent operator > status previous values':'__skip',
+  'zipcode > regional wib > funding opportunities':'__skip',
+  'zipcode > regional wib > funding opportunities > status':'__skip',
+  'zipcode > regional wib > funding opportunities > status changed at':'__skip',
+  'zipcode > regional wib > funding opportunities > status previous values':'__skip',
+  'zipcode > state wib > funding opportunities':'__skip',
+  'zipcode > state wib > funding opportunities > status':'__skip',
+  'zipcode > state wib > funding opportunities > status changed at':'__skip',
+  'zipcode > state wib > funding opportunities > status previous values':'__skip',
   'lead source':'cms_channel','associated company':'company_name','linked company':'company_name','linked wib':'wib_name',
   /* legacy key aliases — for files exported from older versions of this app */
   'parent operator':{'locations':'parent_company_name'},'parent_operator':'parent_company_name',
@@ -3919,13 +3931,16 @@ function _resolveRelationalHeader(header, type, fieldDefs){
     .filter(w=>w.length>1)
   if(!words.length) return null
 
+  /* Compound relational headers (3+ tokens) need >= 2 keyword hits to avoid
+     false positives like "Parent Operator > Status Changed At" -> status */
+  const minScore = words.length >= 3 ? 2 : 1
+
   let best=null, bestScore=0
   fieldDefs.forEach(f=>{
     const s = _scoreHeaderAgainstField(words, f.key)
     if(s > bestScore){ bestScore=s; best=f.key }
   })
-  /* Require at least 1 keyword hit to suggest anything */
-  return bestScore >= 1 ? best : null
+  return bestScore >= minScore ? best : null
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -8102,17 +8117,19 @@ function smartMatch(header, type) {
   }
   /* 6. Relational keyword scorer — handles compound headers like
         "Zipcode > Regional WIB > Funding Opportunities > Status"
-        Tokenise on separators; score each candidate field by keyword hits */
+        Tokenise on separators; score each candidate field by keyword hits.
+        Compound headers (3+ tokens) need >= 2 hits to avoid false positives. */
   var words = header.toLowerCase().split(/[\s>\|\-_\/\\.,;:]+/)
     .map(function(w){ return w.replace(/[^a-z0-9]/g,'') })
     .filter(function(w){ return w.length > 1 })
   if (words.length) {
+    var minScore = words.length >= 3 ? 2 : 1
     var bestKey = null, bestScore = 0
     fields.forEach(function(f) {
       var s = _smartKeywordScore(words, f.key)
       if (s > bestScore) { bestScore = s; bestKey = f.key }
     })
-    if (bestScore >= 1) return bestKey
+    if (bestScore >= minScore) return bestKey
   }
   return '__skip'
 }
