@@ -687,6 +687,10 @@ textarea{resize:vertical;min-height:70px}
 .terr-cell{display:flex;flex-wrap:wrap;gap:2px;align-items:center}
 @keyframes tspin{to{transform:rotate(360deg)}}
 .t-saving{display:inline-block;width:11px;height:11px;border:1.5px solid currentColor;border-top-color:transparent;border-radius:50%;animation:tspin .6s linear infinite}
+.progress-bar{height:5px;border-radius:3px;background:var(--gray2);overflow:hidden;margin:4px 0}
+.progress-bar-fill{height:100%;border-radius:3px;background:var(--blue);transition:width .3s}
+.row-actions{display:flex;gap:4px;opacity:0;transition:opacity .15s}
+tr:hover .row-actions{opacity:1}
 
 </style>
 </head>
@@ -792,8 +796,11 @@ function escCsvCell(v) {
 
 
 function clearCoFilters(){ window._coFilters={search:'',status:'',rating:'',state:''}; renderCompaniesTable(window._companies||[]) }
-window._wibFilters = { search:'', status:'', state:'', type:'', owner:'' }
-window._locFilters = { search:'' }
+function clearWibFilters(){ window._wibsFilters={search:'',status:'',state:'',type:'',owner:''};window._wibFilters=window._wibsFilters; renderWibTable(window._wibs||[]) }
+function clearLocFilters(){ window._locFilters={search:'',state:'',status:''}; renderLocationsTable(window._locations||[]) }
+window._wibsFilters = { search:'', status:'', state:'', type:'', owner:'' }
+window._wibFilters  = window._wibsFilters   // canonical alias
+window._locFilters  = { search:'', state:'', status:'' }
 window._importRows = null
 window._importType = null
 window._importStep = 1
@@ -1701,14 +1708,15 @@ function renderWibTable(wibs){
       <div class="att-toolbar-l">
         <div class="search-box">
           <span class="search-icon">🔍</span>
-          <input placeholder="Search workforce boards..." value="${q}" oninput="window._wibFilters.search=this.value;renderWibTable(window._wibs)">
+          <input placeholder="Search workforce boards..." value="${q}" oninput="window._wibFilters.search=this.value;window._wibsFilters.search=this.value;renderWibTable(window._wibs)">
         </div>
         <div class="att-filter-bar">
           <div class="att-sort-chip">⇅ Sorted by <strong>READONLY In-Network 4-5 Star Locations -daily</strong></div>
           <button class="btn btn-sm" onclick="showWibFilterModal()" style="display:inline-flex;align-items:center;gap:4px">⊟ Filter</button>
-          ${window._wibFilters.status?`<div class="att-filter-chip"><span class="afc-key">Status</span><span class="afc-is">is</span><span class="afc-pill">${window._wibFilters.status.replace(/_/g,' ')}</span><span class="afc-more" onclick="window._wibFilters.status='';renderWibTable(window._wibs)">✕</span></div>`:''}
-          ${window._wibFilters.state?`<div class="att-filter-chip"><span class="afc-key">State</span><span class="afc-is">is</span><span class="afc-pill">${window._wibFilters.state}</span><span class="afc-more" onclick="window._wibFilters.state='';renderWibTable(window._wibs)">✕</span></div>`:''}
-          ${window._wibFilters.type?`<div class="att-filter-chip"><span class="afc-key">Type</span><span class="afc-is">is</span><span class="afc-pill">${window._wibFilters.type}</span><span class="afc-more" onclick="window._wibFilters.type='';renderWibTable(window._wibs)">✕</span></div>`:''}
+          ${window._wibFilters.status?`<div class="att-filter-chip"><span class="afc-key">Status</span><span class="afc-is">is</span><span class="afc-pill">${window._wibFilters.status.replace(/_/g,' ')}</span><span class="afc-more" onclick="window._wibFilters.status='';window._wibsFilters.status='';renderWibTable(window._wibs)">✕</span></div>`:''}
+          ${window._wibFilters.state?`<div class="att-filter-chip"><span class="afc-key">State</span><span class="afc-is">is</span><span class="afc-pill">${window._wibFilters.state}</span><span class="afc-more" onclick="window._wibFilters.state='';window._wibsFilters.state='';renderWibTable(window._wibs)">✕</span></div>`:''}
+          ${window._wibFilters.type?`<div class="att-filter-chip"><span class="afc-key">Type</span><span class="afc-is">is</span><span class="afc-pill">${window._wibFilters.type}</span><span class="afc-more" onclick="window._wibFilters.type='';window._wibsFilters.type='';renderWibTable(window._wibs)">✕</span></div>`:''}
+          ${(window._wibFilters.status||window._wibFilters.state||window._wibFilters.type||window._wibFilters.search)?`<div class="att-filter-chip" style="background:var(--amber-bg);border-color:var(--amber);cursor:pointer" onclick="clearWibFilters()"><span style="color:var(--amber-t);font-weight:600;font-size:9px">✕ Clear Filters</span></div>`:''}
         </div>
       </div>
       <div class="att-toolbar-r">
@@ -2266,12 +2274,46 @@ function renderNoteCard(n){
   const noteDateTime = fmtNoteDateTime(meta.timestamp || n.created_at)
 
   if(aircall){
-    const durationBadge = meta.duration
-      ? `<span style="background:var(--green-bg);color:var(--green-t);padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600;margin-left:6px">${meta.duration}m</span>`
+    // ── Duration badge ────────────────────────────────────────────────────
+    const durSec = meta.duration_seconds ? parseInt(meta.duration_seconds, 10) : 0
+    const durLabel = meta.duration || (durSec > 0 ? (Math.floor(durSec/60)>0?Math.floor(durSec/60)+'m ':'') + (durSec%60)+'s' : null)
+    const durationBadge = durLabel
+      ? `<span style="background:var(--green-bg);color:var(--green-t);padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600;margin-left:6px">${escHtml(durLabel)}</span>`
       : ''
     const dirBadge = meta.direction
-      ? `<span style="background:var(--blue-bg);color:var(--blue-t);padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600;margin-left:4px">${meta.direction}</span>`
+      ? `<span style="background:var(--blue-bg);color:var(--blue-t);padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600;margin-left:4px">${escHtml(meta.direction)}</span>`
       : ''
+
+    // ── Call Priority bars (.cp-wrap) ─────────────────────────────────────
+    let cpWrapHtml = ''
+    if(meta.call_priority != null || meta.priority != null) {
+      const score = Number(meta.call_priority || meta.priority || 0)
+      const level = score>=2000?'high':score>=800?'med':'low'
+      const filled = score>=3000?5:score>=2000?4:score>=1200?3:score>=600?2:1
+      const bars = Array.from({length:5},(_,i)=>`<div class="cp-bar${i<filled?' on '+level:''}" style="height:${8+i*3}px"></div>`).join('')
+      cpWrapHtml = `<div class="cp-wrap" style="margin-top:6px;display:flex;align-items:center;gap:5px">
+        <span style="font-size:9.5px;color:var(--text2);font-weight:500">Priority</span>
+        <div class="cp-bars">${bars}</div>
+        <span class="cp-num">${score.toLocaleString()}</span>
+      </div>`
+    }
+
+    // ── Sentiment badges ──────────────────────────────────────────────────
+    let sentimentHtml = ''
+    const sentiments = meta.sentiment ? (Array.isArray(meta.sentiment)?meta.sentiment:[meta.sentiment]) : []
+    if(sentiments.length){
+      const sentColors = {positive:'var(--green-t)',negative:'var(--red-t)',neutral:'var(--text2)',interested:'var(--blue-t)',hesitant:'var(--amber-t)'}
+      const sentBgs = {positive:'var(--green-bg)',negative:'var(--red-bg)',neutral:'var(--gray2)',interested:'var(--blue-bg)',hesitant:'var(--amber-bg)'}
+      sentimentHtml = `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:5px">`+
+        sentiments.map(s=>`<span style="background:${sentBgs[s.toLowerCase()]||'var(--gray2)'};color:${sentColors[s.toLowerCase()]||'var(--text2)'};padding:1px 7px;border-radius:10px;font-size:9px;font-weight:600">${escHtml(s)}</span>`).join('')
+        +'</div>'
+    }
+
+    // ── Timestamp ─────────────────────────────────────────────────────────
+    const callDateHtml = meta.call_date
+      ? `<span style="font-size:9.5px;color:var(--green-t);margin-left:8px">📅 ${escHtml(fmtNoteDateTime(meta.call_date))}</span>`
+      : ''
+
     return`<div class="aircall-card">
       <div class="aircall-hd" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
         <div style="width:26px;height:26px;border-radius:50%;background:#16a34a;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0">📞</div>
@@ -2283,7 +2325,11 @@ function renderNoteCard(n){
         ${meta.recording_url?`<a href="${escUrl(meta.recording_url)}" target="_blank" style="font-size:9.5px;color:var(--blue-t);margin-left:auto;text-decoration:none">🔗 Recording</a>`:''}
         <button class="action-btn del" onclick="deleteNote('${n.id}')">✕</button>
       </div>
-      <div style="font-size:11.5px;color:var(--text);line-height:1.65;margin-top:8px">${escHtml(content).replace(/\n/g,'<br>')}</div>
+      ${cpWrapHtml}
+      ${sentimentHtml}
+      ${callDateHtml ? `<div style="margin-top:4px">${callDateHtml}</div>` : ''}
+      ${meta.phone_number?`<div style="font-size:10.5px;color:var(--text2);margin-top:4px">📞 ${escHtml(meta.phone_number)}</div>`:''}
+      <div style="font-size:11.5px;color:var(--text);line-height:1.65;margin-top:8px;padding-top:8px;border-top:.5px solid #86efac">${escHtml(content).replace(/\n/g,'<br>')}</div>
     </div>`
   }
 
@@ -2395,23 +2441,23 @@ function openWibModal(wib=null){
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${wib?.state===s?' selected':''}>${s}</option>`).join('')
   showModal(wib?`Edit: ${escHtml(wib.wib_name)}`:'New Workforce Board',`
-    <div class="form-row"><div class="form-group"><div class="form-label">WIB Name <span class="form-req">*</span></div><input id="wib-name" value="${escHtml(wib?.wib_name||'')}"></div>
-    <div class="form-group"><div class="form-label">Short Name</div><input id="wib-short" value="${escHtml(wib?.short_name||'')}"></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">State</div><select id="wib-state">${stateOpts}</select></div>
-    <div class="form-group"><div class="form-label">Status</div><select id="wib-status">${statusOpts}</select></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Email</div><input id="wib-email" type="email" value="${escHtml(wib?.wib_email||'')}"></div>
-    <div class="form-group"><div class="form-label">Phone</div><input id="wib-phone" type="tel" value="${wib?.wib_phone||''}"></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Website URL</div><input id="wib-url" value="${wib?.source_url||''}" placeholder="https://"></div>
-    <div class="form-group"><div class="form-label">WIB Type</div><select id="wib-type">
+    <div class="form-row"><div class="form-group"><label class="form-label">WIB Name <span class="form-req">*</span></label><input id="wib-name" value="${escHtml(wib?.wib_name||'')}"></div>
+    <div class="form-group"><label class="form-label">Short Name</label><input id="wib-short" value="${escHtml(wib?.short_name||'')}"></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">State</label><select id="wib-state">${stateOpts}</select></div>
+    <div class="form-group"><label class="form-label">Status</label><select id="wib-status">${statusOpts}</select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Email</label><input id="wib-email" type="email" value="${escHtml(wib?.wib_email||'')}"></div>
+    <div class="form-group"><label class="form-label">Phone</label><input id="wib-phone" type="tel" value="${wib?.wib_phone||''}"></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Website URL</label><input id="wib-url" value="${wib?.source_url||''}" placeholder="https://"></div>
+    <div class="form-group"><label class="form-label">WIB Type</label><select id="wib-type">
       <option value="Local"${wib?.wib_type==='Local'?' selected':''}>Local</option>
       <option value="Regional"${wib?.wib_type==='Regional'?' selected':''}>Regional</option>
       <option value="State"${wib?.wib_type==='State'?' selected':''}>State</option>
     </select></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Max Award/EIN ($)</div><input id="wib-max" type="number" value="${wib?.max_award_per_ein||''}"></div>
-    <div class="form-group"><div class="form-label">Employer Match (%)</div><input id="wib-match" type="number" value="${wib?.employer_match_pct||''}"></div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Call Priority Score</div><input id="wib-priority" type="number" value="${wib?.call_priority||''}"><div class="form-hint">Higher = more urgent</div></div>
-    <div class="form-group"><div class="form-label">Owner</div><input id="wib-owner" value="${wib?.owner||''}"></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Application Process Notes</div><textarea id="wib-notes" rows="3">${escHtml(wib?.notes||'')}</textarea></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Max Award/EIN ($)</label><input id="wib-max" type="number" value="${wib?.max_award_per_ein||''}"></div>
+    <div class="form-group"><label class="form-label">Employer Match (%)</label><input id="wib-match" type="number" value="${wib?.employer_match_pct||''}"></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Call Priority Score</label><input id="wib-priority" type="number" value="${wib?.call_priority||''}"><div class="form-hint">Higher = more urgent</div></div>
+    <div class="form-group"><label class="form-label">Owner</label><input id="wib-owner" value="${wib?.owner||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Application Process Notes</label><textarea id="wib-notes" rows="3">${escHtml(wib?.notes||'')}</textarea></div></div>
     <label class="chk-row"><input type="checkbox" id="wib-iwt"${wib?.iwt_program_active?' checked':''}> IWT Program Active</label>`,
   async()=>{
     const payload={
@@ -2504,6 +2550,8 @@ function renderCompaniesTable(companies){
   if(q)d=d.filter(c=>(c.company_name+' '+(c.domain||'')+' '+(c.primary_contact_name||'')+' '+(c.primary_contact_email||'')).toLowerCase().includes(q.toLowerCase()))
   if(st)d=d.filter(c=>c.status===st)
   if(rt)d=d.filter(c=>Number(c.rating)===Number(rt))
+  const stateF=window._coFilters.state
+  if(stateF)d=d.filter(c=>c.state===stateF)
 
   document.getElementById('page-area').innerHTML=`
   <div class="att-wrap">
@@ -2540,7 +2588,7 @@ function renderCompaniesTable(companies){
             <span class="afc-more" onclick="event.stopPropagation()">⋮</span>
           </div>
           <div class="att-filter-add" onclick="showToast('Custom filters coming soon','info')">+</div>
-          ${(q||st||rt)?`<button class="btn btn-sm" onclick="clearCoFilters()" style="margin-left:4px;font-size:10px;padding:3px 8px">✕ Clear</button>`:''}
+          ${(q||st||rt||window._coFilters.state)?`<div class="att-filter-chip" style="background:var(--amber-bg);border-color:var(--amber);cursor:pointer" onclick="clearCoFilters()"><span style="color:var(--amber-t);font-weight:600;font-size:9px">✕ Clear Filters</span></div>`:''}
         </div>
       </div>
       <div class="att-toolbar-r">
@@ -4073,6 +4121,19 @@ function wtSelectState(stateName){
   const d=window._WIB_STATE_DATA.find(x=>x.state===stateName)
   wtRenderDir(window._wtDirData||window._WIB_STATE_DATA)
   wtShowDetail(d)
+  // Sync state selection to global filter objects
+  if(window._wtSelected){
+    const abbr = window._STATE_ABBR_MAP[stateName] || stateName
+    window._wibsFilters.state  = abbr
+    window._wibFilters.state   = abbr
+    window._coFilters.state    = abbr
+    window._locFilters.state   = abbr
+  } else {
+    window._wibsFilters.state  = ''
+    window._wibFilters.state   = ''
+    window._coFilters.state    = ''
+    window._locFilters.state   = ''
+  }
   // Highlight selected state on inline SVG
   const stateByName={}
   window._WIB_STATE_DATA.forEach(s=>{stateByName[s.state]=s})
@@ -5054,18 +5115,24 @@ async function renderDriveFiles(folderId){
         <button class="btn btn-sm" onclick="createDriveFolder('${folderId}')">📁 New Folder</button>
         <button class="btn btn-sm btn-ghost" onclick="importFromDrive('${folderId}')">📥 Import to CRM</button>
         <button class="btn btn-sm btn-ghost" onclick="exportToDrive('${folderId}')">📤 Export to Drive</button>
+        <button class="btn btn-sm btn-ghost" onclick="simulateDriveSync()" id="drive-sync-btn">☁ Sync</button>
       </div>
+    </div>
+    <div id="drive-sync-bar" style="display:none;padding:0 14px 8px">
+      <div style="font-size:10px;color:var(--text2);margin-bottom:4px">☁ Syncing with cloud storage...</div>
+      <div class="metric-bar" style="height:5px"><div class="metric-fill" id="drive-sync-fill" style="width:0%;transition:width .3s;background:var(--blue)"></div></div>
     </div>
     <table class="att-tbl">
       <thead><tr>
         <th style="width:36px"><input type="checkbox" class="att-chk" onchange="document.querySelectorAll('.drive-chk').forEach(c=>c.checked=this.checked)"></th>
-        <th><div class="th-i">Name</div></th>
+        <th><div class="th-i">File Name</div></th>
+        <th><div class="th-i">Object Type</div></th>
         <th><div class="th-i">Modified</div></th>
         <th><div class="th-i">Size</div></th>
         <th><div class="th-i">Actions</div></th>
       </tr></thead>
       <tbody>
-      ${!files.length ? `<tr><td colspan="5">
+      ${!files.length ? `<tr><td colspan="6">
         <div class="empty-state">
           <div class="empty-icon">📁</div>
           <div class="empty-text">This folder is empty</div>
@@ -5083,25 +5150,51 @@ async function renderDriveFiles(folderId){
               </div>
             </div>
           </td>
+          <td class="cell-dim" style="font-size:10.5px">${escHtml(f.mimeType?.split('/').pop()?.replace('vnd.google-apps.','G-')?.replace('vnd.openxmlformats-officedocument.','')?.split('.').pop()||'—')}</td>
           <td class="cell-dim">${f.modifiedTime ? fmtNoteDateTime(f.modifiedTime) : '—'}</td>
           <td class="cell-dim">${fmtSize(f.size)}</td>
           <td onclick="event.stopPropagation()">
-            <div style="display:flex;gap:4px">
+            <div class="row-actions" style="display:flex;gap:4px">
+              ${!f.mimeType?.includes('folder') ? `<button class="btn btn-xs" title="Download" onclick="downloadDriveFile('${f.id}','${escAttr(f.name)}')">📥 Download</button>` : ''}
+              ${f.webViewLink ? `<button class="btn btn-xs btn-ghost" title="Copy Link" onclick="navigator.clipboard&&navigator.clipboard.writeText('${escAttr(f.webViewLink)}').then(()=>showToast('Link copied','success')).catch(()=>showToast('${escAttr(f.webViewLink)}','info'))">🔗 Copy Link</button>` : ''}
               ${f.webViewLink ? `<a href="${escAttr(f.webViewLink)}" target="_blank" class="btn btn-xs btn-ghost">Open</a>` : ''}
-              ${!f.mimeType?.includes('folder') ? `<button class="btn btn-xs" onclick="downloadDriveFile('${f.id}','${escAttr(f.name)}')">Download</button>` : ''}
-              <button class="btn btn-xs" onclick="deleteDriveFile('${f.id}','${escAttr(f.name)}','${folderId}')">✕</button>
+              <button class="btn btn-xs btn-danger" title="Delete" onclick="deleteDriveFile('${f.id}','${escAttr(f.name)}','${folderId}')">❌ Delete</button>
             </div>
           </td>
         </tr>`).join('')}
       </tbody>
     </table>
-    <div class="att-footer"><span>${files.length} item${files.length===1?'':'s'}</span></div>
+    <div class="att-footer"><span>${files.length} item${files.length===1?'':'s'}</span><span style="font-size:9.5px;color:var(--text3)">Google Drive · Synced via OAuth 2.0</span></div>
   </div>`
 }
 
 function connectGoogleDrive(){
   // Opens Google OAuth consent screen — server generates the URL
   window.location.href = '/api/auth/google?token=' + encodeURIComponent(token)
+}
+
+function simulateDriveSync(){
+  const bar = document.getElementById('drive-sync-bar')
+  const fill = document.getElementById('drive-sync-fill')
+  const btn  = document.getElementById('drive-sync-btn')
+  if(!bar||!fill) return
+  if(btn){ btn.disabled=true; btn.textContent='☁ Syncing...' }
+  bar.style.display='block'
+  fill.style.width='0%'
+  let pct = 0
+  const iv = setInterval(()=>{
+    pct += Math.random()*18 + 5
+    fill.style.width = Math.min(pct,100)+'%'
+    if(pct >= 100){
+      clearInterval(iv)
+      setTimeout(()=>{
+        bar.style.display='none'
+        fill.style.width='0%'
+        if(btn){ btn.disabled=false; btn.textContent='☁ Sync' }
+        showToast('Drive sync complete','success')
+      },600)
+    }
+  },200)
 }
 
 function openDriveUpload(folderId='root'){
@@ -5604,7 +5697,11 @@ async function pageLocations(){
 function renderLocationsTable(locs){
   let d=[...locs]
   const q=window._locFilters.search
+  const stateF=window._locFilters.state
+  const statusF=window._locFilters.status
   if(q)d=d.filter(l=>(l.location_name+' '+(l.state||'')).toLowerCase().includes(q.toLowerCase()))
+  if(stateF)d=d.filter(l=>l.state===stateF)
+  if(statusF)d=d.filter(l=>l.status===statusF)
   document.getElementById('page-area').innerHTML=`
   <div class="att-wrap">
     <div class="att-toolbar">
@@ -5613,6 +5710,9 @@ function renderLocationsTable(locs){
         <div class="att-filter-bar">
           <div class="att-sort-chip">⇅ Sorted by <strong>Name</strong></div>
           <button class="btn btn-sm" onclick="showLocFilterModal()" style="display:inline-flex;align-items:center;gap:4px">⊟ Filter</button>
+          ${stateF?`<div class="att-filter-chip"><span class="afc-key">State</span><span class="afc-is">is</span><span class="afc-pill">${stateF}</span><span class="afc-more" onclick="window._locFilters.state='';renderLocationsTable(window._locations)">✕</span></div>`:''}
+          ${statusF?`<div class="att-filter-chip"><span class="afc-key">Status</span><span class="afc-is">is</span><span class="afc-pill">${statusF.replace(/_/g,' ')}</span><span class="afc-more" onclick="window._locFilters.status='';renderLocationsTable(window._locations)">✕</span></div>`:''}
+          ${(q||stateF||statusF)?`<div class="att-filter-chip" style="background:var(--amber-bg);border-color:var(--amber);cursor:pointer" onclick="clearLocFilters()"><span style="color:var(--amber-t);font-weight:600;font-size:9px">✕ Clear Filters</span></div>`:''}
         </div>
       </div>
       <div class="att-toolbar-r">
@@ -5990,32 +6090,49 @@ function filterAppsTable(q){
 function openNewApplicationModal(){
   showModal('New Application',`
     <div id="app-err"></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Company <span class="form-req">*</span></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Company <span class="form-req">*</span></label>
       <select id="app-co"><option value="">Select company...</option></select>
     </div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Funding Opportunity <span class="form-req">*</span></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Funding Opportunity <span class="form-req">*</span></label>
       <select id="app-fo"><option value="">Select opportunity...</option></select>
     </div></div>
-    <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="app-status">
+    <div class="form-row"><div class="form-group"><label class="form-label">Status</label><select id="app-status">
       <option value="draft">Draft</option><option value="submitted">Submitted</option>
       <option value="under_review">Under Review</option><option value="approved">Approved</option>
       <option value="awarded">Awarded</option><option value="rejected">Rejected</option>
     </select></div>
-    <div class="form-group"><div class="form-label">Award Requested ($)</div><input id="app-req" type="number"></div></div>
-    <div class="form-row form-full"><div class="form-group"><div class="form-label">Notes / Latest Update</div><textarea id="app-notes" rows="3" placeholder="Current status, blockers, next steps..."></textarea></div></div>`,
+    <div class="form-group"><label class="form-label">Award Requested ($)</label><input id="app-req" type="number" placeholder="0.00"></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Submission Date</label><input id="app-sub" type="date"></div>
+    <div class="form-group"><label class="form-label">Application Link (Drive)</label><input id="app-link" type="url" placeholder="https://drive.google.com/..."></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Location <span style="font-size:10px;color:var(--text3)">(optional)</span></label>
+      <select id="app-loc"><option value="">No specific location</option></select>
+    </div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Notes / Latest Update</label><textarea id="app-notes" rows="3" placeholder="Current status, blockers, next steps..."></textarea></div></div>`,
   async()=>{
     const coId=document.getElementById('app-co').value,foId=document.getElementById('app-fo').value
     const err=document.getElementById('app-err')
     if(!coId){err.innerHTML='<div class="alert alert-error">Company required</div>';return false}
     if(!foId){err.innerHTML='<div class="alert alert-error">Funding opportunity required</div>';return false}
+    const link=document.getElementById('app-link')?.value?.trim()
+    const notes=document.getElementById('app-notes')?.value?.trim()
+    const fullNotes=[link?'Link: '+link:'',notes].filter(Boolean).join('\n')
     try{
-      await api('/api/applications','POST',{company_id:coId,funding_opportunity_id:foId,status:document.getElementById('app-status').value,award_amount_requested:document.getElementById('app-req').value||null,notes:document.getElementById('app-notes').value||null})
+      await api('/api/applications','POST',{
+        company_id:coId,
+        funding_opportunity_id:foId,
+        status:document.getElementById('app-status').value,
+        award_amount_requested:document.getElementById('app-req').value||null,
+        submission_date:document.getElementById('app-sub').value||null,
+        location_id:document.getElementById('app-loc')?.value||null,
+        notes:fullNotes||null
+      })
       showToast('Application created','success');loadPage('applications')
-    }catch(e){err.innerHTML=`<div class="alert alert-error">${e.message}</div>`;return false}
-  })
-  Promise.all([api('/api/companies?limit=1000'),api('/api/funding?limit=500')]).then(([co,fo])=>{
+    }catch(e){err.innerHTML=`<div class="alert alert-error">${escHtml(e.message)}</div>`;return false}
+  },'modal-lg')
+  Promise.all([api('/api/companies?limit=1000'),api('/api/funding?limit=500'),api('/api/locations?limit=500').catch(()=>({data:[]}))]).then(([co,fo,loc])=>{
     const cs=document.getElementById('app-co');if(cs)(co.data||[]).forEach(c=>{const o=document.createElement('option');o.value=c.id;o.textContent=c.company_name;cs.appendChild(o)})
     const fs=document.getElementById('app-fo');if(fs)(fo.data||[]).forEach(f=>{const o=document.createElement('option');o.value=f.id;o.textContent=f.opportunity_name;fs.appendChild(o)})
+    const ls=document.getElementById('app-loc');if(ls)(loc.data||[]).forEach(l=>{const o=document.createElement('option');o.value=l.id;o.textContent=l.location_name+(l.state?' ('+l.state+')':'');ls.appendChild(o)})
   }).catch(()=>{})
 }
 
