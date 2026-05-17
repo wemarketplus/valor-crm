@@ -1851,13 +1851,8 @@ app.post('/api/import/:type', auth, async (req, res) => {
         })()
         const wib_id = wibName ? findWibId(wibName) : null
 
-        if (!company_id) {
-          // Log first few failures with context
-          if (results.errors.length < 5) {
-            console.log('App import miss: "'+companyName+'" not matched. Map size: '+companyMap.size+'. Sample keys: '+[...companyMap.keys()].slice(0,3).join(', '))
-          }
-          results.errors.push('Skipped "'+companyName+'" — not found in Companies (import companies first)')
-          continue
+        if (!company_id && companyName) {
+          results.errors.push('Warning: "'+companyName+'" not matched to a Company (location saved without parent link)')
         }
 
         const rawStatus = (row['status'] || row['Status'] || row['Stage'] || row['Application Stage'] || 'intake').toLowerCase().trim()
