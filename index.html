@@ -1497,8 +1497,8 @@ async function pageDashboard(){
           <span class="col-icon" style="background:var(--blue-bg);color:var(--blue-t)">${(w.state||'WI').slice(0,2)}</span>
           ${escHtml(w.wib_name)}
         </div></td>
-        <td>${w.wib_email?`<a href="mailto:${escHtml(w.wib_email)}" class="cell-link" onclick="event.stopPropagation()">${escHtml(w.wib_email)}</a>`:'<span class="cell-dim">—</span>'}</td>
-        <td class="cell-dim">${escHtml(w.short_name||'—')}</td>
+        <td>${w.wib_email?`<a href="mailto:${escHtml(w.wib_email)}?subject=${encodeURIComponent('IWT Grant Inquiry \u2014 Valor Workforce Funding')}" class="cell-link" onclick="openComposeEmail('${escAttr(w.wib_email)}','IWT Grant Inquiry \u2014 Valor Workforce Funding');event.preventDefault();event.stopPropagation()">${escHtml(w.wib_email)}</a>`:'<span class="cell-dim">\u2014</span>'}</td>
+        <td class="cell-dim">${escHtml(w.short_name||'\u2014')}</td>
         <td>${wibStatusPill(w.status)}</td>
         <td class="cell-dim">${w.last_contact_date?fmtAgo(w.last_contact_date):'No contact'}</td>
         <td>${w.wib_type?`<span class="pill p-blue" style="font-size:9px">${w.wib_type}</span>`:'<span class="cell-dim">—</span>'}</td>
@@ -2152,7 +2152,7 @@ async function loadWibTabData(tab){
     ${contacts.length?contacts.map(c=>`<tr>
       <td style="font-weight:500">${c.name||'—'}</td>
       <td class="cell-dim">${escHtml(c.title||'—')}</td>
-      <td>${c.email?`<a href="mailto:${escHtml(c.email)}" class="cell-link">${escHtml(c.email)}</a>`:'—'}</td>
+      <td>${c.email?`<a href="mailto:${escHtml(c.email)}?subject=${encodeURIComponent('IWT Grant Inquiry \u2014 Valor Workforce Funding')}" class="cell-link" onclick="openComposeEmail('${escAttr(c.email)}','IWT Workforce Grant \u2014 Valor');event.preventDefault()">${escHtml(c.email)}</a>`:'—'}</td>
       <td class="cell-dim">${c.phone||'—'}</td>
     </tr>`).join(''):`<tr><td colspan="4"><div class="empty-state" style="padding:24px"><div class="empty-icon">👥</div><div class="empty-text">No contacts yet</div></div></td></tr>`}
     </tbody></table>`
@@ -6962,6 +6962,23 @@ async function runFullImport(){
   const CHUNK=50,totalBatches=Math.ceil(mappedRows.length/CHUNK)
   let totalCreated=0,totalErrors=[]
 
+  /* ── Client-side pre-flight dedupe against live state ── */
+  const _dedupeKey={companies:'company_name',wibs:'wib_name',locations:'location_name',funding:'opportunity_name',applications:'company_name'}[type]
+  const _existingSet=new Set()
+  if(_dedupeKey){
+    const _stateArr=(window['_'+type]||window['_companies']||[])
+    if(Array.isArray(_stateArr))_stateArr.forEach(r=>{if(r[_dedupeKey])_existingSet.add(String(r[_dedupeKey]).toLowerCase().trim())})
+  }
+  let _dupeCount=0
+  const dedupedRows=mappedRows.filter(row=>{
+    if(!_dedupeKey||!row[_dedupeKey])return true
+    const val=String(row[_dedupeKey]).toLowerCase().trim()
+    if(_existingSet.has(val)){_dupeCount++;return false}
+    _existingSet.add(val);return true
+  })
+  if(_dupeCount>0)showToast('⚡ '+_dupeCount+' duplicate'+(_dupeCount===1?'':'s')+' skipped (already in CRM)','info')
+  const finalRows=dedupedRows
+
   if(preview)preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">⏳ Connecting to server...</div>'
   try{await api('/api/health')}catch(e){
     if(preview)preview.innerHTML='<div style="padding:10px;color:var(--amber-t);font-size:12px">⏳ Server starting up (Render free tier may be asleep) — waiting 30s...</div>'
@@ -6985,19 +7002,20 @@ async function runFullImport(){
     <div id="imp-detail" style="font-size:10px;color:var(--text3);margin-top:4px"></div>
   </div>`
 
+  const totalBatches2=Math.ceil(finalRows.length/CHUNK)
   try{
-    for(let b=0;b<totalBatches;b++){
-      const chunk=mappedRows.slice(b*CHUNK,(b+1)*CHUNK)
-      const pct=Math.round((b/totalBatches)*100)
+    for(let b=0;b<totalBatches2;b++){
+      const chunk=finalRows.slice(b*CHUNK,(b+1)*CHUNK)
+      const pct=Math.round((b/totalBatches2)*100)
       const label=document.getElementById('imp-label'),pctEl=document.getElementById('imp-pct'),bar=document.getElementById('imp-bar'),detail=document.getElementById('imp-detail')
-      if(label)label.textContent=totalBatches>1?`Importing batch ${b+1} of ${totalBatches}...`:'Importing records...'
+      if(label)label.textContent=totalBatches2>1?`Importing batch ${b+1} of ${totalBatches2}...`:'Importing records...'
       if(pctEl)pctEl.textContent=pct+'%'
       if(bar)bar.style.width=pct+'%'
       if(detail)detail.textContent=`${totalCreated.toLocaleString()} imported${totalErrors.length?' · '+totalErrors.length+' skipped':''}`
-      if(btn)btn.textContent=totalBatches>1?`Batch ${b+1}/${totalBatches}...`:'Importing...'
+      if(btn)btn.textContent=totalBatches2>1?`Batch ${b+1}/${totalBatches2}...`:'Importing...'
       let r,lastErr
       for(let attempt=0;attempt<3;attempt++){
-        try{r=await api('/api/import/'+type,'POST',{rows:chunk,batch:b+1,totalBatches});break}
+        try{r=await api('/api/import/'+type,'POST',{rows:chunk,batch:b+1,totalBatches:totalBatches2});break}
         catch(err){lastErr=err;if(attempt<2){await new Promise(res=>setTimeout(res,1200*(attempt+1)))}}
       }
       if(!r)throw lastErr
@@ -7012,7 +7030,7 @@ async function runFullImport(){
     <div class="import-summary">
       <div class="import-summary-item"><div class="isn" style="color:var(--green-t)">${totalCreated.toLocaleString()}</div><div class="isl">Records imported</div></div>
       <div class="import-summary-item"><div class="isn" style="color:${totalErrors.length?'var(--amber-t)':'var(--text3)'}">${totalErrors.length}</div><div class="isl">Rows skipped</div></div>
-      <div class="import-summary-item"><div class="isn">${(window._importRows?.length||0).toLocaleString()}</div><div class="isl">Total rows</div></div>
+      <div class="import-summary-item"><div class="isn">${finalRows.length.toLocaleString()}</div><div class="isl">Total rows</div></div>
     </div>${totalErrors.length?`<div class="alert alert-warn" style="margin-top:10px">⚠️ ${totalErrors.length} skipped: ${totalErrors.slice(0,3).join('; ')}${totalErrors.length>3?'...':''}</div>`:''}`
 
     showToast(`✅ Imported ${totalCreated.toLocaleString()} records${totalErrors.length?' ('+totalErrors.length+' skipped)':''}`,totalErrors.length?'warn':'success')
@@ -7285,116 +7303,232 @@ function smartAutoMatch(header, type) {
 ═══════════════════════════════════════════════════ */
 
 var IMPORT_SYNONYMS_MAP = {
-  /* universal */
-  'name':            {locations:'location_name', companies:'company_name', wibs:'wib_name', funding:'opportunity_name', applications:'company_name'},
-  'status':          'status',
-  'state':           'state',
-  'city':            'city',
-  'county':          'county',
-  'address':         'address',
-  'notes':           'notes',
-  'email':           {companies:'primary_contact_email', wibs:'wib_email'},
-  'phone':           {companies:'primary_contact_phone', wibs:'wib_phone'},
-  'type':            {wibs:'wib_type', companies:'company_type'},
-  /* locations */
-  'location':        'location_name',
-  'location name':   'location_name',
-  'facility':        'location_name',
-  'facility name':   'location_name',
-  'nursing home':    'location_name',
-  'parent operator': 'parent_operator',
-  'operator':        {locations:'parent_operator'},
-  'parent company':  'parent_operator',
-  'company':         {locations:'parent_operator', applications:'company_name'},
-  'company name':    'company_name',
-  'employee count':  'employee_count',
-  'employees':       'employee_count',
-  'employee_count':  'employee_count',
-  'bed count':       'employee_count',
-  'beds':            'employee_count',
-  /* companies */
-  'domain':          'domain',
-  'website':         {companies:'domain', wibs:'website'},
-  'web site':        {companies:'domain', wibs:'website'},
-  'fein':            'fein',
-  'tax id':          'fein',
-  'ein':             'fein',
-  'rating':          'rating',
-  'supported by':    'supported_by',
-  'contact name':    'primary_contact_name',
-  'contact email':   'primary_contact_email',
-  'contact phone':   'primary_contact_phone',
-  'is 25%':          'is_25_pct_operator',
-  'is 25% operator': 'is_25_pct_operator',
-  'training needs':  'training_needs',
-  /* wibs */
-  'wib name':        'wib_name',
-  'workforce board': 'wib_name',
-  'board name':      'wib_name',
-  'short name':      'short_name',
-  'wib email':       'wib_email',
-  'wib email address':'wib_email',
-  'wib phone':       'wib_phone',
-  'wib type':        'wib_type',
-  'source url':      'source_url',
-  'source':          'source_url',
-  'max award':       'max_award_per_ein',
-  'max award per ein':'max_award_per_ein',
-  'call priority':   'call_priority_score',
-  'call priority score':'call_priority_score',
-  'website url':     'website',
-  'web url':         'website',
-  /* funding */
-  'opportunity name':'opportunity_name',
-  'funding opportunity':'opportunity_name',
-  'opportunity':     'opportunity_name',
-  'application link':'application_link',
-  'application url': 'application_link',
-  'deadline':        'application_deadline',
-  'application deadline':'application_deadline',
-  'max per ein':     'max_award_per_ein',
-  'max per employee':'max_award_per_employee',
-  'promotion':       'promotion_for_participants',
-  'wage increase':   'wage_increase_for_participants',
-  'blocked reason':  'blocked_reason',
-  /* applications */
-  'application number':'application_number',
-  'wib':             'wib_name',
-  'amount requested':'award_amount_requested',
-  'amount approved': 'award_amount_approved',
-  'award amount':    'award_amount_requested',
-  'award':           'award_amount_requested',
-  'submission date': 'submission_date',
-  'submitted':       'submission_date',
-  'decision date':   'decision_date',
-  'latest update':   'notes',
-  'lastest update':  'notes',
-  'last update':     'notes',
+  /* ── UNIVERSAL ─────────────────────────────────── */
+  'name':                {locations:'location_name', companies:'company_name', wibs:'wib_name', funding:'opportunity_name', applications:'company_name'},
+  'status':              'status',
+  'lifecycle stage':     'status',
+  'deal stage':          'status',
+  'lead status':         'status',
+  'state':               'state',
+  'st':                  'state',
+  'city':                'city',
+  'county':              'county',
+  'address':             'address',
+  'street address':      'address',
+  'mailing address':     'address',
+  'notes':               'notes',
+  'description':         'notes',
+  'comments':            'notes',
+  'update':              'notes',
+  'latest update':       'notes',
+  'lastest update':      'notes',
+  'last update':         'notes',
+  'email':               {companies:'primary_contact_email', wibs:'wib_email'},
+  'email address':       {companies:'primary_contact_email', wibs:'wib_email'},
+  'phone':               {companies:'primary_contact_phone', wibs:'wib_phone'},
+  'phone number':        {companies:'primary_contact_phone', wibs:'wib_phone'},
+  'type':                {wibs:'wib_type', companies:'company_type'},
+  'zip':                 '__skip',
+  'zip code':            '__skip',
+  'postal code':         '__skip',
+  'tags':                '__skip',
+  'labels':              '__skip',
+  'owner':               '__skip',
+  'assigned to':         '__skip',
+  'account owner':       '__skip',
+  'record id':           '__skip',
+  'id':                  '__skip',
+  'create date':         '__skip',
+  'created time':        '__skip',
+  'created at':          '__skip',
+  'last modified time':  '__skip',
+  'hubspot company id':  '__skip',
+  'account id':          '__skip',
+  'sf id':               '__skip',
+  'salesforce id':       '__skip',
+  'annual revenue':      '__skip',
+  /* ── LOCATIONS ──────────────────────────────────── */
+  'location':            'location_name',
+  'location name':       'location_name',
+  'facility':            'location_name',
+  'facility name':       'location_name',
+  'nursing home':        'location_name',
+  'site name':           'location_name',
+  'site':                'location_name',
+  /* Applications "Record" field holds "Company - null" format */
+  'record':              {applications:'company_name', locations:'location_name', companies:'company_name'},
+  'parent operator':     'parent_operator',
+  'operator':            {locations:'parent_operator'},
+  'parent company':      'parent_operator',
+  'parent company name': 'parent_operator',
+  'company':             {locations:'parent_operator', applications:'company_name'},
+  'company name':        'company_name',
+  'employer':            'company_name',
+  'employer name':       'company_name',
+  'business name':       'company_name',
+  'account name':        'company_name',
+  'account':             {companies:'company_name'},
+  'employee count':      {companies:'employee_count_total', locations:'employee_count'},
+  'employees':           {companies:'employee_count_total', locations:'employee_count'},
+  'employee_count':      {companies:'employee_count_total', locations:'employee_count'},
+  'bed count':           {companies:'employee_count_total', locations:'employee_count'},
+  'beds':                {companies:'employee_count_total', locations:'employee_count'},
+  'headcount':           {companies:'employee_count_total', locations:'employee_count'},
+  /* ── COMPANIES ──────────────────────────────────── */
+  'domain':              'domain',
+  'website':             {companies:'domain', wibs:'source_url'},
+  'web site':            {companies:'domain', wibs:'source_url'},
+  'url':                 {companies:'domain', wibs:'source_url'},
+  'company url':         'domain',
+  'company website':     'domain',
+  'fein':                'fein',
+  'tax id':              'fein',
+  'federal tax id':      'fein',
+  'tin':                 'fein',
+  'ein':                 'fein',
+  'rating':              'rating',
+  'score':               'rating',
+  'supported by':        'supported_by',
+  'contact name':        'primary_contact_name',
+  'full name':           'primary_contact_name',
+  'primary contact':     'primary_contact_name',
+  'poc':                 'primary_contact_name',
+  'contact email':       'primary_contact_email',
+  'work email':          'primary_contact_email',
+  'business email':      'primary_contact_email',
+  'contact phone':       'primary_contact_phone',
+  'mobile':              'primary_contact_phone',
+  'cell':                'primary_contact_phone',
+  'work phone':          'primary_contact_phone',
+  'is 25%':              'is_25_pct_operator',
+  'is 25% operator':     'is_25_pct_operator',
+  'training needs':      'training_needs',
+  'training requirements':'training_needs',
+  'avg hourly wage':     'avg_hourly_wage',
+  'average wage':        'avg_hourly_wage',
+  'hourly rate':         'avg_hourly_wage',
+  'company type':        'company_type',
+  'industry':            'company_type',
+  'sector':              'company_type',
+  'call priority':       {companies:'call_priority', wibs:'call_priority'},
+  'call priority score': {companies:'call_priority', wibs:'call_priority'},
+  'priority':            {companies:'call_priority', wibs:'call_priority'},
+  'last contact date':   'last_contact_date',
+  'last contacted':      'last_contact_date',
+  'last activity date':  'last_contact_date',
+  /* ── WIBS ────────────────────────────────────────── */
+  'wib name':            'wib_name',
+  'workforce board':     'wib_name',
+  'board name':          'wib_name',
+  'local board':         'wib_name',
+  'wib':                 {wibs:'wib_name', applications:'wib_name'},
+  'short name':          'short_name',
+  'wib email':           'wib_email',
+  'wib email address':   'wib_email',
+  'wib phone':           'wib_phone',
+  'wib type':            'wib_type',
+  'board type':          'wib_type',
+  'source url':          'source_url',
+  'source':              'source_url',
+  'website url':         'source_url',
+  'web url':             'source_url',
+  'max award':           'max_award_per_ein',
+  'max award per ein':   'max_award_per_ein',
+  'maximum award':       'max_award_per_ein',
+  'max per ein':         'max_award_per_ein',
+  'max per employee':    'max_award_per_employee',
+  'employer match pct':  'employer_match_pct',
+  'employer match':      'employer_match_pct',
+  'match requirement':   'employer_match_pct',
+  'next steps':          'next_steps',
+  'blockers':            'blockers',
+  'call priority score': 'call_priority_score',
+  'iwt program active':  'iwt_program_active',
+  'iwt active':          'iwt_program_active',
+  /* ── FUNDING ─────────────────────────────────────── */
+  'opportunity name':       'opportunity_name',
+  'funding opportunity':    'opportunity_name',
+  'funding opportunity name':'opportunity_name',
+  'opportunity':            'opportunity_name',
+  'grant name':             'opportunity_name',
+  'program name':           'opportunity_name',
+  'application link':       'application_link',
+  'application url':        'application_link',
+  'deadline':               'application_deadline',
+  'application deadline':   'application_deadline',
+  'close date':             'application_deadline',
+  'promotion':              'promotion_for_participants',
+  'promotion for participants':'promotion_for_participants',
+  'wage increase':          'wage_increase_for_participants',
+  'wage increase for participants':'wage_increase_for_participants',
+  'blocked reason':         'blocked_reason',
+  'application process':    'application_process',
+  'program type':           'program_type',
+  'grant type':             'program_type',
+  'wib name':               {funding:'wib_name', applications:'wib_name'},
+  'wib funding status':     'wib_status',
+  /* ── APPLICATIONS ────────────────────────────────── */
+  'application number':  'application_number',
+  'amount requested':    'award_amount_requested',
+  'amount approved':     'award_amount_approved',
+  'award amount':        'award_amount_requested',
+  'award':               'award_amount_requested',
+  'award amount requested':'award_amount_requested',
+  'award amount approved':'award_amount_approved',
+  'submission date':     'submission_date',
+  'submitted':           'submission_date',
+  'decision date':       'decision_date',
+  'associated company':  'company_name',
+  'linked company':      'company_name',
+  'linked wib':          'wib_name',
+  'workforce board name':'wib_name',
+  /* ── CONTACT TYPE ─────────────────────────────────── */
+  'contact type':        'contact_type',
+  'title':               'contact_type',
+  'job title':           'contact_type',
+  'position':            'contact_type',
+  'role':                'contact_type',
 }
 
 function smartMatch(header, type) {
-  var h = header.toLowerCase().trim().replace(/[_\-]/g,' ')
-  // Direct match
+  if (!header) return '__skip'
+  /* Normalise: lower, collapse separators to spaces */
+  var h = header.toLowerCase().trim().replace(/[_\-\./\\]+/g,' ').replace(/\s+/g,' ')
+  /* 1. Direct synonym map lookup */
   if (h in IMPORT_SYNONYMS_MAP) {
     var v = IMPORT_SYNONYMS_MAP[h]
-    if (typeof v === 'object' && v[type]) return v[type]
-    if (typeof v === 'string') return v
+    if (typeof v === 'object') return v[type] || '__skip'
+    if (typeof v === 'string')  return v !== '__skip' ? v : '__skip'
   }
-  // Strip special chars
+  /* 2. Strip all non-alphanum and try again */
   var hc = h.replace(/[^a-z0-9 ]/g,'').trim()
-  if (hc in IMPORT_SYNONYMS_MAP) {
+  if (hc !== h && hc in IMPORT_SYNONYMS_MAP) {
     var v2 = IMPORT_SYNONYMS_MAP[hc]
-    if (typeof v2 === 'object' && v2[type]) return v2[type]
-    if (typeof v2 === 'string') return v2
+    if (typeof v2 === 'object') return v2[type] || '__skip'
+    if (typeof v2 === 'string')  return v2 !== '__skip' ? v2 : '__skip'
   }
-  // Substring match against field keys
+  /* 3. Collapse all spaces and try against compacted keys */
+  var hn = hc.replace(/ /g,'')
+  for (var k in IMPORT_SYNONYMS_MAP) {
+    var kn = k.replace(/[^a-z0-9]/g,'')
+    if (kn === hn) {
+      var v3 = IMPORT_SYNONYMS_MAP[k]
+      if (typeof v3 === 'object') return v3[type] || '__skip'
+      if (typeof v3 === 'string')  return v3 !== '__skip' ? v3 : '__skip'
+    }
+  }
+  /* 4. Substring match against CRM field keys */
   var fields = IMPORT_FIELDS[type] || []
-  var hn = h.replace(/[^a-z0-9]/g,'')
   for (var i=0;i<fields.length;i++) {
     var fk = fields[i].key.toLowerCase().replace(/[^a-z0-9]/g,'')
     if (fk === hn) return fields[i].key
-    if (fk.length > 3 && hn.includes(fk)) return fields[i].key
-    if (hn.length > 3 && fk.includes(hn)) return fields[i].key
+    if (fk.length > 4 && hn.includes(fk)) return fields[i].key
+    if (hn.length > 4 && fk.includes(hn)) return fields[i].key
+  }
+  /* 5. Partial label match */
+  for (var j=0;j<fields.length;j++) {
+    var fl = fields[j].label.toLowerCase().replace(/[^a-z0-9]/g,'')
+    if (fl.length > 4 && hn.includes(fl.slice(0,8))) return fields[j].key
   }
   return '__skip'
 }
@@ -7641,6 +7775,34 @@ async function iwizNext(type) {
       return out
     })
 
+    /* ── Pre-flight deduplication against local state arrays ── */
+    var dedupeKey = {
+      companies:'company_name', wibs:'wib_name', locations:'location_name',
+      funding:'opportunity_name', applications:'company_name'
+    }[type]
+    var existingSet = new Set()
+    if (dedupeKey) {
+      var stateArr = {
+        companies: window._companies,
+        wibs:       window._wibs,
+        locations:  window._locations,
+        funding:    window._funding,
+        applications: window._applications
+      }[type] || []
+      stateArr.forEach(function(rec){ if (rec[dedupeKey]) existingSet.add(String(rec[dedupeKey]).toLowerCase().trim()) })
+    }
+    var dupeCount = 0
+    var dedupedMapped = mapped.filter(function(row){
+      if (!dedupeKey || !row[dedupeKey]) return true
+      var val = String(row[dedupeKey]).toLowerCase().trim()
+      if (existingSet.has(val)) { dupeCount++; return false }
+      existingSet.add(val) // prevent intra-batch dupes too
+      return true
+    })
+    if (dupeCount > 0) {
+      showToast('⚡ ' + dupeCount + ' duplicate row' + (dupeCount===1?'':'s') + ' skipped (already in CRM)', 'info')
+    }
+
     /* Switch to step 3 - progress view */
     iwizSetStep(3)
     document.getElementById('iwiz-next').style.display = 'none'
@@ -7648,20 +7810,20 @@ async function iwizNext(type) {
     document.getElementById('iwiz-cancel').textContent = 'Close'
 
     document.getElementById('iwiz-step3').innerHTML =
-      '<div style="font-size:13px;font-weight:600;margin-bottom:10px">Importing ' + mapped.length.toLocaleString() + ' records...</div>' +
+      '<div style="font-size:13px;font-weight:600;margin-bottom:10px">Importing ' + dedupedMapped.length.toLocaleString() + ' records' + (dupeCount > 0 ? ' <span style="font-size:11px;font-weight:400;color:var(--text2)">(' + dupeCount + ' duplicates skipped)</span>' : '') + '...</div>' +
       '<div class="prog-outer" style="margin-bottom:8px"><div class="prog-inner" id="iwiz-prog" style="width:0%"></div></div>' +
       '<div id="iwiz-prog-label" style="font-size:11px;color:var(--text3);margin-bottom:16px">Starting...</div>' +
       '<div id="iwiz-result"></div>'
 
     /* Run batched import */
     var BATCH = 200
-    var total3 = mapped.length
+    var total3 = dedupedMapped.length
     var totalBatches = Math.ceil(total3 / BATCH)
     var totalCreated = 0
     var allErrors = []
 
     for (var b=0; b<totalBatches; b++) {
-      var batch = mapped.slice(b*BATCH, (b+1)*BATCH)
+      var batch = dedupedMapped.slice(b*BATCH, (b+1)*BATCH)
       var pct = Math.round(((b+1)/totalBatches)*100)
       var progEl = document.getElementById('iwiz-prog')
       var labelEl = document.getElementById('iwiz-prog-label')
@@ -7746,25 +7908,83 @@ function parseCSVText(text) {
 
 
 /* ═══════════════════════════════════════════════════
-   AIRCALL CLICK-TO-CALL
+   EMAIL COMPOSE HELPER
+   Opens mailto: with pre-populated subject + body context.
+   Falls back to a compose modal if the OS mail client isn't set.
 ═══════════════════════════════════════════════════ */
-function aircallDialOut(phoneNumber,contactName){
-  if(!phoneNumber){showToast('No phone number on this record','warn');return}
-  const digits=String(phoneNumber).replace(/[^0-9+]/g,'')
-  const label=contactName||'Contact'
-  try{
-    window.postMessage({type:'dial',name:'dial',event:'dial',phone:digits,number:digits,contact:label,source:'valor-crm'},'*')
-    document.querySelectorAll('iframe[src*="aircall"]').forEach(f=>{
-      try{f.contentWindow.postMessage({type:'dial',phone:digits},'*')}catch(_){}
-    })
-  }catch(e){console.warn('[Aircall] postMessage:',e)}
-  try{const a=document.createElement('a');a.href='aircall://'+digits;a.click()}catch(_){}
-  showToast('\uD83D\uDCDE Dialling '+label+' ('+phoneNumber+')...','info')
-  if(currentPage==='wib-profile'&&currentWib)
-    window._pendingCallRecord={id:currentWib.id,type:'wib_records',name:label,phone:digits}
-  else if(currentPage==='company-profile'&&currentCompany)
-    window._pendingCallRecord={id:currentCompany.id,type:'companies',name:label,phone:digits}
-  else window._pendingCallRecord=null
+function openComposeEmail(email, subject, bodyCtx) {
+  if (!email) { showToast('No email address on this record', 'warn'); return }
+  const safeEmail = String(email).trim()
+  const subj = subject || 'Valor Workforce Funding — IWT Grant Inquiry'
+  const body = bodyCtx || ('Hello,\n\nI\'m reaching out from Valor Workforce Funding regarding IWT grant opportunities that may benefit your organization.\n\nWould you have a few minutes to connect this week?\n\nBest regards,\n' + (currentUser?.full_name || 'Valor Workforce Funding'))
+  const mailto = 'mailto:' + encodeURIComponent(safeEmail)
+    + '?subject=' + encodeURIComponent(subj)
+    + '&body=' + encodeURIComponent(body)
+  const a = document.createElement('a'); a.href = mailto; a.click()
+  // Log to CRM if on a profile
+  const recId = currentWib?.id || currentCompany?.id || null
+  const recType = currentWib ? 'wib_records' : currentCompany ? 'companies' : null
+  if (recId && recType) {
+    try {
+      const p = buildNotePayload('📧 Email opened to: ' + safeEmail + '\nSubject: ' + subj, 'Email', {
+        record_type: recType, record_id: recId,
+        metadata: { note_type: 'Email', email_to: safeEmail, email_subject: subj }
+      })
+      api('/api/notes', 'POST', p).catch(() => {})
+    } catch(_) {}
+  }
+}
+/* ═══════════════════════════════════════════════════
+   AIRCALL CLICK-TO-CALL
+   Protocol cascade:
+     1. postMessage to Aircall Chrome extension + iframes
+     2. aircall:// deep-link (launches Aircall desktop/mobile app)
+     3. tel: fallback (device dialer)
+   Tags the pending call record for webhook auto-log.
+═══════════════════════════════════════════════════ */
+function aircallDialOut(phoneNumber, contactName) {
+  if (!phoneNumber) { showToast('No phone number on this record', 'warn'); return }
+  const digits = String(phoneNumber).replace(/[^0-9+]/g, '')
+  const label  = contactName || 'Contact'
+  const dialMsg = { type:'dial', name:'dial', event:'dial', phone:digits, number:digits, contact:label, source:'valor-crm' }
+
+  /* 1. Broadcast postMessage — caught by Aircall Chrome extension or embedded phone */
+  try { window.postMessage(dialMsg, '*') } catch(e) { console.warn('[Aircall] postMessage:', e) }
+  /* Also target any Aircall iframes if present */
+  document.querySelectorAll('iframe').forEach(f => {
+    if ((f.src||'').includes('aircall')) {
+      try { f.contentWindow.postMessage(dialMsg, '*') } catch(_) {}
+    }
+  })
+
+  /* 2. aircall:// deep-link */
+  let launched = false
+  try {
+    const a = document.createElement('a')
+    a.href = 'aircall://' + digits
+    a.rel = 'noopener'
+    document.body.appendChild(a); a.click(); document.body.removeChild(a)
+    launched = true
+  } catch(_) {}
+
+  /* 3. tel: fallback */
+  if (!launched) {
+    try {
+      const t = document.createElement('a')
+      t.href = 'tel:' + digits
+      document.body.appendChild(t); t.click(); document.body.removeChild(t)
+    } catch(__) {}
+  }
+
+  showToast('\uD83D\uDCDE Dialling ' + label + ' (' + phoneNumber + ')...', 'info')
+
+  /* Tag pending record so Aircall webhook can auto-log to the right profile */
+  if (currentPage === 'wib-profile' && currentWib)
+    window._pendingCallRecord = { id:currentWib.id, type:'wib_records', name:label, phone:digits }
+  else if (currentPage === 'company-profile' && currentCompany)
+    window._pendingCallRecord = { id:currentCompany.id, type:'companies', name:label, phone:digits }
+  else
+    window._pendingCallRecord = null
 }
 
 /* ═══════════════════════════════════════════════════
@@ -7812,67 +8032,177 @@ function openSmsModal(phoneNumber,contactName){
 }
 
 /* ═══════════════════════════════════════════════════
-   AIRCALL WEBHOOK LISTENER — upgraded
-   Dual cross-post: record timeline + global ISO-dated feed.
-   Full metric extraction: duration (sec + label), recording URL, call ID.
+   AIRCALL WEBHOOK LISTENER — v2 (fully upgraded)
+
+   Trusted origins: phone.aircall.io, app.aircall.io,
+   dashboard.aircall.io, and same-origin (for server relay).
+
+   Event detection handles all known Aircall event shapes:
+     - type: 'call_ended' | 'call_hangup'
+     - name: 'callEnded' | 'hangup' | 'call.ended'
+     - event: 'call.ended' | 'call.hangup'
+
+   Metric extraction (with all known field aliases):
+     - Call duration (seconds → "Xm Ys" label)
+     - Direction (Inbound / Outbound / Internal)
+     - Agent name + email
+     - Phone number (to/from)
+     - Recording URL (direct link)
+     - Call ID / SID
+
+   DUAL CROSS-POST on every completed call:
+     PUSH 1 → Profile timeline (WIB or Company) by recId
+     PUSH 2 → Global Notes feed, ISO-dated (YYYY-MM-DD) for the master log
+
+   Fires simultaneous API calls (not sequential) using Promise.allSettled.
 ═══════════════════════════════════════════════════ */
-window._aircallListenerActive=false
-function initAircallWebhookListener(){
-  if(window._aircallListenerActive)return
-  window._aircallListenerActive=true
-  window.addEventListener('message',function(evt){
-    const trusted=['https://phone.aircall.io','https://app.aircall.io','https://dashboard.aircall.io']
-    if(!trusted.some(o=>evt.origin.startsWith(o))&&evt.origin!==window.location.origin)return
-    const d=evt.data||{}
-    const isEnd=d.type==='call_ended'||d.type==='call_hangup'||d.name==='callEnded'||d.name==='hangup'||d.event==='call.ended'||d.event==='call.hangup'
-    if(!isEnd)return
-    const cd=d.data||d.call||d
-    const durSec=cd.duration_in_seconds||cd.duration||0
-    const durMin=durSec>0?Math.ceil(durSec/60):null
-    const durLabel=durMin?durMin+'m':(cd.duration_label||'?')
-    const dirRaw=cd.direction||cd.call_direction||'outbound'
-    const dir=dirRaw.charAt(0).toUpperCase()+dirRaw.slice(1)
-    const agent=cd.user?.name||cd.user?.email||cd.agent_name||cd.user_name||currentUser?.full_name||currentUser?.email||'Unknown Agent'
-    const phone=cd.number?.digits||cd.number?.phone_number||cd.customer?.phone_number||cd.phone_number||cd.to||cd.from||''
-    const recUrl=(Array.isArray(cd.recording)?cd.recording[0]:cd.recording)||cd.recording_url||cd.voicemail_url||''
-    const callId=cd.id||cd.call_id||cd.sid||''
-    const now=new Date()
-    const isoDate=now.toISOString().slice(0,10)
-    const humanDate=now.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})
-    const nowStr=now.toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'})
-    const pending=window._pendingCallRecord
-    const recId=pending?.id||(currentPage==='wib-profile'?currentWib?.id:null)||(currentPage==='company-profile'?currentCompany?.id:null)
-    const recType=pending?.type||(currentPage==='wib-profile'?'wib_records':null)||(currentPage==='company-profile'?'companies':null)
-    const recName=pending?.name||currentWib?.wib_name||currentCompany?.company_name||''
-    window._pendingCallRecord=null
-    const lines=[
-      '\uD83D\uDCDE Aircall \u2014 '+dir+' ('+durLabel+')'+(phone?' \u2014 '+phone:'')+(recName?' \u2014 '+recName:''),
-      'Agent: '+agent,'Date: '+nowStr,
-      durSec>0?'Duration: '+durSec+'s ('+durLabel+')':'',
-      recUrl?'\uD83D\uDD17 Recording: '+recUrl:'',
-      callId?'Call ID: '+callId:''
+window._aircallListenerActive = false
+function initAircallWebhookListener() {
+  if (window._aircallListenerActive) return
+  window._aircallListenerActive = true
+
+  window.addEventListener('message', async function(evt) {
+    /* ── Origin validation ── */
+    const TRUSTED = ['https://phone.aircall.io','https://app.aircall.io','https://dashboard.aircall.io']
+    const isTrustedOrigin = TRUSTED.some(o => evt.origin.startsWith(o)) || evt.origin === window.location.origin
+    /* Allow null-origin from Aircall Chrome extension content-scripts */
+    if (!isTrustedOrigin && evt.origin !== 'null') return
+
+    const d = evt.data || {}
+
+    /* ── Detect call-end event across all payload shapes ── */
+    const isCallEnd =
+      d.type  === 'call_ended'  || d.type  === 'call_hangup'  || d.type  === 'callEnded'  ||
+      d.name  === 'callEnded'   || d.name  === 'hangup'        || d.name  === 'call.ended' ||
+      d.event === 'call.ended'  || d.event === 'call.hangup'   || d.event === 'call_ended' ||
+      /* Aircall JS SDK "hook" format */
+      (d.type === 'Aircall' && (d.name||'').toLowerCase().includes('end'))
+
+    if (!isCallEnd) return
+
+    /* ── Extract call data (handles all known Aircall payload structures) ── */
+    const cd = d.data || d.call || d.payload || d
+
+    /* Duration */
+    const durSec = parseInt(cd.duration_in_seconds || cd.duration || cd.duration_seconds || 0, 10)
+    const durMins = Math.floor(durSec / 60)
+    const durSecs = durSec % 60
+    const durLabel = durSec > 0
+      ? (durMins > 0 ? durMins + 'm ' : '') + durSecs + 's'
+      : (cd.duration_label || 'unknown duration')
+
+    /* Direction */
+    const dirRaw = cd.direction || cd.call_direction || cd.type_call || 'outbound'
+    const dir = dirRaw.charAt(0).toUpperCase() + dirRaw.slice(1).toLowerCase()
+
+    /* Agent */
+    const agent =
+      cd.user?.name || cd.user?.email ||
+      cd.agent?.name || cd.agent?.email ||
+      cd.agent_name  || cd.user_name   ||
+      currentUser?.full_name || currentUser?.email || 'Unknown Agent'
+
+    /* Phone number */
+    const phone =
+      cd.number?.digits       || cd.number?.phone_number    ||
+      cd.customer?.phone_number || cd.raw_digits             ||
+      cd.phone_number         || cd.to                      || cd.from || ''
+
+    /* Recording URL — try every known field name */
+    const recUrl =
+      (Array.isArray(cd.recording) ? cd.recording[0] : cd.recording) ||
+      cd.recording_url || cd.recording_link || cd.voicemail_url ||
+      cd.recorded_at   || ''
+
+    /* Call ID */
+    const callId = cd.id || cd.call_id || cd.aircall_id || cd.sid || ''
+
+    /* ── Timestamps ── */
+    const now = new Date()
+    const isoDate   = now.toISOString().slice(0, 10)          // YYYY-MM-DD (global index key)
+    const humanDate = now.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' })
+    const nowStr    = now.toLocaleString('en-US', { month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' })
+
+    /* ── Resolve target record ── */
+    const pending  = window._pendingCallRecord
+    const recId    = pending?.id    || (currentPage==='wib-profile'?currentWib?.id:null)     || (currentPage==='company-profile'?currentCompany?.id:null)
+    const recType  = pending?.type  || (currentPage==='wib-profile'?'wib_records':null)       || (currentPage==='company-profile'?'companies':null)
+    const recName  = pending?.name  || currentWib?.wib_name || currentCompany?.company_name   || ''
+    window._pendingCallRecord = null
+
+    /* ── Build note body ── */
+    const noteLines = [
+      '\uD83D\uDCDE Aircall \u2014 ' + dir + ' (' + durLabel + ')' + (phone ? ' \u2014 ' + phone : '') + (recName ? ' \u2014 ' + recName : ''),
+      'Agent:     ' + agent,
+      'Date:      ' + nowStr,
+      durSec > 0 ? 'Duration:  ' + durSec + 's (' + durLabel + ')' : '',
+      recUrl    ? '\uD83D\uDD17 Recording: ' + recUrl  : '',
+      callId    ? 'Call ID:   ' + callId : ''
     ].filter(Boolean)
-    const autoContent=lines.join('\n')
-    const meta={duration:durLabel,duration_seconds:durSec||null,direction:dir,caller:agent,phone_number:phone||null,recording_url:recUrl||null,call_id:callId||null,call_date:now.toISOString(),is_aircall:true,note_type:'Aircall',auto_logged:true,global_date:isoDate,global_date_human:humanDate}
-    // PUSH 1: record timeline
-    if(recId&&recType){
-      let p;try{p=buildNotePayload(autoContent,'Aircall',{record_type:recType,record_id:recId,metadata:meta})}catch(_){}
-      if(p)api('/api/notes','POST',p).catch(e=>console.warn('[Aircall] record note:',e.message))
+    const recordContent = noteLines.join('\n')
+
+    /* ── Shared metadata ── */
+    const baseMeta = {
+      note_type:        'Aircall',
+      is_aircall:       true,
+      auto_logged:      true,
+      direction:        dir,
+      duration:         durLabel,
+      duration_seconds: durSec || null,
+      caller:           agent,
+      phone_number:     phone || null,
+      recording_url:    recUrl || null,
+      call_id:          callId || null,
+      call_date:        now.toISOString(),
+      global_date:      isoDate,
+      global_date_human: humanDate
     }
-    // PUSH 2: global ISO-dated feed
-    const gContent=['\uD83D\uDCDE Aircall Log \u2014 '+humanDate,recName?'Record: '+recName:'',''].concat(lines).filter(l=>l!==null&&l!==undefined).join('\n').trim()
-    const gMeta=Object.assign({},meta,{cross_posted_from:recId||null,cross_posted_type:recType||null,global_date:isoDate,global_date_human:humanDate})
-    let gp;try{gp=buildNotePayload(gContent,'Aircall',{metadata:gMeta})}catch(_){}
-    if(gp)api('/api/notes','POST',gp).catch(e=>console.warn('[Aircall] global note:',e.message))
-    showToast('\uD83D\uDCDE Aircall logged \u2014 '+dir+' '+durLabel+(recUrl?' \uD83D\uDD17':''),'success')
-    if(currentPage==='wib-profile')    loadWibTabData(wibTab)
-    if(currentPage==='company-profile')loadCompanyTabData(companyTab)
-    if(currentPage==='calls')          pageCalls()
-    if(currentPage==='notes')          loadPage('notes')
+
+    /* ── PUSH 1: Profile timeline (if we have a record context) ── */
+    const pushes = []
+    if (recId && recType) {
+      let p1
+      try {
+        p1 = buildNotePayload(recordContent, 'Aircall', {
+          record_type: recType,
+          record_id:   recId,
+          metadata:    baseMeta
+        })
+      } catch(_) {}
+      if (p1) pushes.push(api('/api/notes', 'POST', p1).catch(e => console.warn('[Aircall] PUSH 1 failed:', e.message)))
+    }
+
+    /* ── PUSH 2: Global ISO-dated Notes feed ── */
+    const globalLines = [
+      '\uD83D\uDCDE Aircall Log \u2014 ' + isoDate + ' \u2014 ' + humanDate,
+      recName ? 'Record:    ' + recName : '',
+      recType ? 'Type:      ' + recType.replace(/_/g, ' ') : '',
+      ''
+    ].filter(l => l !== null && l !== undefined).concat(noteLines)
+    const globalContent = globalLines.join('\n').trim()
+    const globalMeta = Object.assign({}, baseMeta, {
+      cross_posted_from: recId   || null,
+      cross_posted_type: recType || null
+    })
+    let p2
+    try {
+      p2 = buildNotePayload(globalContent, 'Aircall', { metadata: globalMeta })
+    } catch(_) {}
+    if (p2) pushes.push(api('/api/notes', 'POST', p2).catch(e => console.warn('[Aircall] PUSH 2 failed:', e.message)))
+
+    /* Fire both pushes simultaneously */
+    if (pushes.length) await Promise.allSettled(pushes)
+
+    /* ── Toast & UI refresh ── */
+    showToast('\uD83D\uDCDE Aircall logged \u2014 ' + dir + ' ' + durLabel + (recUrl ? ' \uD83D\uDD17' : ''), 'success')
+    if (currentPage === 'wib-profile')     loadWibTabData(wibTab)
+    if (currentPage === 'company-profile') loadCompanyTabData(companyTab)
+    if (currentPage === 'calls')           pageCalls()
+    if (currentPage === 'notes')           loadPage('notes')
   })
 }
-if(document.readyState==='complete'||document.readyState==='interactive'){initAircallWebhookListener()}
-else document.addEventListener('DOMContentLoaded',initAircallWebhookListener)
+if (document.readyState==='complete'||document.readyState==='interactive') { initAircallWebhookListener() }
+else document.addEventListener('DOMContentLoaded', initAircallWebhookListener)
 
 render()
 </script>
