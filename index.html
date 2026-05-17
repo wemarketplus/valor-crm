@@ -8053,9 +8053,16 @@ function smartMatch(header, type) {
   return '__skip'
 }
 
-/* ── Import wizard: save individual mapping choice & live-refresh warning ── */
-function _iwizSaveMapping(type, header, fieldKey) {
-  try { localStorage.setItem('valorMappingV1:' + type + ':' + header.toLowerCase().trim(), fieldKey) } catch(_) {}
+/* ── Import wizard: save mapping by col index (avoids inline string escaping) ── */
+function _iwizOnMap(selectEl, type) {
+  /* Look up the actual header name from the live rows data by index */
+  var idx = parseInt(selectEl.getAttribute('data-col-idx'), 10)
+  var rows = window._iwizRows
+  if (!rows || !rows.length) return
+  var headers = Object.keys(rows[0])
+  var header = headers[idx]
+  if (!header) return
+  try { localStorage.setItem('valorMappingV1:' + type + ':' + header.toLowerCase().trim(), selectEl.value) } catch(_) {}
 }
 function _iwizRefreshWarn(type) {
   var step2 = document.getElementById('iwiz-step2')
@@ -8296,16 +8303,17 @@ async function iwizNext(type) {
             ? '<span style="font-size:9px;background:var(--blue-bg);color:var(--blue-t);border-radius:4px;padding:1px 5px;margin-left:5px;font-weight:600;vertical-align:middle">\ud83e\udde0 smart match</span>'
             : ''
 
+        /* onchange uses col index to look up the header — avoids any inline string-escaping */
         return '<div class="fmr-grid" style="align-items:start">' +
           '<div>' +
             '<div class="fmr-src" style="font-weight:600;color:var(--text)">' + h + matchBadge + '</div>' +
             (sampleTxt ? '<div style="font-size:9.5px;color:var(--text3);margin-top:3px;font-style:italic">e.g. ' + sampleTxt + '</div>' : '<div style="font-size:9.5px;color:var(--text4);margin-top:2px">(empty)</div>') +
           '</div>' +
-          '<div class="fmr-arrow" style="padding-top:6px">\u2192</div>' +
-          '<select class="fmr-sel" id="fmr-sel-' + i + '"' +
-            ' onchange="_iwizSaveMapping(\'' + type + '\',\'' + h.replace(/'/g,\'\\\'\'') + '\',this.value);_iwizRefreshWarn(\'' + type + '\')">' +
-            '<option value="__skip">\u2014 Skip this column \u2014</option>' +
-            fields.map(function(f){ return '<option value="' + f.key + '"' + (f.key===matched?' selected':'') + '>' + (f.required?'\u2605 ':'') + f.label + '</option>' }).join('') +
+          '<div class="fmr-arrow" style="padding-top:6px">&rarr;</div>' +
+          '<select class="fmr-sel" id="fmr-sel-' + i + '" data-col-idx="' + i + '"' +
+            ' onchange="_iwizOnMap(this,' + JSON.stringify(type) + ');_iwizRefreshWarn(' + JSON.stringify(type) + ')">' +
+            '<option value="__skip">&mdash; Skip this column &mdash;</option>' +
+            fields.map(function(f){ return '<option value="' + f.key + '"' + (f.key===matched?' selected':'') + '>' + (f.required?'&#9733; ':'') + f.label + '</option>' }).join('') +
           '</select>' +
         '</div>'
       }).join('')
