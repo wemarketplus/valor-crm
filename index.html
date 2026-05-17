@@ -3823,6 +3823,7 @@ window._IMPORT_SYNONYM_TABLE={
   'iwt program active':'iwt_program_active','iwt active':'iwt_program_active',
   'pcode':'pcode','contacts json':'contacts_json','contacts':'contacts_json',
   'location':'location_name','location name':'location_name','facility':'location_name','facility name':'location_name','site name':'location_name','nursing home':'location_name',
+  'record':{'locations':'location_name','companies':'company_name','applications':'company_name'},
   'parent operator':'parent_company_name','operator':{'locations':'parent_company_name'},'parent company':'parent_company_name',
   'wib funding status':'wib_status','application link':'application_link','application url':'application_link',
   'opportunity name':'opportunity_name','funding opportunity':'opportunity_name','grant name':'opportunity_name',
@@ -3877,7 +3878,7 @@ function _loadAllMappings(type, sourceHeaders){
    ───────────────────────────────────────────────────────────────────────── */
 window._FIELD_KEYWORDS = {
   /* Locations */
-  location_name:      ['location','name','facility','site','operator','nursing','home','record'],
+  location_name:      ['location','name','facility','site','nursing','home'],
   state:              ['state','st','province'],
   city:               ['city','town','municipality'],
   county:             ['county','parish'],
@@ -8026,7 +8027,7 @@ var IMPORT_SYNONYMS_MAP = {
 
 /* ── keyword tables for relational-header scoring ── */
 var _SMART_KEYWORDS = {
-  location_name:        ['location','name','facility','site','operator','nursing','home','record'],
+  location_name:        ['location','name','facility','site','nursing','home'],
   state:                ['state','province'],
   city:                 ['city','town'],
   county:               ['county','parish'],
