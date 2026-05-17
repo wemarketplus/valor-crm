@@ -1626,6 +1626,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
         
         const locRow = {
           location_name: name,
+          owner_id: req.user.id,
           state: rawState || null,
           city: (row['city'] || row['City'] || '').trim() || null,
           county: (row['county'] || row['County'] || '').trim() || null,
