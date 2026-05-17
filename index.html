@@ -7961,8 +7961,43 @@ var IMPORT_SYNONYMS_MAP = {
   'role':                'contact_type',
 }
 
+/* ── keyword tables for relational-header scoring ── */
+var _SMART_KEYWORDS = {
+  location_name:        ['location','name','facility','site','operator','nursing','home','record'],
+  state:                ['state','province'],
+  city:                 ['city','town'],
+  county:               ['county','parish'],
+  address:              ['address','street'],
+  zip:                  ['zip','zipcode','postal'],
+  status:               ['status','stage'],
+  employee_count:       ['employee','headcount','staff','bed','beds'],
+  parent_company_name:  ['parent','operator','company','owner'],
+  notes:                ['notes','comments','description','update'],
+  company_name:         ['company','employer','organization','account','business','name'],
+  primary_contact_name: ['contact','poc','primary'],
+  primary_contact_email:['email','contact'],
+  primary_contact_phone:['phone','mobile','cell'],
+  wib_name:             ['wib','workforce','board'],
+  wib_email:            ['wib','email'],
+  wib_phone:            ['wib','phone'],
+  opportunity_name:     ['opportunity','funding','grant','program','name'],
+  application_deadline: ['deadline','close','application'],
+  award_amount_requested:['amount','award','requested']
+}
+function _smartKeywordScore(words, fieldKey) {
+  var kws = _SMART_KEYWORDS[fieldKey] || []; var score = 0
+  words.forEach(function(w){
+    if (kws.some(function(k){ return w.indexOf(k) >= 0 || k.indexOf(w) >= 0 })) score++
+  })
+  return score
+}
 function smartMatch(header, type) {
   if (!header) return '__skip'
+  /* 0. Saved mapping from localStorage (user\'s own past choice — highest priority) */
+  try {
+    var saved = localStorage.getItem('valorMappingV1:' + type + ':' + header.toLowerCase().trim())
+    if (saved) return saved
+  } catch(_) {}
   /* Normalise: lower, collapse separators to spaces */
   var h = header.toLowerCase().trim().replace(/[_\-\./\\]+/g,' ').replace(/\s+/g,' ')
   /* 1. Direct synonym map lookup */
@@ -7993,15 +8028,62 @@ function smartMatch(header, type) {
   for (var i=0;i<fields.length;i++) {
     var fk = fields[i].key.toLowerCase().replace(/[^a-z0-9]/g,'')
     if (fk === hn) return fields[i].key
-    if (fk.length > 4 && hn.includes(fk)) return fields[i].key
-    if (hn.length > 4 && fk.includes(hn)) return fields[i].key
+    if (fk.length > 4 && hn.indexOf(fk) >= 0) return fields[i].key
+    if (hn.length > 4 && fk.indexOf(hn) >= 0) return fields[i].key
   }
   /* 5. Partial label match */
   for (var j=0;j<fields.length;j++) {
     var fl = fields[j].label.toLowerCase().replace(/[^a-z0-9]/g,'')
-    if (fl.length > 4 && hn.includes(fl.slice(0,8))) return fields[j].key
+    if (fl.length > 4 && hn.indexOf(fl.slice(0,8)) >= 0) return fields[j].key
+  }
+  /* 6. Relational keyword scorer — handles compound headers like
+        "Zipcode > Regional WIB > Funding Opportunities > Status"
+        Tokenise on separators; score each candidate field by keyword hits */
+  var words = header.toLowerCase().split(/[\s>\|\-_\/\\.,;:]+/)
+    .map(function(w){ return w.replace(/[^a-z0-9]/g,'') })
+    .filter(function(w){ return w.length > 1 })
+  if (words.length) {
+    var bestKey = null, bestScore = 0
+    fields.forEach(function(f) {
+      var s = _smartKeywordScore(words, f.key)
+      if (s > bestScore) { bestScore = s; bestKey = f.key }
+    })
+    if (bestScore >= 1) return bestKey
   }
   return '__skip'
+}
+
+/* ── Import wizard: save individual mapping choice & live-refresh warning ── */
+function _iwizSaveMapping(type, header, fieldKey) {
+  try { localStorage.setItem('valorMappingV1:' + type + ':' + header.toLowerCase().trim(), fieldKey) } catch(_) {}
+}
+function _iwizRefreshWarn(type) {
+  var step2 = document.getElementById('iwiz-step2')
+  if (!step2) return
+  var fields = IMPORT_FIELDS[type] || []
+  var reqFields = fields.filter(function(f){ return f.required })
+  /* Collect current dropdown values */
+  var selects = step2.querySelectorAll('select.fmr-sel')
+  var mappedVals = []
+  selects.forEach(function(s){ if (s.value && s.value !== '__skip') mappedVals.push(s.value) })
+  var missing = reqFields.filter(function(rf){ return mappedVals.indexOf(rf.key) < 0 })
+  var warn = document.getElementById('iwiz-req-warn')
+  var nextBtn = document.getElementById('iwiz-next')
+  if (missing.length) {
+    var html = '<div id="iwiz-req-warn" style="background:var(--red-bg);border:.5px solid #fca5a5;border-radius:8px;padding:10px 12px;margin-bottom:10px">' +
+      '<div style="font-weight:600;font-size:11.5px;color:var(--red-t);margin-bottom:4px">\u26a0\ufe0f Required column not mapped: ' +
+        missing.map(function(f){ return '<strong>'+f.label+'</strong>' }).join(', ') +
+      '</div>' +
+      '<div style="font-size:10.5px;color:var(--red-t)">Use the dropdowns to link one of your columns to this required field.</div>' +
+    '</div>'
+    if (warn) warn.outerHTML = html
+    else step2.insertAdjacentHTML('afterbegin', html)
+    /* Keep import button disabled */
+    if (nextBtn) { nextBtn.disabled = true; nextBtn.style.opacity = '0.45'; nextBtn.title = 'Map the required field(s) before importing' }
+  } else {
+    if (warn) warn.remove()
+    if (nextBtn) { nextBtn.disabled = false; nextBtn.style.opacity = ''; nextBtn.title = '' }
+  }
 }
 
 function openImportModal(type, preloadedFile) {
@@ -8205,15 +8287,25 @@ async function iwizNext(type) {
         }
         var sampleTxt = samples.length ? samples[0].slice(0,50)+(samples[0].length>50?'...':'') : ''
 
+        /* Badge: remembered (green) > smart-match (blue) > unmatched (none) */
+        var fromMemory = false
+        try { fromMemory = !!localStorage.getItem('valorMappingV1:'+type+':'+h.toLowerCase().trim()) } catch(_){}
+        var matchBadge = fromMemory
+          ? '<span style="font-size:9px;background:var(--green-bg);color:var(--green-t);border-radius:4px;padding:1px 5px;margin-left:5px;font-weight:600;vertical-align:middle">\ud83d\udcbe remembered</span>'
+          : (matched && matched !== '__skip')
+            ? '<span style="font-size:9px;background:var(--blue-bg);color:var(--blue-t);border-radius:4px;padding:1px 5px;margin-left:5px;font-weight:600;vertical-align:middle">\ud83e\udde0 smart match</span>'
+            : ''
+
         return '<div class="fmr-grid" style="align-items:start">' +
           '<div>' +
-            '<div class="fmr-src" style="font-weight:600;color:var(--text)">' + h + '</div>' +
+            '<div class="fmr-src" style="font-weight:600;color:var(--text)">' + h + matchBadge + '</div>' +
             (sampleTxt ? '<div style="font-size:9.5px;color:var(--text3);margin-top:3px;font-style:italic">e.g. ' + sampleTxt + '</div>' : '<div style="font-size:9.5px;color:var(--text4);margin-top:2px">(empty)</div>') +
           '</div>' +
-          '<div class="fmr-arrow" style="padding-top:6px">→</div>' +
-          '<select class="fmr-sel" id="fmr-sel-' + i + '">' +
-            '<option value="__skip">— Skip this column —</option>' +
-            fields.map(function(f){ return '<option value="' + f.key + '"' + (f.key===matched?' selected':'') + '>' + (f.required?'★ ':'') + f.label + '</option>' }).join('') +
+          '<div class="fmr-arrow" style="padding-top:6px">\u2192</div>' +
+          '<select class="fmr-sel" id="fmr-sel-' + i + '"' +
+            ' onchange="_iwizSaveMapping(\'' + type + '\',\'' + h.replace(/'/g,\'\\\'\'') + '\',this.value);_iwizRefreshWarn(\'' + type + '\')">' +
+            '<option value="__skip">\u2014 Skip this column \u2014</option>' +
+            fields.map(function(f){ return '<option value="' + f.key + '"' + (f.key===matched?' selected':'') + '>' + (f.required?'\u2605 ':'') + f.label + '</option>' }).join('') +
           '</select>' +
         '</div>'
       }).join('')
@@ -8221,29 +8313,60 @@ async function iwizNext(type) {
       /* Required field check display */
       var reqFields = fields.filter(function(f){return f.required})
 
+      /* Build required-field warning banner */
+      var mappedNow = headers.map(function(h){ return smartMatch(h, type) })
+      var missingNow = reqFields.filter(function(rf){
+        return mappedNow.indexOf(rf.key) < 0
+      })
+      var savedCount = 0
+      try { headers.forEach(function(h){ if(localStorage.getItem('valorMappingV1:'+type+':'+h.toLowerCase().trim())) savedCount++ }) } catch(_){}
+
+      var warnBannerHtml = missingNow.length
+        ? '<div id="iwiz-req-warn" style="background:var(--red-bg);border:.5px solid #fca5a5;border-radius:8px;padding:10px 12px;margin-bottom:10px">' +
+            '<div style="font-weight:600;font-size:11.5px;color:var(--red-t);margin-bottom:4px">' +
+              '\u26a0\ufe0f Required column not mapped: ' +
+              missingNow.map(function(f){ return '<strong>' + f.label + '</strong>' }).join(', ') +
+            '</div>' +
+            '<div style="font-size:10.5px;color:var(--red-t)">Use the dropdowns below to link one of your columns to this required field.</div>' +
+          '</div>'
+        : ''
+
       document.getElementById('iwiz-step2').innerHTML =
-        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">' +
+        /* Stats bar */
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">' +
           '<div style="font-size:12px">' +
-            '<strong style="color:var(--text)">' + headers.length + '</strong> CSV columns · ' +
+            '<strong style="color:var(--text)">' + headers.length + '</strong> CSV columns \u00b7 ' +
             '<span style="color:var(--green-t);font-weight:600">' + rows.length.toLocaleString() + '</span> rows' +
           '</div>' +
           '<div style="font-size:11px;color:var(--text3)">' +
             '<span style="color:var(--green-t);font-weight:600">' + matchCount + '</span> / ' + headers.length + ' auto-matched' +
+            (savedCount ? ' \u00b7 <span style="color:var(--green-t)">\ud83d\udcbe ' + savedCount + ' remembered</span>' : '') +
           '</div>' +
         '</div>' +
-        '<div style="background:var(--bg2);border-radius:6px;padding:8px 10px;margin-bottom:10px;font-size:10.5px;color:var(--text2)">' +
-          '★ = Required. ' + reqFields.map(function(f){return '<strong>'+f.label+'</strong>'}).join(', ') + ' must be mapped to import.' +
+        /* Required-field warning — rendered only when needed, disappears on fix */
+        warnBannerHtml +
+        /* Hint */
+        '<div style="background:var(--gray2);border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:10.5px;color:var(--text2)">' +
+          '\ud83e\udde0 Smart-matched where possible. \u2605 = Required. Your choices are remembered for next time.' +
         '</div>' +
-        '<div style="display:grid;grid-template-columns:1fr 28px 1fr;gap:4px;padding:0 2px 6px;font-size:9.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">' +
+        /* Column headers */
+        '<div style="display:grid;grid-template-columns:1fr 28px 1fr;gap:4px;padding:0 4px 5px;font-size:9.5px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">' +
           '<span>Your CSV Column + Sample</span><span></span><span>Maps to CRM Field</span>' +
         '</div>' +
-        '<div style="max-height:360px;overflow-y:auto;border:.5px solid var(--border1);border-radius:8px;padding:6px 8px">' + rowsHtml + '</div>'
+        /* Rows container — independently scrollable so warning banner stays anchored above */
+        '<div id="iwiz-rows-wrap" style="overflow-y:auto;border:.5px solid var(--border2);border-radius:8px;padding:6px 8px;max-height:320px">' + rowsHtml + '</div>'
 
       iwizSetStep(2)
       document.getElementById('iwiz-back').style.display = 'inline-flex'
       var nb = document.getElementById('iwiz-next')
-      nb.disabled = false
       nb.textContent = '▶ Start Import'
+      /* Disable import button if required fields still missing; dropdowns fix it live */
+      if (missingNow.length) {
+        nb.disabled = true; nb.style.opacity = '0.45'
+        nb.title = 'Map the required field(s) above before importing'
+      } else {
+        nb.disabled = false; nb.style.opacity = ''; nb.title = ''
+      }
 
     } catch(e) {
       document.getElementById('iwiz-file-err').innerHTML = '<div class="alert alert-error">Error reading file: ' + e.message + '</div>'
