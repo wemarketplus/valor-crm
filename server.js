@@ -1425,7 +1425,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
       for (const row of rows) {
         const name = (nameKey ? row[nameKey] : null)?.trim()
           || getField(row, 'Company Name','company_name','Record','Name','Company','Employer','Organization','Account Name','Business Name')
-        console.log("FIRST ROW SAMPLE:", JSON.stringify(rows[0] || {}))
+        
         if (!name) { results.errors.push('Skipped — no company name found'); continue }
 
         const rawStatus = (getField(row,'Status','Stage','status','stage','Record Stage','Company Stage') || '').toLowerCase().trim()
@@ -1593,6 +1593,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
 
       const locBatch = []
       for (const row of rows) {
+        if (results.errors.length === 0) console.log("FIRST ROW RAW:", JSON.stringify(rows[0] || {}))
         // Support CRM keys, Attio export headers, and any unrecognized column that looks like a name
         let name = (
           row['location_name'] || row['Record'] || row['Location Name'] ||
