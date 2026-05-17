@@ -3831,6 +3831,12 @@ window._IMPORT_SYNONYM_TABLE={
   'hubspot company id':'__skip','record id':'__skip','create date':'__skip','created time':'__skip',
   'account id':'__skip','sf id':'__skip','salesforce id':'__skip','annual revenue':'__skip',
   'lead source':'cms_channel','associated company':'company_name','linked company':'company_name','linked wib':'wib_name',
+  /* legacy key aliases — for files exported from older versions of this app */
+  'parent operator':{'locations':'parent_company_name'},'parent_operator':'parent_company_name',
+  'call priority score':{'companies':'call_priority','wibs':'call_priority'},'call_priority_score':{'companies':'call_priority','wibs':'call_priority'},
+  'match requirement pct':'employer_match_pct','match_requirement_pct':'employer_match_pct',
+  'match requirement':'employer_match_pct',
+  'website':{'companies':'domain','wibs':'source_url'},'next steps':'__skip','blockers':'__skip',
 }
 function resolveImportHeader(header,type){
   if(!header)return '__skip'
@@ -7212,7 +7218,7 @@ async function runFullImport(){
     }else{
       if(preview&&totalErrors.length){
         // Strip internal DEBUG prefix from error messages before showing to user
-        const _cleanErr=(e||'')=>String(e||'').replace(/^DEBUG[^—–-]*[—–-]+\s*/i,'').replace(/^DEBUG\s*/i,'').trim()||'Row was skipped'
+        const _cleanErr=(e)=>String(e||'').replace(/^DEBUG[^—–-]*[—–-]+\s*/i,'').replace(/^DEBUG\s*/i,'').trim()||'Row was skipped'
         const _firstErr=_cleanErr(totalErrors[0])
         const _isNoKey=_firstErr.toLowerCase().includes('no location name')||_firstErr.toLowerCase().includes('no company name')||_firstErr.toLowerCase().includes('no wib name')||_firstErr.toLowerCase().includes('no opportunity name')
         const _reqField=(IMPORT_FIELD_DEFS[type]||[]).filter(f=>f.required).map(f=>f.label.split('(')[0].trim()).join(', ')
@@ -7354,47 +7360,78 @@ var IMPORT_FIELDS = {
     {key:'company_name',label:'Company Name',required:true},
     {key:'status',label:'Status'},
     {key:'company_type',label:'Company Type / Industry'},
+    {key:'short_name',label:'Short Name'},
     {key:'domain',label:'Domain / Website'},
     {key:'fein',label:'FEIN / Tax ID'},
     {key:'rating',label:'Rating (1-5)'},
+    {key:'call_priority',label:'Call Priority (number)'},
     {key:'employee_count_total',label:'Employee Count'},
     {key:'avg_hourly_wage',label:'Avg Hourly Wage'},
     {key:'primary_contact_name',label:'Contact Name'},
+    {key:'contact_type',label:'Contact Type'},
     {key:'primary_contact_email',label:'Contact Email'},
     {key:'primary_contact_phone',label:'Contact Phone'},
+    {key:'address',label:'Address'},
+    {key:'city',label:'City'},
+    {key:'state',label:'State (2-letter)'},
+    {key:'zip',label:'Zip Code'},
     {key:'training_needs',label:'Training Needs'},
     {key:'notes',label:'Notes'},
+    {key:'tags',label:'Tags (comma-separated)'},
+    {key:'is_25_pct_operator',label:'Is 25% Operator (true/false)'},
     {key:'supported_by',label:'Supported By'},
-    {key:'is_25_pct_operator',label:'Is 25% Operator'},
+    {key:'last_contact_date',label:'Last Contact Date (YYYY-MM-DD)'},
+    {key:'ai_assistant_data',label:'AI Assistant Data / Research Notes'},
+    {key:'activity_history',label:'Activity History'},
+    {key:'internal_notes',label:'Internal Notes / Chat Log'},
+    {key:'funding_opportunities',label:'Funding Opportunity Names (comma-separated)'},
+    {key:'relationships',label:'Relationships / Parent Company Name'},
+    {key:'cms_channel',label:'CMS Channel / Source'},
     {key:'__skip',label:'— Skip this column —'},
   ],
   wibs: [
     {key:'wib_name',label:'WIB Name',required:true},
+    {key:'state',label:'State (2-letter)',required:true},
     {key:'short_name',label:'Short Name'},
-    {key:'state',label:'State (2-letter)'},
     {key:'status',label:'Status'},
     {key:'wib_email',label:'WIB Email Address'},
     {key:'wib_phone',label:'Phone'},
-    {key:'website',label:'Website'},
+    {key:'source_url',label:'Website URL'},
     {key:'wib_type',label:'Type (State/Regional/Local)'},
-    {key:'source_url',label:'Source URL'},
     {key:'max_award_per_ein',label:'Max Award per EIN'},
-    {key:'match_requirement_pct',label:'Match Requirement %'},
-    {key:'next_steps',label:'Next Steps'},
-    {key:'blockers',label:'Blockers'},
+    {key:'max_award_per_employee',label:'Max Award per Employee'},
+    {key:'employer_match_pct',label:'Employer Match %'},
+    {key:'call_priority',label:'Call Priority Score'},
+    {key:'owner',label:'Owner / Assigned User'},
+    {key:'iwt_program_active',label:'IWT Program Active (true/false)'},
     {key:'notes',label:'Notes'},
-    {key:'call_priority_score',label:'Call Priority Score'},
+    {key:'pcode',label:'pcode'},
+    {key:'tags',label:'Tags (comma-separated)'},
+    {key:'last_contact_date',label:'Last Contact Date (YYYY-MM-DD)'},
+    {key:'contacts_json',label:'Contacts (JSON)'},
+    {key:'funding_opportunities',label:'Associated Funding Opportunity Names'},
+    {key:'regional_zipcodes',label:'Regional Zipcodes (comma-separated)'},
+    {key:'state_zipcodes',label:'State Zipcodes (comma-separated)'},
+    {key:'activity_history',label:'Activity History'},
+    {key:'internal_chat',label:'Internal Chat / Notes'},
     {key:'__skip',label:'— Skip this column —'},
   ],
   locations: [
     {key:'location_name',label:'Location Name',required:true},
-    {key:'parent_operator',label:'Parent Operator (Company Name)'},
-    {key:'state',label:'State (2-letter)'},
-    {key:'status',label:'Status'},
+    {key:'state',label:'State (2-letter)',required:true},
+    {key:'parent_company_name',label:'Parent Company Name (links by name)'},
     {key:'city',label:'City'},
     {key:'county',label:'County'},
-    {key:'employee_count',label:'Employee Count'},
     {key:'address',label:'Address'},
+    {key:'zip',label:'Zip Code'},
+    {key:'status',label:'Status'},
+    {key:'employee_count',label:'Employee Count'},
+    {key:'wib_name',label:'Associated WIB Name'},
+    {key:'call_priority',label:'Call Priority Score'},
+    {key:'wib_status',label:'WIB Funding Status'},
+    {key:'application_link',label:'Application Link URL'},
+    {key:'tags',label:'Tags (comma-separated)'},
+    {key:'funding_opportunities',label:'Funding Opportunity Names (comma-separated)'},
     {key:'notes',label:'Notes'},
     {key:'__skip',label:'— Skip this column —'},
   ],
@@ -7402,22 +7439,37 @@ var IMPORT_FIELDS = {
     {key:'opportunity_name',label:'Opportunity Name',required:true},
     {key:'status',label:'Status'},
     {key:'program_type',label:'Program Type'},
-    {key:'source_url',label:'Source URL',required:true},
     {key:'max_award_per_ein',label:'Max Award per EIN'},
-    {key:'application_deadline',label:'Application Deadline'},
-    {key:'application_link',label:'Application Link'},
-    {key:'notes',label:'Notes'},
+    {key:'max_award_per_employee',label:'Max Award per Employee'},
+    {key:'application_deadline',label:'Application Deadline (YYYY-MM-DD)'},
+    {key:'source_url',label:'Application Link / Portal URL'},
+    {key:'application_process',label:'Application Process Notes / Blockers'},
+    {key:'blocked_reason',label:'Blocked Reason'},
+    {key:'wib_name',label:'Associated WIB Name (links by name)'},
+    {key:'state',label:'State (2-letter)'},
+    {key:'promotion_for_participants',label:'Promotion for Participants'},
+    {key:'wage_increase_for_participants',label:'Wage Increase for Participants'},
+    {key:'notes',label:'Additional Notes'},
+    {key:'tags',label:'Tags'},
+    {key:'locations',label:'Associated Location Names (comma-separated)'},
+    {key:'applications',label:'Application Names (comma-separated)'},
     {key:'__skip',label:'— Skip this column —'},
   ],
   applications: [
-    {key:'company_name',label:'Company / Employer Name',required:true},
-    {key:'wib_name',label:'WIB / Workforce Board'},
-    {key:'status',label:'Status'},
-    {key:'award_amount_requested',label:'Amount Requested'},
-    {key:'award_amount_approved',label:'Amount Approved'},
-    {key:'submission_date',label:'Submission Date'},
-    {key:'decision_date',label:'Decision Date'},
-    {key:'notes',label:'Notes'},
+    {key:'company_name',label:'Company Name (must exist)',required:true},
+    {key:'funding_opportunity_name',label:'Funding Opportunity Name (must exist)'},
+    {key:'status',label:'Status (draft/submitted/under_review/approved/awarded/rejected)'},
+    {key:'award_amount_requested',label:'Award Amount Requested ($)'},
+    {key:'award_amount_approved',label:'Award Amount Approved ($)'},
+    {key:'submission_date',label:'Submission Date (YYYY-MM-DD)'},
+    {key:'decision_date',label:'Decision Date (YYYY-MM-DD)'},
+    {key:'application_approved_date',label:'Application Approved Date (YYYY-MM-DD)'},
+    {key:'notes',label:'Notes / Latest Update'},
+    {key:'application_link',label:'Application Link / Google Drive URL'},
+    {key:'location_name',label:'Location Name (links by name)'},
+    {key:'tags',label:'Tags'},
+    {key:'activity_history',label:'Activity History'},
+    {key:'ai_summary',label:'AI Summary / Research Data'},
     {key:'__skip',label:'— Skip this column —'},
   ],
 }
@@ -7431,10 +7483,10 @@ var IMPORT_SYNONYMS = {
   'facility': 'location_name',
   'facility name': 'location_name',
   'nursing home': 'location_name',
-  'parent operator': 'parent_operator',
-  'operator': 'parent_operator',
-  'parent company': 'parent_operator',
-  'company': {'locations':'parent_operator','applications':'company_name'},
+  'parent operator': 'parent_company_name',
+  'operator': 'parent_company_name',
+  'parent company': 'parent_company_name',
+  'company': {'locations':'parent_company_name','applications':'company_name'},
   'company name': 'company_name',
   'state': 'state',
   'st': 'state',
@@ -7594,11 +7646,11 @@ var IMPORT_SYNONYMS_MAP = {
   'site':                'location_name',
   /* Applications "Record" field holds "Company - null" format */
   'record':              {applications:'company_name', locations:'location_name', companies:'company_name'},
-  'parent operator':     'parent_operator',
-  'operator':            {locations:'parent_operator'},
-  'parent company':      'parent_operator',
-  'parent company name': 'parent_operator',
-  'company':             {locations:'parent_operator', applications:'company_name'},
+  'parent operator':     'parent_company_name',
+  'operator':            {locations:'parent_company_name'},
+  'parent company':      'parent_company_name',
+  'parent company name': 'parent_company_name',
+  'company':             {locations:'parent_company_name', applications:'company_name'},
   'company name':        'company_name',
   'employer':            'company_name',
   'employer name':       'company_name',
@@ -7770,7 +7822,7 @@ function smartMatch(header, type) {
   return '__skip'
 }
 
-function openImportModal(type) {
+function openImportModal(type, preloadedFile) {
   var typeLabels = {companies:'Companies', wibs:'Workforce Boards', locations:'Locations', funding:'Funding Opportunities', applications:'Applications'}
   var label = typeLabels[type] || type
   var reqNote = {
@@ -7778,7 +7830,7 @@ function openImportModal(type) {
     wibs:         'Required: WIB Name + State.',
     locations:    'Required: Location Name + State. Supports parent company linking by name.',
     funding:      'Required: Opportunity Name.',
-    applications: 'Required: Company Name.',
+    applications: 'Required: Company Name (must already exist in CRM).',
   }
   var fields = IMPORT_FIELDS[type] || []
   var fieldCount = fields.filter(function(f){return f.key!=='__skip'}).length
@@ -7859,6 +7911,28 @@ function openImportModal(type) {
         '</div>'
     }).catch(function(){ prev.innerHTML = '<div class="alert alert-error">Could not read file</div>' })
   })
+
+  // If a pre-loaded file was passed (e.g. from Google Drive import), parse it immediately
+  if (preloadedFile) {
+    var prev2 = document.getElementById('iwiz-preview')
+    if (prev2) prev2.innerHTML = '<div style="font-size:11px;color:var(--text3)">Loading file from Drive...</div>'
+    preloadedFile.text().then(function(text){
+      var rows = parseCSVText(text)
+      if (!rows || !rows.length) {
+        if (prev2) prev2.innerHTML = '<div class="alert alert-error">No data found in Drive file — check it has a header row</div>'
+        return
+      }
+      window._iwizParsed = rows
+      var hds = Object.keys(rows[0])
+      if (prev2) prev2.innerHTML = '<div style="display:flex;gap:14px;font-size:11px;color:var(--text2)">' +
+        '<span>📄 <strong style="color:var(--text)">' + rows.length.toLocaleString() + '</strong> rows</span>' +
+        '<span>📋 <strong style="color:var(--text)">' + hds.length + '</strong> columns</span>' +
+        '<span style="color:var(--green-t)">&#10003; ' + preloadedFile.name + ' ready</span>' +
+        '</div>'
+    }).catch(function(){
+      if (prev2) prev2.innerHTML = '<div class="alert alert-error">Could not read file from Drive</div>'
+    })
+  }
 }
 
 function closeImportWizard() {
@@ -7896,18 +7970,36 @@ async function iwizNext(type) {
 
   /* ── STEP 1 → 2: Parse file and build field mapping UI ── */
   if (step === 1) {
-    var fileEl = document.getElementById('iwiz-file')
-    if (!fileEl || !fileEl.files || !fileEl.files[0]) {
-      document.getElementById('iwiz-file-err').innerHTML = '<div class="alert alert-error">Please select a CSV or Excel file first</div>'
-      return
-    }
     var nextBtn = document.getElementById('iwiz-next')
+    var rows
+
+    /* Use pre-parsed rows from Drive import if available; otherwise read the file input */
+    if (window._iwizParsed && window._iwizParsed.length) {
+      rows = window._iwizParsed
+      window._iwizParsed = null  // consume so it won't re-use on Back→Next
+    } else {
+      var fileEl = document.getElementById('iwiz-file')
+      if (!fileEl || !fileEl.files || !fileEl.files[0]) {
+        document.getElementById('iwiz-file-err').innerHTML = '<div class="alert alert-error">Please select a CSV or Excel file first</div>'
+        return
+      }
+      nextBtn.disabled = true
+      nextBtn.textContent = 'Reading file...'
+      try {
+        var text = await fileEl.files[0].text()
+        rows = parseCSVText(text)
+      } catch(readErr) {
+        document.getElementById('iwiz-file-err').innerHTML = '<div class="alert alert-error">Error reading file: ' + readErr.message + '</div>'
+        nextBtn.disabled = false
+        nextBtn.textContent = 'Next: Map Fields →'
+        return
+      }
+    }
+
     nextBtn.disabled = true
     nextBtn.textContent = 'Reading file...'
 
     try {
-      var text = await fileEl.files[0].text()
-      var rows = parseCSVText(text)
       if (!rows || !rows.length) {
         document.getElementById('iwiz-file-err').innerHTML = '<div class="alert alert-error">No data found in file. Make sure it has a header row and at least one data row.</div>'
         nextBtn.disabled = false
