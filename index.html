@@ -6967,7 +6967,7 @@ function importCSV(type){
 function parseCSVLine(line){
   const vals=[];let cur='',inQ=false,i=0
   while(i<line.length){const c=line[i];if(c==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i+=2}else{inQ=!inQ;i++}}else if(c===','&&!inQ){vals.push(cur.trim());cur='';i++}else{cur+=c;i++}}
-  vals.push(cur.trim());return vals
+  vals.push(cur.trim());return vals.map(v=>v.replace(/^"+|"+$/g,'').trim())
 }
 
 async function processImportFile(input,type){
@@ -7035,7 +7035,7 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
     ? `<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px">
         ⚠️ <strong>Required column${missingRequired.length>1?'s':''} not found in your file:</strong>
         ${missingRequired.map(f=>`<strong>${f.label.split('(')[0].trim()}</strong>`).join(', ')}
-        <br><span style="font-size:11px">Your file has: ${sourceHeaders.join(', ')}<br>
+        <br><span style="font-size:11px">Your file has: ${sourceHeaders.map(h=>h.replace(/^"+|"+$/g,'')).join(', ')}<br>
         Please add the missing column to your CSV, or map one of the existing columns to it using the dropdowns below.</span>
       </div>`
     : ''
@@ -7044,6 +7044,10 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
   document.getElementById('ws2')?.classList.add('active')
 
   const safeId=h=>h.replace(/[^a-z0-9]/gi,'_')
+
+  const _hasErrors = missingRequired.length > 0
+  // Disable/enable the Import button to match validation state
+  ;(function(){ const btn=document.getElementById('modal-ok-btn'); if(btn){ btn.disabled=_hasErrors; btn.style.opacity=_hasErrors?'0.45':''; btn.title=_hasErrors?'Map the required field(s) above before importing':''; } })()
 
   preview.innerHTML=`
   ${requiredWarningHtml}
@@ -7084,6 +7088,7 @@ function _refreshRequiredWarning(type){
   const mappedValues=Object.values(window._importFieldMap||{})
   const missingRequired=requiredFields.filter(f=>!mappedValues.includes(f.key))
   const existingWarn=document.getElementById('_req-warn')
+  const btn=document.getElementById('modal-ok-btn')
   if(missingRequired.length){
     const html=`<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px">
       ⚠️ <strong>Still missing required column${missingRequired.length>1?'s':''}:</strong>
@@ -7092,8 +7097,10 @@ function _refreshRequiredWarning(type){
     </div>`
     if(existingWarn) existingWarn.outerHTML=html
     else{const prev=document.getElementById('import-preview');if(prev)prev.insertAdjacentHTML('afterbegin',html)}
+    if(btn){btn.disabled=true;btn.style.opacity='0.45';btn.title='Map the required field(s) above before importing'}
   } else {
     if(existingWarn) existingWarn.remove()
+    if(btn){btn.disabled=false;btn.style.opacity='';btn.title=''}
   }
 }
 
@@ -7115,7 +7122,7 @@ async function runFullImport(){
       <span style="font-size:11px">Use the dropdowns above to map one of your existing columns to ${_reqNames}, or add a <code>${_missingReq.map(f=>f.key).join(', ')}</code> column to your CSV file and re-upload.</span>
     </div>`+((preview?.innerHTML||'').includes('field-map-row')?'':'')
     showToast('Map the required field first: '+_reqNames,'error')
-    if(btn){btn.textContent='📥 Import';btn.disabled=false}
+    if(btn){btn.textContent='📥 Import';btn.disabled=true;btn.style.opacity='0.45'}
     return false
   }
 
