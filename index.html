@@ -7021,21 +7021,38 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
   window._importRows=dataRows
   window._importType=type
 
+  // ── Pre-flight: check required fields are mapped ──
+  const requiredFields=fieldDefs.filter(f=>f.required)
+  const mappedValues=Object.values(autoMap)
+  const missingRequired=requiredFields.filter(f=>!mappedValues.includes(f.key))
+  const requiredWarningHtml=missingRequired.length
+    ? `<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px">
+        ⚠️ <strong>Required column${missingRequired.length>1?'s':''} not found in your file:</strong>
+        ${missingRequired.map(f=>`<strong>${f.label.split('(')[0].trim()}</strong>`).join(', ')}
+        <br><span style="font-size:11px">Your file has: ${sourceHeaders.join(', ')}<br>
+        Please add the missing column to your CSV, or map one of the existing columns to it using the dropdowns below.</span>
+      </div>`
+    : ''
+
   document.getElementById('ws1')?.classList.add('done')
   document.getElementById('ws2')?.classList.add('active')
 
   const safeId=h=>h.replace(/[^a-z0-9]/gi,'_')
 
   preview.innerHTML=`
-  <div class="alert alert-success">✅ <strong>${dataRows.length.toLocaleString()} rows</strong> ready from <em>${filename}</em>${totalBatches>1?` · Will import in ${totalBatches} batches of ${batchSize}`:''}</div>
+  ${requiredWarningHtml}
+  <div class="alert alert-${missingRequired.length?'warn':'success'}" style="margin-bottom:8px">
+    ${missingRequired.length?'⚠️':'✅'} <strong>${dataRows.length.toLocaleString()} rows</strong> from <em>${filename}</em>${totalBatches>1?` · ${totalBatches} batches of ${batchSize}`:''}
+    ${missingRequired.length?'— fix the required column(s) above before importing':''}
+  </div>
   <div style="margin:10px 0 6px;font-size:11px;font-weight:600;color:var(--text2)">📐 Field Mapping — ${sourceHeaders.length} source columns → ${fieldDefs.length} available target fields</div>
-  <div style="font-size:10.5px;color:var(--text3);margin-bottom:8px">Auto-mapped where possible. Adjust as needed. Unmapped columns can be added to Notes.</div>
+  <div style="font-size:10.5px;color:var(--text3);margin-bottom:8px">Auto-mapped where possible. Adjust as needed. ★ = required field.</div>
   <div style="max-height:280px;overflow-y:auto;border:.5px solid var(--border);border-radius:8px;padding:6px">
     ${sourceHeaders.map(h=>`<div class="field-map-row">
       <div class="fmr-source" title="${h}">${h}</div>
       <div class="fmr-arrow">→</div>
       <div class="fmr-target">
-        <select id="fmap-${safeId(h)}" onchange="window._importFieldMap['${h}']=this.value" style="font-size:11px;padding:4px 7px;border:.5px solid var(--border2);border-radius:5px;background:#fff;width:100%;font-family:inherit;outline:none">
+        <select id="fmap-${safeId(h)}" onchange="window._importFieldMap['${h}']=this.value;_refreshRequiredWarning('${type}')" style="font-size:11px;padding:4px 7px;border:.5px solid var(--border2);border-radius:5px;background:#fff;width:100%;font-family:inherit;outline:none">
           <option value="">— Skip this column —</option>
           <option value="__notes__">→ Append to Notes</option>
           <option value="__tags__">→ Add to Tags</option>
@@ -7051,7 +7068,27 @@ function renderImportPreviewAndMap(dataRows,type,preview,filename){
       <tbody>${previewRows.map(r=>`<tr>${sourceHeaders.map(h=>`<td style="padding:3px 8px;border:.5px solid var(--border);white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis">${r[h]||''}</td>`).join('')}</tr>`).join('')}</tbody>
     </table>
   </div>
-  <div style="font-size:11px;color:var(--text2);margin-top:8px">Click <strong>Save</strong> to import all <strong>${dataRows.length.toLocaleString()}</strong> rows using the mapping above.${dataRows.length>batchSize?` Automatic progress tracking for ${totalBatches} batches.`:''}</div>`
+  <div style="font-size:11px;color:var(--text2);margin-top:8px">Click <strong>📥 Import</strong> to import all <strong>${dataRows.length.toLocaleString()}</strong> rows using the mapping above.${dataRows.length>batchSize?` Automatic progress tracking for ${totalBatches} batches.`:''}</div>`
+}
+
+/* Live-refresh the required-field warning as user changes dropdowns */
+function _refreshRequiredWarning(type){
+  const fieldDefs=IMPORT_FIELD_DEFS[type]||[]
+  const requiredFields=fieldDefs.filter(f=>f.required)
+  const mappedValues=Object.values(window._importFieldMap||{})
+  const missingRequired=requiredFields.filter(f=>!mappedValues.includes(f.key))
+  const existingWarn=document.getElementById('_req-warn')
+  if(missingRequired.length){
+    const html=`<div id="_req-warn" class="alert alert-error" style="margin-bottom:10px">
+      ⚠️ <strong>Still missing required column${missingRequired.length>1?'s':''}:</strong>
+      ${missingRequired.map(f=>`<strong>${f.label.split('(')[0].trim()}</strong>`).join(', ')}
+      — map one of your columns to it above.
+    </div>`
+    if(existingWarn) existingWarn.outerHTML=html
+    else{const prev=document.getElementById('import-preview');if(prev)prev.insertAdjacentHTML('afterbegin',html)}
+  } else {
+    if(existingWarn) existingWarn.remove()
+  }
 }
 
 async function runFullImport(){
@@ -7059,6 +7096,23 @@ async function runFullImport(){
   if(!allRows?.length){showToast('No rows to import','warn');return false}
   const btn=document.getElementById('modal-ok-btn')
   const preview=document.getElementById('import-preview')
+
+  // ── Pre-flight: block import if required fields aren't mapped ──
+  const _fieldDefs=IMPORT_FIELD_DEFS[type]||[]
+  const _requiredFields=_fieldDefs.filter(f=>f.required)
+  const _mappedVals=Object.values(fieldMap||{})
+  const _missingReq=_requiredFields.filter(f=>!_mappedVals.includes(f.key))
+  if(_missingReq.length){
+    const _reqNames=_missingReq.map(f=>f.label.split('(')[0].trim()).join(', ')
+    if(preview) preview.innerHTML=`<div class="alert alert-error">
+      ⚠️ <strong>Cannot import — required column${_missingReq.length>1?'s are':' is'} not mapped: ${_reqNames}</strong><br>
+      <span style="font-size:11px">Use the dropdowns above to map one of your existing columns to ${_reqNames}, or add a <code>${_missingReq.map(f=>f.key).join(', ')}</code> column to your CSV file and re-upload.</span>
+    </div>`+((preview?.innerHTML||'').includes('field-map-row')?'':'')
+    showToast('Map the required field first: '+_reqNames,'error')
+    if(btn){btn.textContent='📥 Import';btn.disabled=false}
+    return false
+  }
+
   if(btn){btn.textContent='Importing...';btn.disabled=true}
 
   // Apply field mapping
@@ -7156,7 +7210,21 @@ async function runFullImport(){
     if(totalCreated>0){
       setTimeout(()=>{closeModal();if(['companies','wibs','locations','funding','applications'].includes(currentPage)){loadPage(currentPage)}else{loadPage(type)}},totalErrors.length>0?3000:1500)
     }else{
-      if(preview&&totalErrors.length)preview.innerHTML+=`<div class="alert alert-error" style="margin-top:8px">Nothing imported. First error: ${totalErrors[0]||'Unknown'}<br><br>Common fixes:<br>• Check column names match the template<br>• Required fields must not be empty<br>• Check for duplicate names already in system</div>`
+      if(preview&&totalErrors.length){
+        // Strip internal DEBUG prefix from error messages before showing to user
+        const _cleanErr=(e||'')=>String(e||'').replace(/^DEBUG[^—–-]*[—–-]+\s*/i,'').replace(/^DEBUG\s*/i,'').trim()||'Row was skipped'
+        const _firstErr=_cleanErr(totalErrors[0])
+        const _isNoKey=_firstErr.toLowerCase().includes('no location name')||_firstErr.toLowerCase().includes('no company name')||_firstErr.toLowerCase().includes('no wib name')||_firstErr.toLowerCase().includes('no opportunity name')
+        const _reqField=(IMPORT_FIELD_DEFS[type]||[]).filter(f=>f.required).map(f=>f.label.split('(')[0].trim()).join(', ')
+        preview.innerHTML+=`<div class="alert alert-error" style="margin-top:8px">
+          <strong>Nothing imported — all rows were skipped.</strong><br>
+          ${_isNoKey?`<br>Most likely cause: your CSV is missing the required <strong>${_reqField}</strong> column, or that column is empty in every row.<br>`:`<br>First error: ${_firstErr}<br>`}
+          <br>Common fixes:<br>
+          • Make sure your CSV has a <strong>${_reqField}</strong> column with a value in every row<br>
+          • Download the CSV template and compare your column names<br>
+          • Check for extra spaces or special characters in column headers
+        </div>`
+      }
       if(btn){btn.textContent='Retry';btn.disabled=false}
       return false
     }
