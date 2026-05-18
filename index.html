@@ -1629,7 +1629,7 @@ async function logout(){
 ═══════════════════════════════════════════════════ */
 async function render(){
   if(!token){renderLogin();return}
-  try{const me=await api('/api/me');currentUser=me;startSessionTimer();renderApp()}
+  try{const me=await api('/api/me');currentUser=me;startSessionTimer();renderApp();setTimeout(()=>vcInit(),400)}
   catch(e){token=null;localStorage.removeItem('valor_token');renderLogin()}
 }
 
@@ -1720,6 +1720,18 @@ function renderApp(){
   <div id="ie-overlay" onclick="closeAllIE()"></div>`
 
   loadPage('dashboard')
+  setTimeout(function(){
+    var nav=document.querySelector('.sb-nav')
+    if(nav&&!document.getElementById('nav-chat')){
+      var el=document.createElement('div')
+      el.className='sb-item'
+      el.id='nav-chat'
+      el.innerHTML='<span class="sb-item-icon">💬</span><span class="sb-item-label">Team Chat</span><span class="sb-badge" id="nav-chat-badge" style="display:none">0</span>'
+      el.onclick=function(){vcToggle();setNav('chat')}
+      var div=nav.querySelector('.sb-divider:last-of-type')
+      if(div)nav.insertBefore(el,div);else nav.appendChild(el)
+    }
+  },150)
 }
 
 function sbi(page,icon,label,badge='',badgeColor=''){
@@ -10010,6 +10022,11 @@ function _vcUpdateBadge() {
     dmBadge.style.display = totalDM > 0 ? 'inline-flex' : 'none'
     dmBadge.textContent = totalDM
   }
+  const navBadge = document.getElementById('nav-chat-badge')
+  if (navBadge) {
+    navBadge.style.display = total > 0 ? '' : 'none'
+    navBadge.textContent = total > 9 ? '9+' : String(total)
+  }
 }
 
 /* ─── Scroll helper ─── */
@@ -10024,65 +10041,11 @@ function vcAutoResize(el) {
   el.style.height = Math.min(el.scrollHeight, 96) + 'px'
 }
 
-/* ─── Hook into login / render cycle ─── */
-// Override the original render() post-login to boot chat
-const _vcOrigRender = render
-async function render() {
-  await _vcOrigRender()
-  // After successful login, boot the chat
-  if (token && currentUser) {
-    setTimeout(() => vcInit(), 400)
-  }
-}
 
 /* ─── Also add "Chat" sidebar nav item programmatically ───────────────────────
    This augments the sidebar without editing renderApp directly.
    We hook into the existing loadPage lifecycle.                               ─── */
-const _vcOrigRenderApp = renderApp
-function renderApp() {
-  _vcOrigRenderApp()
-  // Inject nav item into sidebar after it renders
-  setTimeout(() => {
-    const nav = document.querySelector('.sb-nav')
-    if (nav && !document.getElementById('nav-chat')) {
-      // Find the sb-divider before admin section, insert before it
-      const divider = nav.querySelector('.sb-divider:last-of-type')
-      const chatEl = document.createElement('div')
-      chatEl.innerHTML = `<div class="sb-item" id="nav-chat" onclick="vcToggle();setNav('chat')">
-        <span class="sb-item-icon">💬</span>
-        <span class="sb-item-label">Team Chat</span>
-        <span class="sb-badge" id="nav-chat-badge" style="display:none">0</span>
-      </div>`
-      if (divider) nav.insertBefore(chatEl.firstChild, divider)
-      else nav.appendChild(chatEl.firstChild)
-    }
-    if (token && currentUser) vcInit()
-  }, 100)
-}
 
-// Update sidebar nav badge from main badge count
-const _vcOrigUpdateBadge = _vcUpdateBadge
-_vc._updateBadgeHook = function() {
-  _vcOrigUpdateBadge()
-  const navBadge = document.getElementById('nav-chat-badge')
-  if (navBadge) {
-    const totalDM = Object.values(_vc.unreadDM).reduce((a, b) => a + b, 0)
-    const total   = totalDM + _vc.unreadGlobal
-    navBadge.style.display = total > 0 ? '' : 'none'
-    navBadge.textContent   = total > 9 ? '9+' : total
-  }
-}
-// Patch _vcUpdateBadge to also update nav
-const _patchedUpdateBadge = _vcUpdateBadge
-function _vcUpdateBadge() {
-  _patchedUpdateBadge()
-  const navBadge = document.getElementById('nav-chat-badge')
-  if (!navBadge) return
-  const totalDM = Object.values(_vc.unreadDM).reduce((a, b) => a + b, 0)
-  const total   = totalDM + _vc.unreadGlobal
-  navBadge.style.display = total > 0 ? '' : 'none'
-  navBadge.textContent   = total > 9 ? '9+' : total
-}
 
 </script>
 
