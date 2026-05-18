@@ -692,6 +692,510 @@ textarea{resize:vertical;min-height:70px}
 .row-actions{display:flex;gap:4px;opacity:0;transition:opacity .15s}
 tr:hover .row-actions{opacity:1}
 
+
+/* ── VALOR CHAT WIDGET ── */
+/* ── Base widget shell ──────────────────────────────────────────────────────── */
+#vc-widget {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif;
+}
+
+/* ── Launcher FAB ────────────────────────────────────────────────────────────── */
+#vc-fab {
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--nv);
+  border: .5px solid rgba(201,168,76,.35);
+  box-shadow: 0 4px 20px rgba(11,30,60,.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  transition: transform .15s, box-shadow .15s;
+  flex-shrink: 0;
+}
+#vc-fab:hover { transform: scale(1.07); box-shadow: 0 6px 24px rgba(11,30,60,.45); }
+#vc-fab-icon { font-size: 20px; line-height: 1; }
+
+/* Unread badge on FAB */
+#vc-fab-badge {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--gray);
+  line-height: 1;
+}
+#vc-fab-badge.show { display: flex; }
+
+/* ── Panel ───────────────────────────────────────────────────────────────────── */
+#vc-panel {
+  width: 340px;
+  height: 500px;
+  background: #fff;
+  border: .5px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(11,30,60,.18), 0 2px 8px rgba(0,0,0,.08);
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  /* panel slides up from FAB */
+  transform-origin: bottom right;
+  animation: vc-slide-up .18s ease-out;
+}
+#vc-panel.open { display: flex; }
+@keyframes vc-slide-up {
+  from { opacity: 0; transform: scale(.94) translateY(8px); }
+  to   { opacity: 1; transform: scale(1)   translateY(0);   }
+}
+
+/* ── Panel header ─────────────────────────────────────────────────────────────── */
+.vc-header {
+  background: var(--nv);
+  padding: 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+.vc-header-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 14px 0;
+}
+.vc-header-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--cream);
+  flex: 1;
+  letter-spacing: -.01em;
+}
+.vc-header-close {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,.35);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  line-height: 1;
+  transition: color .1s;
+}
+.vc-header-close:hover { color: rgba(255,255,255,.75); }
+
+/* Online indicator */
+.vc-online-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 14px 10px;
+}
+.vc-online-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #4ade80;
+  box-shadow: 0 0 0 2px rgba(74,222,128,.2);
+  flex-shrink: 0;
+}
+.vc-online-label {
+  font-size: 10px;
+  color: rgba(255,255,255,.4);
+}
+.vc-online-count { color: #4ade80; font-weight: 600; }
+
+/* Tab bar inside header */
+.vc-tabs {
+  display: flex;
+  border-top: .5px solid rgba(255,255,255,.07);
+}
+.vc-tab {
+  flex: 1;
+  padding: 8px 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255,255,255,.4);
+  cursor: pointer;
+  text-align: center;
+  border-bottom: 2px solid transparent;
+  transition: all .1s;
+  position: relative;
+}
+.vc-tab:hover { color: rgba(255,255,255,.75); }
+.vc-tab.active { color: var(--gd2); border-bottom-color: var(--gd); }
+
+/* Tab DM badge */
+.vc-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 8.5px;
+  font-weight: 700;
+  border-radius: 8px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* ── Tab panes ────────────────────────────────────────────────────────────────── */
+.vc-pane {
+  flex: 1;
+  display: none;
+  flex-direction: column;
+  min-height: 0; /* critical for flex children to scroll */
+}
+.vc-pane.active { display: flex; }
+
+/* ── Message list ─────────────────────────────────────────────────────────────── */
+.vc-msgs {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 12px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  scroll-behavior: smooth;
+}
+.vc-msgs::-webkit-scrollbar { width: 4px; }
+.vc-msgs::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* Date separator */
+.vc-date-sep {
+  text-align: center;
+  font-size: 9.5px;
+  color: var(--text3);
+  padding: 4px 0;
+  position: relative;
+}
+.vc-date-sep::before, .vc-date-sep::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: calc(50% - 40px);
+  height: .5px;
+  background: var(--border);
+}
+.vc-date-sep::before { left: 0; }
+.vc-date-sep::after  { right: 0; }
+
+/* Message row */
+.vc-msg {
+  display: flex;
+  gap: 7px;
+  align-items: flex-end;
+  max-width: 100%;
+}
+.vc-msg.mine { flex-direction: row-reverse; }
+
+/* Avatar */
+.vc-av {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9.5px;
+  font-weight: 700;
+  flex-shrink: 0;
+  color: #fff;
+}
+
+/* Bubble group (sender name + bubble) */
+.vc-bubble-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 72%;
+}
+.vc-msg.mine .vc-bubble-wrap { align-items: flex-end; }
+
+.vc-sender {
+  font-size: 9.5px;
+  color: var(--text3);
+  padding: 0 4px;
+}
+.vc-bubble {
+  padding: 7px 11px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--gray2);
+  word-break: break-word;
+  position: relative;
+}
+.vc-msg.mine .vc-bubble {
+  background: var(--nv);
+  color: #fff;
+}
+.vc-msg-time {
+  font-size: 9px;
+  color: var(--text3);
+  padding: 0 4px;
+  margin-top: 1px;
+}
+.vc-msg.mine .vc-msg-time { text-align: right; }
+
+/* Typing indicator */
+.vc-typing {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px 8px;
+  min-height: 24px;
+  font-size: 10.5px;
+  color: var(--text3);
+}
+.vc-typing-dots { display: flex; gap: 3px; }
+.vc-typing-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--text3);
+  animation: vc-bounce .9s infinite;
+}
+.vc-typing-dot:nth-child(2) { animation-delay: .15s; }
+.vc-typing-dot:nth-child(3) { animation-delay: .30s; }
+@keyframes vc-bounce {
+  0%,60%,100% { transform: translateY(0); opacity:.4; }
+  30%          { transform: translateY(-4px); opacity:1; }
+}
+
+/* ── Input row ─────────────────────────────────────────────────────────────────── */
+.vc-input-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+  padding: 9px 11px 11px;
+  border-top: .5px solid var(--border);
+  background: var(--white);
+  flex-shrink: 0;
+}
+.vc-input {
+  flex: 1;
+  border: .5px solid var(--border2);
+  border-radius: 9px;
+  padding: 7px 11px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  resize: none;
+  min-height: 36px;
+  max-height: 96px;
+  background: var(--gray);
+  color: var(--text);
+  transition: border .1s;
+  line-height: 1.4;
+}
+.vc-input:focus { border-color: var(--nv); background: #fff; }
+.vc-input::placeholder { color: var(--text3); }
+.vc-send-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--nv);
+  border: none;
+  color: var(--cream);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background .1s, transform .1s;
+}
+.vc-send-btn:hover { background: var(--nv2); transform: scale(1.05); }
+.vc-send-btn:disabled { opacity: .4; cursor: default; transform: none; }
+
+/* ── DM user list ────────────────────────────────────────────────────────────── */
+.vc-user-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.vc-user-list::-webkit-scrollbar { width: 4px; }
+.vc-user-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.vc-dm-header {
+  padding: 7px 14px 4px;
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: .8px;
+}
+
+.vc-user-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background .1s;
+  position: relative;
+}
+.vc-user-row:hover { background: var(--gray2); }
+.vc-user-row.active { background: var(--blue-bg); }
+
+.vc-user-av-wrap { position: relative; flex-shrink: 0; }
+.vc-user-av {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fff;
+}
+
+/* Online presence dot */
+.vc-presence-dot {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #9ca3af;   /* offline = gray */
+  border: 1.5px solid #fff;
+  transition: background .3s;
+}
+.vc-presence-dot.online { background: #22c55e; }
+
+.vc-user-info { flex: 1; min-width: 0; }
+.vc-user-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vc-user-role {
+  font-size: 9.5px;
+  color: var(--text3);
+  text-transform: capitalize;
+}
+
+.vc-dm-unread {
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* ── DM conversation view (back-button + messages) ──────────────────────────── */
+.vc-dm-back {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-bottom: .5px solid var(--border);
+  cursor: pointer;
+  flex-shrink: 0;
+  background: var(--gray);
+  transition: background .1s;
+}
+.vc-dm-back:hover { background: var(--gray2); }
+.vc-dm-back-arrow { color: var(--text2); font-size: 14px; }
+.vc-dm-back-name { font-size: 12px; font-weight: 600; color: var(--text); flex: 1; }
+.vc-dm-back-online {
+  font-size: 9.5px;
+  color: #16a34a;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.vc-dm-back-online::before {
+  content: '';
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  display: inline-block;
+}
+
+/* ── Empty state ──────────────────────────────────────────────────────────────── */
+.vc-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text3);
+  font-size: 12px;
+  gap: 6px;
+  padding: 20px;
+}
+.vc-empty-icon { font-size: 28px; }
+
+/* ── Presence sidebar (online now strip inside DM list) ───────────────────────── */
+.vc-online-strip {
+  display: flex;
+  gap: 6px;
+  padding: 8px 14px 6px;
+  overflow-x: auto;
+  border-bottom: .5px solid var(--border);
+  flex-shrink: 0;
+}
+.vc-online-strip::-webkit-scrollbar { display: none; }
+.vc-strip-user {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.vc-strip-av {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  position: relative;
+  border: 2px solid #22c55e;
+}
+.vc-strip-name { font-size: 8.5px; color: var(--text3); max-width: 38px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+
+/* Collapse animation helper */
+.vc-collapsed #vc-panel { display: none; }
 </style>
 </head>
 <body>
@@ -8987,6 +9491,689 @@ if (document.readyState==='complete'||document.readyState==='interactive') { ini
 else document.addEventListener('DOMContentLoaded', initAircallWebhookListener)
 
 render()
+
+/* ─── VALOR LIVE CHAT ENGINE ─── */
+/* ═══════════════════════════════════════════════════════════════════════════════
+   VALOR LIVE CHAT — CLIENT ENGINE
+   
+   Real-time mechanism: Server-Sent Events (SSE)
+   - GET /api/chat/stream  → persistent EventSource connection
+   - Events: "chat_message", "dm", "presence", ping (keepalive comment)
+   
+   Heartbeat: POST /api/chat/heartbeat every 25 s → keeps presence alive
+   
+   Reconnect: EventSource auto-reconnects natively on disconnect
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Module state ── */
+const _vc = {
+  open:          false,
+  tab:           'global',      // 'global' | 'dm' | 'team'
+  dmUserId:      null,          // currently open DM thread
+  dmUserName:    '',
+  presence:      {},            // userId → { name, initials, lastSeen }
+  users:         [],            // all CRM users (for DM list)
+  globalMsgs:    [],            // rendered global messages
+  dmMsgs:        [],            // rendered DM messages for current thread
+  unreadDM:      {},            // userId → count
+  unreadGlobal:  0,
+  globalLoaded:  false,
+  heartbeatInt:  null,
+  sseSource:     null,
+  colors: ['#2563eb','#7c3aed','#0d9488','#d97706','#dc2626','#16a34a','#9333ea','#0891b2'],
+}
+
+/* ── Utility ── */
+function _vcColor(str) {
+  let h = 0
+  for (let i = 0; i < (str||'').length; i++) h = (str.charCodeAt(i) + h * 31) | 0
+  return _vc.colors[Math.abs(h) % _vc.colors.length]
+}
+function _vcTime(iso) {
+  const d = new Date(iso)
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+}
+function _vcDateLabel(iso) {
+  const d = new Date(iso), today = new Date()
+  if (d.toDateString() === today.toDateString()) return 'Today'
+  const yest = new Date(today); yest.setDate(yest.getDate() - 1)
+  if (d.toDateString() === yest.toDateString()) return 'Yesterday'
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+/* ─── Init (called after login / render) ─── */
+function vcInit() {
+  if (!token || !currentUser) return
+  // Already initialized?
+  if (_vc.sseSource) return
+
+  _vcConnectSSE()
+  _vcLoadGlobal()
+  _vcLoadUsers()
+  _vcLoadUnreadCounts()
+
+  // Heartbeat every 25 s
+  _vc.heartbeatInt = setInterval(() => {
+    fetch('/api/chat/heartbeat', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }
+    }).catch(() => {})
+  }, 25_000)
+
+  // Send immediate heartbeat
+  fetch('/api/chat/heartbeat', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` }
+  }).catch(() => {})
+
+  // Reconnect SSE on page visibility restore (tab refocus)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && (!_vc.sseSource || _vc.sseSource.readyState === EventSource.CLOSED)) {
+      _vcConnectSSE()
+    }
+  })
+}
+
+/* ─── SSE connection ─── */
+function _vcConnectSSE() {
+  if (_vc.sseSource) {
+    try { _vc.sseSource.close() } catch (_) {}
+  }
+  const src = new EventSource(`/api/chat/stream?token=${encodeURIComponent(token)}`)
+  _vc.sseSource = src
+
+  src.addEventListener('presence', e => {
+    const list = JSON.parse(e.data)
+    _vc.presence = {}
+    for (const u of list) _vc.presence[u.id] = u
+    document.getElementById('vc-online-count').textContent = list.length
+    _vcRenderOnlineStrip()
+    _vcRenderPresenceList()
+    _vcUpdateUserPresenceDots()
+    // Update the DM conversation header online indicator
+    if (_vc.dmUserId) {
+      const isOnline = !!_vc.presence[_vc.dmUserId]
+      const onlineEl = document.getElementById('vc-dm-conv-online')
+      if (onlineEl) onlineEl.style.display = isOnline ? 'flex' : 'none'
+    }
+  })
+
+  src.addEventListener('chat_message', e => {
+    const { channel, msg } = JSON.parse(e.data)
+    if (channel !== 'general') return
+    // Append to global messages list
+    if (_vc.open && _vc.tab === 'global') {
+      _vcAppendGlobalMsg(msg)
+      _vcScrollBottom('vc-global-msgs')
+    } else {
+      // Increment unread
+      if (msg.sender_id !== currentUser.id) {
+        _vc.unreadGlobal++
+        _vcUpdateBadge()
+      }
+    }
+  })
+
+  src.addEventListener('dm', e => {
+    const msg = JSON.parse(e.data)
+    const otherId = msg.sender_id === currentUser.id ? msg.recipient_id : msg.sender_id
+    if (_vc.open && _vc.tab === 'dm' && _vc.dmUserId === otherId) {
+      _vcAppendDMMsg(msg)
+      _vcScrollBottom('vc-dm-msgs')
+      // Mark as read immediately
+      if (msg.sender_id !== currentUser.id) {
+        fetch(`/api/dm/${otherId}/read`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        }).catch(() => {})
+      }
+    } else {
+      // Unread badge update
+      if (msg.sender_id !== currentUser.id) {
+        _vc.unreadDM[msg.sender_id] = (_vc.unreadDM[msg.sender_id] || 0) + 1
+        _vcUpdateBadge()
+        _vcRenderUserList()  // refresh badge in DM list
+        showToast(`💬 ${msg.sender_name || 'Someone'}: ${msg.content.slice(0, 60)}`, 'info')
+      }
+    }
+  })
+
+  src.onerror = () => {
+    // EventSource reconnects automatically; no action needed
+  }
+}
+
+/* ─── Data loaders ─── */
+async function _vcLoadGlobal() {
+  try {
+    const d = await api('/api/chat/general')
+    const msgs = d.data || []
+    _vc.globalMsgs = msgs
+    _vc.globalLoaded = true
+    _vcRenderGlobal(msgs)
+    setTimeout(() => _vcScrollBottom('vc-global-msgs'), 50)
+  } catch (_) {}
+}
+
+async function _vcLoadUsers() {
+  try {
+    const d = await api('/api/chat/users')
+    _vc.users = d.data || []
+    _vcRenderUserList()
+  } catch (_) {}
+}
+
+async function _vcLoadUnreadCounts() {
+  try {
+    const counts = await api('/api/dm/unread-counts')
+    _vc.unreadDM = counts || {}
+    _vcUpdateBadge()
+    _vcRenderUserList()
+  } catch (_) {}
+}
+
+/* ─── Widget open/close ─── */
+function vcToggle() {
+  _vc.open ? vcClose() : vcOpen()
+}
+function vcOpen() {
+  _vc.open = true
+  document.getElementById('vc-panel').classList.add('open')
+  document.getElementById('vc-fab-icon').textContent = '✕'
+  if (!_vc.globalLoaded) _vcLoadGlobal()
+  // Clear unread for current tab
+  if (_vc.tab === 'global') { _vc.unreadGlobal = 0; _vcUpdateBadge() }
+  setTimeout(() => _vcScrollBottom('vc-global-msgs'), 80)
+  // Ensure vcInit ran
+  vcInit()
+}
+function vcClose() {
+  _vc.open = false
+  document.getElementById('vc-panel').classList.remove('open')
+  document.getElementById('vc-fab-icon').textContent = '💬'
+}
+
+/* ─── Tab switching ─── */
+function vcSwitchTab(tab) {
+  _vc.tab = tab
+
+  // Clear active tab
+  document.querySelectorAll('.vc-tab').forEach(el => el.classList.remove('active'))
+  document.getElementById(`vc-tab-${tab}`)?.classList.add('active')
+
+  // Hide all panes
+  document.querySelectorAll('.vc-pane').forEach(el => {
+    el.classList.remove('active')
+    el.style.display = 'none'
+  })
+  document.getElementById('vc-pane-dm-conv').style.display = 'none'
+
+  if (tab === 'global') {
+    const pane = document.getElementById('vc-pane-global')
+    pane.classList.add('active')
+    pane.style.display = 'flex'
+    _vc.unreadGlobal = 0
+    _vcUpdateBadge()
+    setTimeout(() => _vcScrollBottom('vc-global-msgs'), 50)
+  } else if (tab === 'dm') {
+    _vc.dmUserId = null
+    const pane = document.getElementById('vc-pane-dm')
+    pane.classList.add('active')
+    pane.style.display = 'flex'
+    _vcRenderOnlineStrip()
+    _vcRenderUserList()
+  } else if (tab === 'team') {
+    const pane = document.getElementById('vc-pane-team')
+    pane.classList.add('active')
+    pane.style.display = 'flex'
+    _vcRenderPresenceList()
+  }
+}
+
+/* ─── Global channel rendering ─── */
+function _vcRenderGlobal(msgs) {
+  const el = document.getElementById('vc-global-msgs')
+  if (!el) return
+  if (!msgs.length) {
+    el.innerHTML = '<div class="vc-empty"><div class="vc-empty-icon">💬</div><span>No messages yet. Say hello!</span></div>'
+    return
+  }
+  let html = ''
+  let lastDate = ''
+  for (const m of msgs) {
+    const dateLabel = _vcDateLabel(m.created_at)
+    if (dateLabel !== lastDate) {
+      html += `<div class="vc-date-sep">${dateLabel}</div>`
+      lastDate = dateLabel
+    }
+    html += _vcMsgHtml(m, m.sender_id === currentUser?.id)
+  }
+  el.innerHTML = html
+}
+
+function _vcAppendGlobalMsg(msg) {
+  const el = document.getElementById('vc-global-msgs')
+  if (!el) return
+  // Remove empty state
+  const empty = el.querySelector('.vc-empty')
+  if (empty) empty.remove()
+  const div = document.createElement('div')
+  div.innerHTML = _vcMsgHtml(msg, msg.sender_id === currentUser?.id)
+  while (div.firstChild) el.appendChild(div.firstChild)
+}
+
+function _vcMsgHtml(m, isMine) {
+  const color = _vcColor(m.sender_id || m.sender_name)
+  const initials = m.sender_initials || (m.sender_name || '?').slice(0, 2).toUpperCase()
+  const time = _vcTime(m.created_at)
+  return `
+  <div class="vc-msg${isMine ? ' mine' : ''}" data-msg-id="${m.id}">
+    <div class="vc-av" style="background:${color}">${initials}</div>
+    <div class="vc-bubble-wrap">
+      ${!isMine ? `<div class="vc-sender">${escHtml(m.sender_name || '')}</div>` : ''}
+      <div class="vc-bubble">${escHtml(m.content)}</div>
+      <div class="vc-msg-time">${time}</div>
+    </div>
+  </div>`
+}
+
+/* ─── Send global ─── */
+async function vcSendGlobal() {
+  const inp = document.getElementById('vc-global-input')
+  const content = inp?.value?.trim()
+  if (!content) return
+  inp.value = ''
+  vcAutoResize(inp)
+  const btn = document.getElementById('vc-global-send')
+  btn.disabled = true
+  try {
+    await api('/api/chat/general', 'POST', { content })
+    // SSE will deliver the message back to us via broadcastChatMessage
+    // So we only add it optimistically — the SSE echo shows for other users
+    // For sender: append immediately (SSE also fires but dedup by sender_id is handled below)
+    // Actually, our server broadcasts to ALL including sender; so just let SSE handle it.
+  } catch (e) {
+    showToast('Failed to send: ' + e.message, 'error')
+    inp.value = content  // restore
+  } finally {
+    btn.disabled = false
+    inp.focus()
+  }
+}
+function vcGlobalKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); vcSendGlobal() }
+}
+
+/* ─── DM user list rendering ─── */
+function _vcRenderUserList() {
+  const el = document.getElementById('vc-user-list')
+  if (!el) return
+  if (!_vc.users.length) {
+    el.innerHTML = '<div class="vc-empty" style="padding:24px 0"><div class="vc-empty-icon">👤</div><span>No teammates found</span></div>'
+    return
+  }
+  const totalUnread = Object.values(_vc.unreadDM).reduce((a, b) => a + b, 0)
+  const dmBadge = document.getElementById('vc-dm-total-badge')
+  if (dmBadge) {
+    dmBadge.style.display = totalUnread > 0 ? 'inline-flex' : 'none'
+    dmBadge.textContent = totalUnread
+  }
+  el.innerHTML = _vc.users.map(u => {
+    const color = _vcColor(u.id)
+    const initials = (u.full_name || u.email || '?').slice(0, 2).toUpperCase()
+    const isOnline = !!_vc.presence[u.id]
+    const unread = _vc.unreadDM[u.id] || 0
+    const roleLabel = (u.role || '').replace(/_/g, ' ')
+    return `
+    <div class="vc-user-row${_vc.dmUserId === u.id ? ' active' : ''}" onclick="vcOpenDM('${u.id}','${escAttr(u.full_name || u.email)}')">
+      <div class="vc-user-av-wrap">
+        <div class="vc-user-av" style="background:${color}">${initials}</div>
+        <div class="vc-presence-dot${isOnline ? ' online' : ''}" title="${isOnline ? 'Online' : 'Offline'}"></div>
+      </div>
+      <div class="vc-user-info">
+        <div class="vc-user-name">${escHtml(u.full_name || u.email)}</div>
+        <div class="vc-user-role">${escHtml(roleLabel)}</div>
+      </div>
+      ${unread > 0 ? `<div class="vc-dm-unread">${unread}</div>` : ''}
+    </div>`
+  }).join('')
+}
+
+function _vcUpdateUserPresenceDots() {
+  document.querySelectorAll('.vc-user-row').forEach(row => {
+    const userId = row.getAttribute('onclick')?.match(/'([a-f0-9-]{36})'/)?.[1]
+    if (!userId) return
+    const dot = row.querySelector('.vc-presence-dot')
+    if (!dot) return
+    dot.classList.toggle('online', !!_vc.presence[userId])
+  })
+}
+
+/* ─── Open a DM thread ─── */
+async function vcOpenDM(userId, userName) {
+  _vc.dmUserId  = userId
+  _vc.dmUserName = userName
+
+  // Hide DM list, show conv view
+  document.getElementById('vc-pane-dm').style.display = 'none'
+  const convPane = document.getElementById('vc-pane-dm-conv')
+  convPane.style.display  = 'flex'
+  convPane.style.flexDirection = 'flex'
+
+  document.getElementById('vc-dm-conv-name').textContent = userName
+  const isOnline = !!_vc.presence[userId]
+  const onlineEl = document.getElementById('vc-dm-conv-online')
+  if (onlineEl) onlineEl.style.display = isOnline ? 'flex' : 'none'
+
+  // Clear unread for this user
+  delete _vc.unreadDM[userId]
+  _vcUpdateBadge()
+  _vcRenderUserList()
+
+  // Fetch messages
+  document.getElementById('vc-dm-msgs').innerHTML = '<div class="loading">Loading…</div>'
+  try {
+    const d = await api(`/api/dm/${userId}`)
+    const msgs = d.data || []
+    _vc.dmMsgs = msgs
+    _vcRenderDMConv(msgs)
+    // Mark as read
+    fetch(`/api/dm/${userId}/read`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }
+    }).catch(() => {})
+    setTimeout(() => _vcScrollBottom('vc-dm-msgs'), 50)
+  } catch (e) {
+    document.getElementById('vc-dm-msgs').innerHTML = `<div class="vc-empty"><span>Error: ${e.message}</span></div>`
+  }
+}
+
+function _vcRenderDMConv(msgs) {
+  const el = document.getElementById('vc-dm-msgs')
+  if (!el) return
+  if (!msgs.length) {
+    el.innerHTML = '<div class="vc-empty"><div class="vc-empty-icon">✉️</div><span>Send the first message</span></div>'
+    return
+  }
+  let html = ''
+  let lastDate = ''
+  for (const m of msgs) {
+    const dateLabel = _vcDateLabel(m.created_at)
+    if (dateLabel !== lastDate) {
+      html += `<div class="vc-date-sep">${dateLabel}</div>`
+      lastDate = dateLabel
+    }
+    html += _vcMsgHtml(m, m.sender_id === currentUser?.id)
+  }
+  el.innerHTML = html
+}
+
+function _vcAppendDMMsg(msg) {
+  const el = document.getElementById('vc-dm-msgs')
+  if (!el) return
+  const empty = el.querySelector('.vc-empty')
+  if (empty) empty.remove()
+  const div = document.createElement('div')
+  div.innerHTML = _vcMsgHtml(msg, msg.sender_id === currentUser?.id)
+  while (div.firstChild) el.appendChild(div.firstChild)
+}
+
+/* ─── Send DM ─── */
+async function vcSendDM() {
+  const inp = document.getElementById('vc-dm-input')
+  const content = inp?.value?.trim()
+  if (!content || !_vc.dmUserId) return
+  inp.value = ''
+  vcAutoResize(inp)
+  try {
+    const msg = await api(`/api/dm/${_vc.dmUserId}`, 'POST', { content })
+    // SSE will deliver back; but for sender show immediately
+    _vcAppendDMMsg({ ...msg, sender_id: currentUser.id })
+    _vcScrollBottom('vc-dm-msgs')
+  } catch (e) {
+    showToast('Failed to send: ' + e.message, 'error')
+    inp.value = content
+  }
+}
+function vcDmKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); vcSendDM() }
+}
+
+/* ─── Back to DM list ─── */
+function vcDmBack() {
+  _vc.dmUserId = null
+  document.getElementById('vc-pane-dm-conv').style.display = 'none'
+  const dmPane = document.getElementById('vc-pane-dm')
+  dmPane.style.display = 'flex'
+  _vcRenderUserList()
+  _vcRenderOnlineStrip()
+}
+
+/* ─── Presence list (Team tab) ─── */
+function _vcRenderPresenceList() {
+  const el = document.getElementById('vc-presence-list')
+  if (!el) return
+  const online = Object.values(_vc.presence).filter(p => p.id !== currentUser?.id)
+  if (!online.length) {
+    el.innerHTML = '<div class="vc-empty"><div class="vc-empty-icon">🔍</div><span>Nobody else online right now</span></div>'
+    return
+  }
+  el.innerHTML = online.map(p => {
+    const color = _vcColor(p.id)
+    return `
+    <div class="vc-user-row" onclick="vcSwitchTab('dm');vcOpenDM('${p.id}','${escAttr(p.name)}')">
+      <div class="vc-user-av-wrap">
+        <div class="vc-user-av" style="background:${color}">${p.initials}</div>
+        <div class="vc-presence-dot online"></div>
+      </div>
+      <div class="vc-user-info">
+        <div class="vc-user-name">${escHtml(p.name)}</div>
+        <div class="vc-user-role" style="color:#16a34a">● Active now</div>
+      </div>
+    </div>`
+  }).join('')
+}
+
+/* ─── Online strip (DM tab top) ─── */
+function _vcRenderOnlineStrip() {
+  const el = document.getElementById('vc-online-strip')
+  if (!el) return
+  const online = Object.values(_vc.presence).filter(p => p.id !== currentUser?.id)
+  if (!online.length) {
+    el.style.display = 'none'
+    return
+  }
+  el.style.display = 'flex'
+  el.innerHTML = online.map(p => {
+    const color = _vcColor(p.id)
+    const short = (p.name || '').split(' ')[0]
+    return `
+    <div class="vc-strip-user" onclick="vcOpenDM('${p.id}','${escAttr(p.name)}')" title="${escAttr(p.name)}">
+      <div class="vc-strip-av" style="background:${color}">${p.initials}</div>
+      <div class="vc-strip-name">${escHtml(short)}</div>
+    </div>`
+  }).join('')
+}
+
+/* ─── Badge totals ─── */
+function _vcUpdateBadge() {
+  const totalDM = Object.values(_vc.unreadDM).reduce((a, b) => a + b, 0)
+  const total   = totalDM + _vc.unreadGlobal
+
+  const fab = document.getElementById('vc-fab-badge')
+  if (fab) {
+    fab.classList.toggle('show', total > 0)
+    fab.textContent = total > 9 ? '9+' : total
+  }
+  const dmBadge = document.getElementById('vc-dm-total-badge')
+  if (dmBadge) {
+    dmBadge.style.display = totalDM > 0 ? 'inline-flex' : 'none'
+    dmBadge.textContent = totalDM
+  }
+}
+
+/* ─── Scroll helper ─── */
+function _vcScrollBottom(id) {
+  const el = document.getElementById(id)
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+/* ─── Auto-resize textarea ─── */
+function vcAutoResize(el) {
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 96) + 'px'
+}
+
+/* ─── Hook into login / render cycle ─── */
+// Override the original render() post-login to boot chat
+const _vcOrigRender = render
+async function render() {
+  await _vcOrigRender()
+  // After successful login, boot the chat
+  if (token && currentUser) {
+    setTimeout(() => vcInit(), 400)
+  }
+}
+
+/* ─── Also add "Chat" sidebar nav item programmatically ───────────────────────
+   This augments the sidebar without editing renderApp directly.
+   We hook into the existing loadPage lifecycle.                               ─── */
+const _vcOrigRenderApp = renderApp
+function renderApp() {
+  _vcOrigRenderApp()
+  // Inject nav item into sidebar after it renders
+  setTimeout(() => {
+    const nav = document.querySelector('.sb-nav')
+    if (nav && !document.getElementById('nav-chat')) {
+      // Find the sb-divider before admin section, insert before it
+      const divider = nav.querySelector('.sb-divider:last-of-type')
+      const chatEl = document.createElement('div')
+      chatEl.innerHTML = `<div class="sb-item" id="nav-chat" onclick="vcToggle();setNav('chat')">
+        <span class="sb-item-icon">💬</span>
+        <span class="sb-item-label">Team Chat</span>
+        <span class="sb-badge" id="nav-chat-badge" style="display:none">0</span>
+      </div>`
+      if (divider) nav.insertBefore(chatEl.firstChild, divider)
+      else nav.appendChild(chatEl.firstChild)
+    }
+    if (token && currentUser) vcInit()
+  }, 100)
+}
+
+// Update sidebar nav badge from main badge count
+const _vcOrigUpdateBadge = _vcUpdateBadge
+_vc._updateBadgeHook = function() {
+  _vcOrigUpdateBadge()
+  const navBadge = document.getElementById('nav-chat-badge')
+  if (navBadge) {
+    const totalDM = Object.values(_vc.unreadDM).reduce((a, b) => a + b, 0)
+    const total   = totalDM + _vc.unreadGlobal
+    navBadge.style.display = total > 0 ? '' : 'none'
+    navBadge.textContent   = total > 9 ? '9+' : total
+  }
+}
+// Patch _vcUpdateBadge to also update nav
+const _patchedUpdateBadge = _vcUpdateBadge
+function _vcUpdateBadge() {
+  _patchedUpdateBadge()
+  const navBadge = document.getElementById('nav-chat-badge')
+  if (!navBadge) return
+  const totalDM = Object.values(_vc.unreadDM).reduce((a, b) => a + b, 0)
+  const total   = totalDM + _vc.unreadGlobal
+  navBadge.style.display = total > 0 ? '' : 'none'
+  navBadge.textContent   = total > 9 ? '9+' : total
+}
+
 </script>
+
+<div id="vc-widget">
+  <!-- Floating panel -->
+  <div id="vc-panel">
+    <!-- Header -->
+    <div class="vc-header">
+      <div class="vc-header-top">
+        <span class="vc-header-title">💬 Team Chat</span>
+        <button class="vc-header-close" onclick="vcClose()" title="Close">✕</button>
+      </div>
+      <div class="vc-online-row">
+        <div class="vc-online-dot"></div>
+        <span class="vc-online-label"><span id="vc-online-count" class="vc-online-count">0</span> online now</span>
+      </div>
+      <div class="vc-tabs">
+        <div class="vc-tab active" id="vc-tab-global" onclick="vcSwitchTab('global')">🌐 General</div>
+        <div class="vc-tab" id="vc-tab-dm" onclick="vcSwitchTab('dm')">
+          💬 Direct
+          <span class="vc-tab-badge" id="vc-dm-total-badge" style="display:none">0</span>
+        </div>
+        <div class="vc-tab" id="vc-tab-team" onclick="vcSwitchTab('team')">👥 Online</div>
+      </div>
+    </div>
+
+    <!-- ── GLOBAL pane ── -->
+    <div class="vc-pane active" id="vc-pane-global">
+      <div class="vc-msgs" id="vc-global-msgs">
+        <div class="vc-empty"><div class="vc-empty-icon">💬</div><span>No messages yet. Say hello!</span></div>
+      </div>
+      <div class="vc-typing" id="vc-global-typing" style="display:none">
+        <div class="vc-typing-dots">
+          <div class="vc-typing-dot"></div><div class="vc-typing-dot"></div><div class="vc-typing-dot"></div>
+        </div>
+        <span id="vc-global-typing-text">Someone is typing…</span>
+      </div>
+      <div class="vc-input-row">
+        <textarea class="vc-input" id="vc-global-input"
+          placeholder="Message #general…"
+          rows="1"
+          oninput="vcAutoResize(this)"
+          onkeydown="vcGlobalKeydown(event)"></textarea>
+        <button class="vc-send-btn" onclick="vcSendGlobal()" id="vc-global-send">➤</button>
+      </div>
+    </div>
+
+    <!-- ── DM pane — USER LIST view ── -->
+    <div class="vc-pane" id="vc-pane-dm">
+      <!-- Online-now strip -->
+      <div class="vc-online-strip" id="vc-online-strip"></div>
+      <div class="vc-dm-header">Direct Messages</div>
+      <div class="vc-user-list" id="vc-user-list">
+        <div class="vc-empty" style="padding:30px 0"><div class="vc-empty-icon">👤</div><span>Loading teammates…</span></div>
+      </div>
+    </div>
+
+    <!-- ── DM pane — CONVERSATION view (hidden until user selected) ── -->
+    <div class="vc-pane" id="vc-pane-dm-conv" style="display:none;flex-direction:column">
+      <div class="vc-dm-back" onclick="vcDmBack()">
+        <span class="vc-dm-back-arrow">←</span>
+        <span class="vc-dm-back-name" id="vc-dm-conv-name">—</span>
+        <span class="vc-dm-back-online" id="vc-dm-conv-online" style="display:none">Online</span>
+      </div>
+      <div class="vc-msgs" id="vc-dm-msgs">
+        <div class="vc-empty"><div class="vc-empty-icon">✉️</div><span>No messages yet</span></div>
+      </div>
+      <div class="vc-input-row">
+        <textarea class="vc-input" id="vc-dm-input"
+          placeholder="Message…"
+          rows="1"
+          oninput="vcAutoResize(this)"
+          onkeydown="vcDmKeydown(event)"></textarea>
+        <button class="vc-send-btn" onclick="vcSendDM()">➤</button>
+      </div>
+    </div>
+
+    <!-- ── TEAM / PRESENCE pane ── -->
+    <div class="vc-pane" id="vc-pane-team">
+      <div class="vc-dm-header" style="padding-top:12px">Online Now</div>
+      <div class="vc-user-list" id="vc-presence-list">
+        <div class="vc-empty"><div class="vc-empty-icon">🔍</div><span>Nobody else online</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- FAB launcher -->
+  <div id="vc-fab" onclick="vcToggle()" title="Team Chat">
+    <span id="vc-fab-icon">💬</span>
+    <span id="vc-fab-badge">0</span>
+  </div>
+</div>
 </body>
 </html>
