@@ -4638,7 +4638,7 @@ Keep responses under 250 words unless a list is explicitly requested. Use plain 
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
+        model:'claude-sonnet-4-5',
         max_tokens:1000,
         system:systemPrompt,
         tools:[{type:'web_search_20250305',name:'web_search'}],
@@ -4659,6 +4659,77 @@ Keep responses under 250 words unless a list is explicitly requested. Use plain 
   }
 }
 
+// ─── PREDEFINED REGIONAL TERRITORY BANDS ─────────────────────────────────────
+// Territories must be assigned by region, not individual state abbreviations.
+const REGION_BANDS = {
+  'Northeast':  ['CT','DE','MA','MD','ME','NH','NJ','NY','PA','RI','VT'],
+  'Mid-Atlantic':['DC','MD','NJ','NY','PA','VA','WV','DE'],
+  'Southeast':  ['AL','AR','FL','GA','KY','LA','MS','NC','SC','TN','VA'],
+  'Midwest':    ['IA','IL','IN','KS','MI','MN','MO','ND','NE','OH','SD','WI'],
+  'Southwest':  ['AZ','NM','OK','TX'],
+  'Mountain':   ['CO','ID','MT','NV','UT','WY'],
+  'West Coast': ['CA','OR','WA'],
+  'Pacific':    ['AK','HI'],
+  'DFW Metro':  ['TX'],
+  'Great Lakes':['IL','IN','MI','OH','WI'],
+  'New England':['CT','MA','ME','NH','RI','VT'],
+  'Gulf Coast': ['AL','FL','LA','MS','TX'],
+  'Plains':     ['IA','KS','MN','MO','ND','NE','OK','SD'],
+  'National':   ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC']
+}
+
+function buildRegionSelector(containerId, selectedStates=[]) {
+  const wrap = document.getElementById(containerId)
+  if (!wrap) return
+  const selSet = new Set(selectedStates)
+  wrap.innerHTML = `
+    <div style="font-size:11px;color:var(--text3);margin-bottom:6px">Select predefined regions or individual states. Regions auto-expand to their member states.</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      ${Object.keys(REGION_BANDS).map(r=>`
+        <button type="button" class="btn btn-xs" style="font-size:10px" onclick="toggleRegion('${containerId}','${r}')">${r}</button>
+      `).join('')}
+    </div>
+    <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:4px">Individual States</div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;max-height:120px;overflow-y:auto;padding:4px;border:.5px solid var(--border2);border-radius:7px;background:var(--gray)">
+      ${['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC'].map(st=>`
+        <label style="display:flex;align-items:center;gap:3px;font-size:11px;cursor:pointer;padding:2px 5px;border-radius:4px;background:var(--white);border:.5px solid var(--border)">
+          <input type="checkbox" class="rs-chk" data-container="${containerId}" value="${st}" ${selSet.has(st)?'checked':''} style="width:12px;height:12px;margin:0">
+          ${st}
+        </label>
+      `).join('')}
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-top:6px" id="${containerId}-summary">
+      ${selSet.size>0?selSet.size+' state(s) selected':'No states selected'}
+    </div>`
+  // Update summary on checkbox change
+  wrap.addEventListener('change', () => updateRegionSummary(containerId))
+}
+
+function toggleRegion(containerId, regionName) {
+  const states = REGION_BANDS[regionName] || []
+  const checkboxes = document.querySelectorAll(`#${containerId} .rs-chk`)
+  const regionStateSet = new Set(states)
+  // Check if all states in region are already checked
+  const allChecked = states.every(st => {
+    const cb = [...checkboxes].find(c => c.value === st)
+    return cb && cb.checked
+  })
+  checkboxes.forEach(cb => {
+    if (regionStateSet.has(cb.value)) cb.checked = !allChecked
+  })
+  updateRegionSummary(containerId)
+}
+
+function updateRegionSummary(containerId) {
+  const selected = getSelectedStates(containerId)
+  const el = document.getElementById(containerId + '-summary')
+  if (el) el.textContent = selected.length > 0 ? selected.length + ' state(s): ' + selected.join(', ') : 'No states selected'
+}
+
+function getSelectedStates(containerId) {
+  return [...document.querySelectorAll(`#${containerId} .rs-chk:checked`)].map(c => c.value)
+}
+// ─────────────────────────────────────────────────────────────────────────────
 async function openNewTerritoryModal(){
   // Pre-fetch users so the dropdown is ready when the modal opens
   let allUsers=[]
@@ -4672,8 +4743,10 @@ async function openNewTerritoryModal(){
       <input id="nt-name" placeholder="e.g. Southwest Region">
     </div>
     <div class="form-group">
-      <div class="form-label">States (comma-separated)</div>
-      <input id="nt-states" placeholder="TX, NM, AZ">
+      <div class="form-label">States / Regions <span class="form-req">*</span></div>
+      <div id="nt-region-selector" style="padding:8px;border:.5px solid var(--border2);border-radius:8px;background:var(--white)">
+        <div class="loading" style="font-size:11px">Loading state selector...</div>
+      </div>
     </div>
     <div class="form-group">
       <div class="form-label">Description</div>
@@ -4691,7 +4764,7 @@ async function openNewTerritoryModal(){
   async()=>{
     const name=document.getElementById('nt-name').value.trim()
     if(!name){showToast('Territory name required','error');return false}
-    const states=document.getElementById('nt-states').value.split(',').map(s=>s.trim()).filter(Boolean)
+    const states=getSelectedStates('nt-region-selector')
     const selectedUserIds=[...document.getElementById('nt-users').selectedOptions].map(o=>o.value)
     try{
       const created=await api('/api/territories','POST',{name,states,description:document.getElementById('nt-desc').value||''})
@@ -4712,6 +4785,7 @@ async function openNewTerritoryModal(){
       pageTerritories()
     }catch(e){showToast(e.message,'error');return false}
   })
+  setTimeout(()=>buildRegionSelector('nt-region-selector',[]),80)
 }
 
 async function openEditTerritoryModal(tEncoded){
@@ -4739,8 +4813,10 @@ async function openEditTerritoryModal(tEncoded){
       <input id="et-name" value="${escHtml(t.name)}">
     </div>
     <div class="form-group">
-      <div class="form-label">States (comma-separated)</div>
-      <input id="et-states" value="${(t.states||[]).join(', ')}">
+      <div class="form-label">States / Regions <span class="form-req">*</span></div>
+      <div id="et-region-selector" style="padding:8px;border:.5px solid var(--border2);border-radius:8px;background:var(--white)">
+        <div class="loading" style="font-size:11px">Loading state selector...</div>
+      </div>
     </div>
     <div class="form-group">
       <div class="form-label">Description</div>
@@ -4756,7 +4832,7 @@ async function openEditTerritoryModal(tEncoded){
   async()=>{
     const name=document.getElementById('et-name').value.trim()
     if(!name){showToast('Name required','error');return false}
-    const states=document.getElementById('et-states').value.split(',').map(s=>s.trim()).filter(Boolean)
+    const states=getSelectedStates('et-region-selector')
     const selectedUserIds=[...document.getElementById('et-users').selectedOptions].map(o=>o.value)
     try{
       await api('/api/territories/'+t.id,'PUT',{name,states,description:document.getElementById('et-desc').value||''})
@@ -4782,6 +4858,8 @@ async function openEditTerritoryModal(tEncoded){
       showToast('Territory updated','success');pageTerritories()
     }catch(e){showToast(e.message,'error');return false}
   })
+  // Build region selector with existing states pre-selected
+  setTimeout(()=>buildRegionSelector('et-region-selector', t.states||[]),80)
 }
 
 function deleteTerritoryConfirm(id,name){
@@ -6310,7 +6388,7 @@ function showSettingsSection(name,btn){
         <div class="card-hd"><div class="card-title">🤖 Claude AI Configuration</div><span class="pill p-green">Active</span></div>
         <div class="card-body">
           <div class="form-row form-full"><div class="form-group"><div class="form-label">AI Model</div>
-            <select><option>claude-sonnet-4-20250514 (Recommended)</option><option>claude-opus-4-20250514 (More capable)</option><option>claude-haiku-4-5 (Faster)</option></select>
+            <select><option>claude-sonnet-4-5 (Recommended)</option><option>claude-opus-4-5 (More capable)</option><option>claude-haiku-4-5 (Faster)</option></select>
           </div></div>
           <div class="form-row form-full"><div class="form-group"><div class="form-label">Context — System Instructions</div>
             <textarea rows="4" placeholder="You are a workforce grant research assistant for Valor Workforce Funding..."></textarea>
@@ -7478,9 +7556,9 @@ function renderCallRows(calls){
     const content = getNoteContent(c)
     const firstLine = content.split('\n')[0].replace(/^\[AIRCALL NOTE\][^\|]*\|[^\|]*\|[^\|]*\|?\s*/,'').substring(0,80)||'Call logged'
     const durSec = m.duration_seconds ? parseInt(m.duration_seconds,10) : 0
-    const durStr = durSec>0 ? (Math.floor(durSec/60)>0?Math.floor(durSec/60)+'m ':'')+durSec%60+'s' : m.duration||'—'
-    const agent = c.user?.full_name || m.agent || '—'
-    const initials = (agent==='—'?'?':agent).slice(0,2).toUpperCase()
+    const durStr = escHtml(durSec>0 ? (Math.floor(durSec/60)>0?Math.floor(durSec/60)+'m ':'')+durSec%60+'s' : m.duration||'—')
+    const agent = escHtml(c.user?.full_name || m.agent || '—')
+    const initials = (agent==='—'?'?':agent).replace(/<[^>]*>/g,'').slice(0,2).toUpperCase()
     const recordLabel = c.record_type ? (c.record_type.replace(/_records$/,'').replace(/_/g,' '))+' record' : '—'
     const aircall = isAircallNote(c)
     return `<div class="call-row" onclick="showNoteDetail('${c.id}')" style="display:grid;grid-template-columns:2fr 1fr 1fr 100px 100px 90px;padding:10px 14px;border-bottom:.5px solid #f9fafb;cursor:pointer;transition:background .1s" onmouseover="this.style.background='#fafafa'" onmouseout="this.style.background=''">
