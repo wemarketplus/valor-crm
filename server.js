@@ -5,7 +5,6 @@ const fs = require('fs')
 const app = express()
 
 // ─── SECURITY HEADERS ──────────────────────────────────────────────────────────
-// CORS: strip localhost origins in production to prevent cross-origin abuse
 const IS_PROD = process.env.NODE_ENV === 'production'
 const CORS_ORIGINS = IS_PROD
   ? ['https://valor-crm.onrender.com']
@@ -13,7 +12,6 @@ const CORS_ORIGINS = IS_PROD
 
 const crypto = require('crypto')
 
-// ─── SUPABASE CLIENTS (must be defined before rateLimitLogin uses them) ────────
 const SUPABASE_URL = process.env.SUPABASE_URL
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY
@@ -65,9 +63,10 @@ app.use((req, res, next) => {
   next()
 })
 
+// ── PATCH 1: raise JSON body limit to 10mb for large import batches ──
 app.use((req, res, next) => {
   if (req.path === '/api/webhooks/aircall') return next()
-  express.json({ limit: '2mb', strict: true })(req, res, next)
+  express.json({ limit: '10mb', strict: true })(req, res, next)
 })
 
 // ─── RATE LIMITING ─────────────────────────────────────────────────────────────
@@ -362,75 +361,39 @@ app.post('/api/login', rateLimitLogin, async (req, res) => {
       return res.status(400).json({ error: 'Email and password required' })
     }
     const cleanEmail = email.trim().toLowerCase()
-
     console.log(`Login attempt: ${cleanEmail}`)
-
-    const { data, error } = await authClient.auth.signInWithPassword({
-      email: cleanEmail,
-      password: password
-    })
-
-    if (error) {
-      console.log(`Login failed for ${cleanEmail}:`, error.message)
-      return res.status(401).json({ error: 'Invalid email or password' })
-    }
-
-    if (!data?.session?.access_token) {
-      console.error('No session token returned from Supabase for:', cleanEmail)
-      return res.status(500).json({ error: 'Authentication failed — no session returned. Check Supabase email confirmation settings.' })
-    }
-
+    const { data, error } = await authClient.auth.signInWithPassword({ email: cleanEmail, password: password })
+    if (error) { console.log(`Login failed for ${cleanEmail}:`, error.message); return res.status(401).json({ error: 'Invalid email or password' }) }
+    if (!data?.session?.access_token) { console.error('No session token returned from Supabase for:', cleanEmail); return res.status(500).json({ error: 'Authentication failed — no session returned. Check Supabase email confirmation settings.' }) }
     const { data: profile, error: pe } = await supabase.from('user_profiles').select('*').eq('id', data.user.id).single()
-    if (pe || !profile) {
-      console.error('Profile not found for user:', data.user.id)
-      return res.status(401).json({ error: 'User profile not found. Contact administrator.' })
-    }
-    if (profile.is_active === false) {
-      return res.status(403).json({ error: 'Account disabled. Contact your administrator.' })
-    }
-
+    if (pe || !profile) { console.error('Profile not found for user:', data.user.id); return res.status(401).json({ error: 'User profile not found. Contact administrator.' }) }
+    if (profile.is_active === false) { return res.status(403).json({ error: 'Account disabled. Contact your administrator.' }) }
     try { await supabase.from('user_profiles').update({ last_login_at: new Date().toISOString() }).eq('id', data.user.id) } catch(_) {}
     try { await supabase.from('activity_log').insert({ user_id: data.user.id, action: 'USER_LOGIN', details: `Login from ${req.headers['x-forwarded-for']?.split(',')[0] || 'unknown'}` }) } catch(_) {}
-
     console.log(`Login success: ${cleanEmail} (${profile.role})`)
     return res.json({ token: data.session.access_token, user: profile })
   } catch (err) {
     console.error('Login catch error:', err.message, err.constructor?.name)
     const msg = err.message || ''
-    if (msg.includes('email') || msg.includes('Email')) {
-      return res.status(401).json({ error: 'Email not confirmed. Contact your administrator to confirm your account in Supabase.' })
-    }
-    if (msg.includes('Invalid') || msg.includes('invalid')) {
-      return res.status(401).json({ error: 'Invalid email or password' })
-    }
-    if (msg.includes('fetch') || msg.includes('network') || msg.includes('Network')) {
-      return res.status(503).json({ error: 'Cannot connect to authentication service. Try again in a moment.' })
-    }
+    if (msg.includes('email') || msg.includes('Email')) return res.status(401).json({ error: 'Email not confirmed. Contact your administrator to confirm your account in Supabase.' })
+    if (msg.includes('Invalid') || msg.includes('invalid')) return res.status(401).json({ error: 'Invalid email or password' })
+    if (msg.includes('fetch') || msg.includes('network') || msg.includes('Network')) return res.status(503).json({ error: 'Cannot connect to authentication service. Try again in a moment.' })
     return res.status(500).json({ error: `Login error: ${msg || 'Unknown. Check Render logs.'}` })
   }
 })
 
-// ─── LOGOUT ───────────────────────────────────────────────────────────────────
 app.post('/api/logout', auth, async (req, res) => {
   try { await authClient.auth.signOut() } catch(_) {}
   try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'USER_LOGOUT', details: 'Signed out' }) } catch(_) {}
   res.json({ success: true })
 })
 
-// ─── ME ───────────────────────────────────────────────────────────────────────
 app.get('/api/me', auth, (req, res) => res.json(req.user))
 app.get('/api/health', (req, res) => res.json({ 
-  status: 'ok', 
-  ts: new Date().toISOString(), 
-  env: { 
-    url: !!SUPABASE_URL, 
-    anon: !!SUPABASE_ANON_KEY,
-    anon_prefix: SUPABASE_ANON_KEY ? SUPABASE_ANON_KEY.substring(0,15) + '...' : 'NOT SET',
-    service: !!SUPABASE_SERVICE_KEY 
-  } 
+  status: 'ok', ts: new Date().toISOString(), 
+  env: { url: !!SUPABASE_URL, anon: !!SUPABASE_ANON_KEY, anon_prefix: SUPABASE_ANON_KEY ? SUPABASE_ANON_KEY.substring(0,15) + '...' : 'NOT SET', service: !!SUPABASE_SERVICE_KEY } 
 }))
 
-// ─── CHANGE OWN PASSWORD ──────────────────────────────────────────────────────
 app.post('/api/change-password', auth, async (req, res) => {
   try {
     const { current_password, new_password } = req.body
@@ -441,12 +404,9 @@ app.post('/api/change-password', auth, async (req, res) => {
     if (error) return res.status(400).json({ error: error.message })
     try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CHANGE_PASSWORD', details: 'User changed own password' }) } catch(_) {}
     res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: 'Password change failed. Please try again.' })
-  }
+  } catch (err) { res.status(500).json({ error: 'Password change failed. Please try again.' }) }
 })
 
-// ─── ADMIN RESET PASSWORD ─────────────────────────────────────────────────────
 app.post('/api/users/:id/reset-password', auth, requireAdmin, async (req, res) => {
   try {
     const { data: target } = await supabase.from('user_profiles').select('email').eq('id', req.params.id).single()
@@ -515,30 +475,19 @@ app.delete('/api/wibs/:id', auth, requireAdmin, async (req, res) => {
 app.post('/api/companies/dedup', auth, requireAdmin, async (req, res) => {
   const { data: all, error } = await supabase.from('companies').select('*').order('created_at')
   if (error) return res.status(400).json({ error: error.message })
-
   const groups = {}
   for (const c of (all || [])) {
     const key = c.company_name.trim().toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,30)
     if (!groups[key]) groups[key] = []
     groups[key].push(c)
   }
-
   let merged = 0, deleted = 0, errors = []
   for (const [key, group] of Object.entries(groups)) {
     if (group.length < 2) continue
-    const keeper = group[0]
-    const dupes  = group.slice(1)
+    const keeper = group[0]; const dupes = group.slice(1)
     const patch = {}
-    for (const d of dupes) {
-      for (const [k, v] of Object.entries(d)) {
-        if (v && !keeper[k] && !['id','created_at','updated_at'].includes(k)) patch[k] = v
-      }
-    }
-    if (Object.keys(patch).length) {
-      const { error: pErr } = await supabase.from('companies').update(patch).eq('id', keeper.id)
-      if (pErr) errors.push(pErr.message)
-      else merged++
-    }
+    for (const d of dupes) { for (const [k, v] of Object.entries(d)) { if (v && !keeper[k] && !['id','created_at','updated_at'].includes(k)) patch[k] = v } }
+    if (Object.keys(patch).length) { const { error: pErr } = await supabase.from('companies').update(patch).eq('id', keeper.id); if (pErr) errors.push(pErr.message); else merged++ }
     for (const d of dupes) {
       await supabase.from('locations').update({ company_id: keeper.id }).eq('company_id', d.id)
       await supabase.from('applications').update({ company_id: keeper.id }).eq('company_id', d.id)
@@ -564,52 +513,35 @@ app.post('/api/companies', auth, async (req, res) => {
   const allowed = ['company_name','company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes','rating','is_25_pct_operator','supported_by']
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
   if (!body.company_name?.trim()) return res.status(400).json({ error: 'Company name required' })
-
   const nameClean = body.company_name.trim().toLowerCase()
-  let dupQ = supabase.from('companies').select('id,company_name,domain,primary_contact_email,status,notes')
-  const { data: byName } = await dupQ.ilike('company_name', `%${nameClean.substring(0,20)}%`).limit(5)
-  const { data: byDomain } = body.domain
-    ? await supabase.from('companies').select('id,company_name,domain').ilike('domain', `%${body.domain.replace(/^https?:\/\//,'').split('/')[0]}%`).limit(3)
-    : { data: [] }
-  const { data: byEmail } = body.primary_contact_email
-    ? await supabase.from('companies').select('id,company_name,primary_contact_email').eq('primary_contact_email', body.primary_contact_email).limit(3)
-    : { data: [] }
-
+  const { data: byName } = await supabase.from('companies').select('id,company_name,domain,primary_contact_email,status,notes').ilike('company_name', `%${nameClean.substring(0,20)}%`).limit(5)
+  const { data: byDomain } = body.domain ? await supabase.from('companies').select('id,company_name,domain').ilike('domain', `%${body.domain.replace(/^https?:\/\//,'').split('/')[0]}%`).limit(3) : { data: [] }
+  const { data: byEmail } = body.primary_contact_email ? await supabase.from('companies').select('id,company_name,primary_contact_email').eq('primary_contact_email', body.primary_contact_email).limit(3) : { data: [] }
   const allDups = [...(byName||[]), ...(byDomain||[]), ...(byEmail||[])]
   const deduped = [...new Map(allDups.map(d => [d.id, d])).values()]
   const match = deduped.find(d => {
     const existName = d.company_name.trim().toLowerCase()
-    const newName   = nameClean
-    if (existName === newName) return true
-    if (existName.substring(0,25) === newName.substring(0,25)) return true
+    if (existName === nameClean) return true
+    if (existName.substring(0,25) === nameClean.substring(0,25)) return true
     if (body.domain && d.domain && d.domain.toLowerCase().includes(body.domain.replace(/^https?:\/\//,'').split('/')[0].toLowerCase())) return true
     if (body.primary_contact_email && d.primary_contact_email === body.primary_contact_email) return true
     return false
   })
-
   if (req.body.merge === true && req.body.merge_into_id) {
     const mergeId = req.body.merge_into_id
     const { data: existing } = await supabase.from('companies').select('*').eq('id', mergeId).single()
     if (!existing) return res.status(404).json({ error: 'Target company not found' })
     const mergePayload = {}
-    for (const [k, v] of Object.entries(body)) {
-      if (v && !existing[k]) mergePayload[k] = v
-    }
+    for (const [k, v] of Object.entries(body)) { if (v && !existing[k]) mergePayload[k] = v }
     mergePayload.last_contact_date = new Date().toISOString()
     const { data: merged, error: mergeErr } = await supabase.from('companies').update(mergePayload).eq('id', mergeId).select().single()
     if (mergeErr) return res.status(400).json({ error: mergeErr.message })
     try { await safeInsertLog({ user_id: req.user.id, action: 'MERGE_COMPANY', record_type: 'companies', record_id: mergeId, details: `Merged: ${body.company_name} into ${existing.company_name}` }) } catch(_) {}
     return res.json({ merged: true, data: merged })
   }
-
   if (match && req.body.force !== true) {
-    return res.status(409).json({
-      duplicate: true,
-      message: `A company named "${match.company_name}" already exists`,
-      existing: { id: match.id, company_name: match.company_name, domain: match.domain, status: match.status },
-    })
+    return res.status(409).json({ duplicate: true, message: `A company named "${match.company_name}" already exists`, existing: { id: match.id, company_name: match.company_name, domain: match.domain, status: match.status } })
   }
-
   const { data, error } = await supabase.from('companies').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
   try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_COMPANY', record_type: 'companies', record_id: data.id, details: `Created: ${data.company_name}` }) } catch(_) {}
@@ -842,14 +774,11 @@ app.post('/api/tasks', auth, async (req, res) => {
 })
 
 app.put('/api/tasks/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log')
-    .select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
+  const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
   const existingParsed = parseLogRow(existing)
   const currentMeta = existingParsed?.metadata || {}
   const newMeta = { ...currentMeta, ...req.body }
-  const updatePayload = global._hasMetadata
-    ? { metadata: newMeta }
-    : { details: JSON.stringify({ text: currentMeta.title || currentMeta.text, ...newMeta }) }
+  const updatePayload = global._hasMetadata ? { metadata: newMeta } : { details: JSON.stringify({ text: currentMeta.title || currentMeta.text, ...newMeta }) }
   const { data, error } = await supabase.from('activity_log').update(updatePayload).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.json(parseLogRow(data))
@@ -883,20 +812,12 @@ app.get('/api/audit', auth, requireAdmin, async (req, res) => {
 // ─── USERS ────────────────────────────────────────────────────────────────────
 app.get('/api/users', auth, requireAdmin, async (req, res) => {
   const [{ data: users, error }, { data: assignments }] = await Promise.all([
-    supabase
-      .from('user_profiles')
-      .select('id,email,full_name,role,title,phone,is_active,created_at,last_login_at,territory_id')
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('user_territory_assignments')
-      .select('user_id,territory_id,territories(id,name)')
+    supabase.from('user_profiles').select('id,email,full_name,role,title,phone,is_active,created_at,last_login_at,territory_id').order('created_at', { ascending: false }),
+    supabase.from('user_territory_assignments').select('user_id,territory_id,territories(id,name)')
   ])
   if (error) return res.status(400).json({ error: error.message })
   const byUser = {}
-  for (const a of (assignments || [])) {
-    if (!byUser[a.user_id]) byUser[a.user_id] = []
-    if (a.territories) byUser[a.user_id].push(a.territories)
-  }
+  for (const a of (assignments || [])) { if (!byUser[a.user_id]) byUser[a.user_id] = []; if (a.territories) byUser[a.user_id].push(a.territories) }
   const enriched = (users || []).map(u => ({ ...u, territories: byUser[u.id] || [] }))
   res.json({ data: enriched })
 })
@@ -908,22 +829,14 @@ app.post('/api/users', auth, requireAdmin, async (req, res) => {
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
     const validRoles = VALID_ROLES
     if (!validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
-    if (role === 'super_admin' && req.user.role !== 'super_admin') {
-      return res.status(403).json({ error: 'Only Super Admin can assign the Super Admin role' })
-    }
-    const { data, error } = await supabase.auth.admin.createUser({
-      email: email.trim().toLowerCase(), password,
-      email_confirm: true,
-      user_metadata: { full_name }
-    })
+    if (role === 'super_admin' && req.user.role !== 'super_admin') return res.status(403).json({ error: 'Only Super Admin can assign the Super Admin role' })
+    const { data, error } = await supabase.auth.admin.createUser({ email: email.trim().toLowerCase(), password, email_confirm: true, user_metadata: { full_name } })
     if (error) return res.status(400).json({ error: error.message })
     await supabase.from('user_profiles').update({ full_name: full_name || null, role, title: title || null, phone: phone || null, is_active: true }).eq('id', data.user.id)
     try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_USER', details: `Created: ${email} (${role})` }) } catch(_) {}
     const { data: profile } = await supabase.from('user_profiles').select('*').eq('id', data.user.id).single()
     res.json({ user: profile })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 app.put('/api/users/:id', auth, requireAdmin, async (req, res) => {
@@ -945,28 +858,13 @@ app.put('/api/users/:id', auth, requireAdmin, async (req, res) => {
     if (is_active !== undefined) update.is_active = is_active
     const { data, error } = await supabase.from('user_profiles').update(update).eq('id', req.params.id).select().single()
     if (error) return res.status(400).json({ error: error.message })
-
-    if (is_active === false) {
-      try { await supabase.auth.admin.updateUserById(req.params.id, { ban_duration: '876000h' }) }
-      catch (e) { console.warn('Supabase Auth ban failed (non-fatal):', e.message) }
-    }
-    if (is_active === true) {
-      try { await supabase.auth.admin.updateUserById(req.params.id, { ban_duration: 'none' }) }
-      catch (e) { console.warn('Supabase Auth unban failed (non-fatal):', e.message) }
-    }
-    if (role === 'super_admin' && req.user.role !== 'super_admin') {
-      return res.status(403).json({ error: 'Only Super Admins can assign the Super Admin role' })
-    }
-
-    const changeNote = [
-      is_active === false ? 'DISABLED' : is_active === true ? 'RE-ENABLED' : '',
-      role ? 'role set to ' + role : '',
-    ].filter(Boolean).join('; ')
+    if (is_active === false) { try { await supabase.auth.admin.updateUserById(req.params.id, { ban_duration: '876000h' }) } catch (e) { console.warn('Supabase Auth ban failed (non-fatal):', e.message) } }
+    if (is_active === true) { try { await supabase.auth.admin.updateUserById(req.params.id, { ban_duration: 'none' }) } catch (e) { console.warn('Supabase Auth unban failed (non-fatal):', e.message) } }
+    if (role === 'super_admin' && req.user.role !== 'super_admin') return res.status(403).json({ error: 'Only Super Admins can assign the Super Admin role' })
+    const changeNote = [is_active === false ? 'DISABLED' : is_active === true ? 'RE-ENABLED' : '', role ? 'role set to ' + role : ''].filter(Boolean).join('; ')
     try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_USER', details: 'Updated: ' + data.email + (changeNote ? ' — ' + changeNote : '') }) } catch(_) {}
     res.json(data)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 app.delete('/api/users/:id', auth, requireSuper, async (req, res) => {
@@ -982,21 +880,13 @@ app.delete('/api/users/:id', auth, requireSuper, async (req, res) => {
     if (error) return res.status(400).json({ error: error.message })
     try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'DELETE_USER', details: `DELETED: ${target.email}` }) } catch(_) {}
     res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PHASE 3 — CONTACTS, TRAINING PROVIDERS, INVOICES, CONTRACTS, GRANT AWARDS
-// ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── CONTACTS ────────────────────────────────────────────────────────────────
 app.get('/api/contacts', auth, async (req, res) => {
   const { record_type, record_id, search, limit = 200 } = req.query
-  let q = supabase.from('activity_log')
-    .select('*, user:user_profiles!user_id(full_name)')
-    .eq('action', 'CONTACT')
+  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name)').eq('action', 'CONTACT')
   if (record_type) q = q.eq('record_type', record_type)
   if (record_id) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(+limit)
@@ -1062,9 +952,7 @@ app.put('/api/training-providers/:id', auth, async (req, res) => {
   const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
   const existingParsed = parseLogRow(existing)
   const merged = { ...(existingParsed?.metadata || {}), ...req.body }
-  const tpUpdateData = global._hasMetadata
-    ? { details: req.body.name || existing?.details, metadata: merged }
-    : { details: JSON.stringify({ text: req.body.name || existing?.details, ...merged }) }
+  const tpUpdateData = global._hasMetadata ? { details: req.body.name || existing?.details, metadata: merged } : { details: JSON.stringify({ text: req.body.name || existing?.details, ...merged }) }
   const { data, error } = await supabase.from('activity_log').update(tpUpdateData).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
@@ -1161,9 +1049,46 @@ app.get('/api/grant-awards', auth, async (req, res) => {
   res.json({ data })
 })
 
+// ── PATCH 2: Import endpoint — lightweight token check, no per-batch getUser() call ──
+// The auth middleware calls authClient.auth.getUser() on EVERY request.
+// For large imports (50+ batches), the Supabase session can expire mid-import,
+// causing all subsequent batches to 401 silently. This endpoint uses a lightweight
+// inline check that only validates the JWT locally without a live Supabase call.
+app.post('/api/import/:type', async (req, res) => {
+  // ── Inline lightweight auth for import (avoids per-batch getUser() call) ──
+  const rawToken = req.headers.authorization?.replace('Bearer ', '').trim()
+  if (!rawToken || rawToken.length < 10) return res.status(401).json({ error: 'Authentication required' })
 
-// ─── CSV IMPORT ───────────────────────────────────────────────────────────────
-app.post('/api/import/:type', auth, async (req, res) => {
+  let importUser = null
+  try {
+    // Decode JWT payload without making a network call to Supabase
+    const jwtPayload = JSON.parse(Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8'))
+    // Check expiry (exp is Unix timestamp in seconds)
+    if (jwtPayload.exp && jwtPayload.exp < Math.floor(Date.now() / 1000)) {
+      return res.status(401).json({ error: 'Session expired. Please sign in again.' })
+    }
+    const userId = jwtPayload.sub
+    if (!userId) return res.status(401).json({ error: 'Invalid token' })
+
+    // Load profile from DB (fast — no Supabase Auth round-trip)
+    const { data: profile, error: profileErr } = await supabase
+      .from('user_profiles').select('*').eq('id', userId).single()
+    if (profileErr || !profile) return res.status(401).json({ error: 'User profile not found' })
+    if (profile.is_active === false) return res.status(403).json({ error: 'Account disabled' })
+    importUser = profile
+  } catch (e) {
+    // JWT parse failure — fall back to full auth check
+    try {
+      const { data: { user }, error: authErr } = await authClient.auth.getUser(rawToken)
+      if (authErr || !user) return res.status(401).json({ error: 'Session expired. Please sign in again.' })
+      const { data: profile } = await supabase.from('user_profiles').select('*').eq('id', user.id).single()
+      if (!profile || profile.is_active === false) return res.status(401).json({ error: 'Access denied' })
+      importUser = profile
+    } catch (_) {
+      return res.status(401).json({ error: 'Authentication failed' })
+    }
+  }
+
   const { type } = req.params
   const { rows, batch, totalBatches } = req.body
   if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: 'No rows provided' })
@@ -1277,7 +1202,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
           source_url: website || name || 'https://careerOneStop.org',
           notes: noteParts.join('\n') || null,
           independent_creation_logged: true,
-          owner_id: req.user.id,
+          owner_id: importUser.id,
           last_verified_date: new Date().toISOString().split('T')[0]
         }
         if (callPriorityNum > 0) wibRecord.call_priority_score = callPriorityNum
@@ -1483,7 +1408,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
         
         const locRow = {
           location_name: name,
-          owner_id: req.user.id,
+          owner_id: importUser.id,
           state: rawState || null,
           city: (row['city'] || row['City'] || '').trim() || null,
           county: (row['county'] || row['County'] || '').trim() || null,
@@ -1694,7 +1619,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
           'Submission Date','Submitted','Decision Date','Decision','Created','Updated','Owner','Record Stage'])
         const extras = Object.entries(row).filter(([k,v]) => !knownKeys.has(k) && v && String(v).trim())
         if (extras.length) noteParts.push('--- Additional ---\n' + extras.map(([k,v])=>k+': '+v).join('\n'))
-        const insertRow = { company_id, status, notes: noteParts.join('\n') || null, owner_id: req.user.id }
+        const insertRow = { company_id, status, notes: noteParts.join('\n') || null, owner_id: importUser.id }
         if (wib_id) insertRow.wib_id = wib_id
         const awarded = getAmt('award_amount_approved','Application Approved Amount','Award Approved','Amount Approved','Approved Amount','Awarded Amount')
         const requested = getAmt('award_amount_requested','Award Requested','Amount Requested','Requested Amount','Application Amount')
@@ -1707,7 +1632,10 @@ app.post('/api/import/:type', auth, async (req, res) => {
         const { error } = await supabase.from('applications').insert(insertRow)
         if (error) {
           results.errors.push(`"${companyName}": ${error.message}`)
-          if (results.errors.length === 1) { console.error('First app import error:', error.code, error.message); console.error('Row:', JSON.stringify(insertRow)) }
+          if (results.errors.length === 1) {
+            console.error('First app import error:', error.code, error.message)
+            console.error('Row:', JSON.stringify(insertRow))
+          }
         } else { results.created++ }
       }
 
@@ -1716,7 +1644,7 @@ app.post('/api/import/:type', auth, async (req, res) => {
     }
 
     if (!batch || batch === totalBatches) {
-      try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'IMPORT', details: `Imported ${results.created} ${type} records (${results.errors.length} errors)` }) } catch(_) {}
+      try { await supabase.from('activity_log').insert({ user_id: importUser.id, action: 'IMPORT', details: `Imported ${results.created} ${type} records (${results.errors.length} errors)` }) } catch(_) {}
     }
     const cappedErrors = results.errors.slice(0, 20)
     const truncated = results.errors.length > 20
@@ -1751,7 +1679,6 @@ app.post('/api/import-test', auth, requireAdmin, async (req, res) => {
     return res.json({ success: false, threw: e.message })
   }
 })
-
 
 // ─── AIRCALL WEBHOOK ─────────────────────────────────────────────────────────
 app.post('/api/webhooks/aircall',
@@ -2082,7 +2009,6 @@ app.get('/api/template/:type', auth, (req, res) => {
   res.send(csv)
 })
 
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // NOTIFICATIONS API
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2150,14 +2076,10 @@ async function createNotification({ recipientId, senderId, type, title, body, re
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // LIVE CHAT — Presence store, SSE, DMs
-// (replaces the original two basic chat handlers)
-// Run migration.sql once in Supabase SQL Editor before deploying.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ─── PRESENCE STORE ────────────────────────────────────────────────────────────
 const _presence    = new Map()
 const PRESENCE_TTL = 40_000
-
 const _sseClients  = new Map()
 
 function presenceGC() {
@@ -2195,7 +2117,6 @@ function broadcastDM(msg, senderId, recipientId) {
   }
 }
 
-// ─── SSE AUTH HELPER ──────────────────────────────────────────────────────────
 async function sseAuth(req, res) {
   const rawToken = (req.query.token || '').trim()
   if (!rawToken || rawToken.length < 10) { res.status(401).end('Unauthorized'); return null }
@@ -2216,9 +2137,6 @@ async function sseAuth(req, res) {
   } catch (e) { res.status(500).end('Auth error'); return null }
 }
 
-// ─── SSE STREAM ──────────────────────────────────────────────────────────────
-// GET /api/chat/stream?token=<jwt>
-// Must be registered BEFORE /api/chat/:channel to avoid route shadowing
 app.get('/api/chat/stream', async (req, res) => {
   const profile = await sseAuth(req, res)
   if (!profile) return
@@ -2255,8 +2173,6 @@ app.get('/api/chat/stream', async (req, res) => {
   res.on('finish', cleanup)
 })
 
-// ─── PRESENCE HEARTBEAT ──────────────────────────────────────────────────────
-// POST /api/chat/heartbeat — must be before /api/chat/:channel
 app.post('/api/chat/heartbeat', auth, (req, res) => {
   const existing = _presence.get(req.user.id) || {
     id: req.user.id, name: req.user.full_name || req.user.email, email: req.user.email,
@@ -2267,7 +2183,6 @@ app.post('/api/chat/heartbeat', auth, (req, res) => {
   res.json({ ok: true, online: _presence.size })
 })
 
-// ─── USER LIST (for DM directory — must be before /api/chat/:channel) ────────
 app.get('/api/chat/users', auth, async (req, res) => {
   const { data, error } = await supabase
     .from('user_profiles')
@@ -2279,7 +2194,6 @@ app.get('/api/chat/users', auth, async (req, res) => {
   res.json({ data: data || [] })
 })
 
-// ─── DM UNREAD COUNTS (must be before /api/dm/:userId) ───────────────────────
 app.get('/api/dm/unread-counts', auth, async (req, res) => {
   const { data, error } = await supabase
     .from('chat_dm_messages')
@@ -2292,7 +2206,6 @@ app.get('/api/dm/unread-counts', auth, async (req, res) => {
   res.json(counts)
 })
 
-// ─── GET GLOBAL CHANNEL MESSAGES ─────────────────────────────────────────────
 app.get('/api/chat/:channel', auth, async (req, res) => {
   const channel = req.params.channel.substring(0, 100)
   const limit   = Math.min(+(req.query.limit || 60), 200)
@@ -2313,7 +2226,6 @@ app.get('/api/chat/:channel', auth, async (req, res) => {
   res.json({ data: messages })
 })
 
-// ─── POST GLOBAL CHANNEL MESSAGE (broadcasts via SSE) ────────────────────────
 app.post('/api/chat/:channel', auth, async (req, res) => {
   const channel = req.params.channel.substring(0, 100)
   const content = (req.body.content || '').trim()
@@ -2335,7 +2247,6 @@ app.post('/api/chat/:channel', auth, async (req, res) => {
   res.json(msg)
 })
 
-// ─── GET DM THREAD ────────────────────────────────────────────────────────────
 app.get('/api/dm/:userId', auth, async (req, res) => {
   const me    = req.user.id
   const other = req.params.userId
@@ -2356,7 +2267,6 @@ app.get('/api/dm/:userId', auth, async (req, res) => {
   res.json({ data: messages })
 })
 
-// ─── SEND DM ─────────────────────────────────────────────────────────────────
 app.post('/api/dm/:userId', auth, async (req, res) => {
   const me        = req.user.id
   const recipient = req.params.userId
@@ -2383,7 +2293,6 @@ app.post('/api/dm/:userId', auth, async (req, res) => {
   res.json(msg)
 })
 
-// ─── MARK DM THREAD AS READ ──────────────────────────────────────────────────
 app.post('/api/dm/:userId/read', auth, async (req, res) => {
   const me    = req.user.id
   const other = req.params.userId
@@ -2396,7 +2305,6 @@ app.post('/api/dm/:userId/read', auth, async (req, res) => {
   if (error) return res.status(400).json({ error: error.message })
   res.json({ ok: true })
 })
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // GOOGLE DRIVE API
@@ -2441,7 +2349,7 @@ async function driveApi(userId, path, opts = {}) {
 }
 
 app.get('/api/auth/google', auth, (req, res) => {
-  if (!GOOGLE_CLIENT_ID) return res.status(503).send('GOOGLE_CLIENT_ID not configured.')
+  if (!GOOGLE_CLIENT_ID) return res.status(503).send('GOOGLE_CLIENT_ID not configured. Add it to Render environment variables.')
   const state = Buffer.from(JSON.stringify({ userId: req.user.id, token: req.query.token })).toString('base64url')
   const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID, redirect_uri: GOOGLE_REDIRECT_URI, response_type: 'code',
