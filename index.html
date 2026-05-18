@@ -1183,7 +1183,11 @@ function renderApp(){
         `:''}
         <div class="sb-divider"></div>
         ${sbi('revenue','💵','Revenue Tracker')}
+        ${sbi('invoices','🧾','Invoices')}
+        ${sbi('contracts','📄','Contracts')}
+        ${sbi('payments','💳','Payment Tracking')}
         ${sbi('compliance','🛡','Compliance')}
+        ${sbi('training','🎓','Training Providers')}
         ${sbi('ai','🤖','AI Assistant')}
           ${sbi('drive','📁','Files & Drive')}
       </div>
@@ -3122,7 +3126,7 @@ async function pageRevenue(){
 
 async function markRevPaid(id){
   if(!confirm('Mark as paid?'))return
-  try{await api('/api/revenue/'+id,'PUT',{invoice_status:'paid',payment_received_date:new Date().toISOString().split('T')[0]});showToast('Marked paid','success');pageRevenue()}
+  try{await api('/api/revenue/'+id,'PUT',{invoice_status:'paid',payment_received_date:new Date().toISOString().split('T')[0]});showToast('Marked paid','success');currentPage==='payments'?pagePayments():pageRevenue()}
   catch(e){showToast(e.message,'error')}
 }
 
@@ -5134,24 +5138,652 @@ async function sendChatMsg(){
    STUB PAGES (Invoices, Contracts, Grants, Payments, Training, Sequences, Workflows, Settings)
 ═══════════════════════════════════════════════════ */
 async function pageInvoices(){
-  setTopbar('Invoices','',`<button class="btn btn-primary" onclick="showToast('Invoice creation coming soon','info')">+ New Invoice</button>`)
-  document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🧾</div><div class="empty-text">Invoices</div><div class="empty-sub">Invoices are auto-generated when grants are awarded</div><button class="btn btn-primary" onclick="loadPage('applications')">View Applications</button></div>`
+  setTopbar('Invoices','',`
+    <div class="ie-wrap">
+      <button class="btn ie-btn" onclick="toggleIEMenu('inv-ie')">⬆ Export ∨</button>
+      <div class="ie-menu" id="inv-ie">
+        <div class="ie-item" onclick="closeAllIE();exportCSV('invoices')"><span class="ie-icon">📤</span>Export CSV</div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="openNewInvoiceModal()">+ New Invoice</button>`)
+  clearViewbar()
+  const pa = document.getElementById('page-area')
+  pa.innerHTML = `<div class="loading">⏳ Loading invoices...</div>`
+  let invData = []
+  try { invData = (await api('/api/invoices?limit=200')).data || [] } catch(e) { pa.innerHTML=`<div class="alert alert-error">⚠️ ${escHtml(e.message)}</div>`; return }
+  window._invoices = invData
+  const statSummary = { draft:0, sent:0, paid:0, overdue:0, total:0 }
+  invData.forEach(inv => {
+    const m = inv.metadata || {}
+    const s = m.status || 'draft'
+    statSummary[s] = (statSummary[s]||0) + 1
+    statSummary.total += Number(m.amount||0)
+  })
+  pa.innerHTML = `
+  <div class="g4" style="margin-bottom:12px">
+    <div class="metric"><div class="metric-label">Total Invoices</div><div class="metric-value">${invData.length}</div></div>
+    <div class="metric"><div class="metric-label">Draft</div><div class="metric-value" style="color:var(--text2)">${statSummary.draft||0}</div></div>
+    <div class="metric"><div class="metric-label">Sent / Pending</div><div class="metric-value" style="color:var(--amber)">${statSummary.sent||0}</div></div>
+    <div class="metric"><div class="metric-label">Paid</div><div class="metric-value" style="color:var(--green)">${statSummary.paid||0}</div></div>
+  </div>
+  <div class="att-wrap">
+    <div class="att-toolbar">
+      <div class="att-toolbar-l">
+        <div class="card-title">🧾 Invoice Register</div>
+        <div class="search-inp"><span>🔍</span><input placeholder="Search invoices..." oninput="filterInvoicesTable(this.value)"></div>
+        <select class="filter-btn" id="inv-status-filter" onchange="filterInvoicesTable(document.querySelector('#inv-search-inp')?.value||'')">
+          <option value="">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="sent">Sent</option>
+          <option value="paid">Paid</option>
+          <option value="overdue">Overdue</option>
+          <option value="void">Void</option>
+        </select>
+      </div>
+    </div>
+    ${invData.length===0?`<div class="empty-state"><div class="empty-icon">🧾</div><div class="empty-text">No invoices yet</div><div class="empty-sub">Create your first invoice or they auto-generate when grants are awarded</div><button class="btn btn-primary" onclick="openNewInvoiceModal()">+ New Invoice</button></div>`:`
+    <table class="att-tbl"><thead><tr>
+      <th><div class="th-i">Invoice #</div></th>
+      <th><div class="th-i">Company</div></th>
+      <th><div class="th-i">Fee Model</div></th>
+      <th><div class="th-i">Amount</div></th>
+      <th><div class="th-i">Status</div></th>
+      <th><div class="th-i">Due Date</div></th>
+      <th><div class="th-i">Created</div></th>
+      <th></th>
+    </tr></thead>
+    <tbody id="inv-tbody">${renderInvoiceRows(invData)}</tbody></table>
+    <div class="att-footer"><span>${invData.length} invoice${invData.length!==1?'s':''} · Total value: ${fmtMoney(statSummary.total)}</span></div>`}
+  </div>`
+}
+function renderInvoiceRows(invs){
+  const statusFilter = document.getElementById('inv-status-filter')?.value || ''
+  const filtered = statusFilter ? invs.filter(i=>(i.metadata?.status||'draft')===statusFilter) : invs
+  if(!filtered.length) return `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">🧾</div><div class="empty-text">No invoices match this filter</div></div></td></tr>`
+  return filtered.map(inv=>{
+    const m = inv.metadata || {}
+    const status = m.status || 'draft'
+    const pill = status==='paid'?'p-green':status==='sent'?'p-blue':status==='overdue'?'p-red':status==='void'?'p-gray':'p-amber'
+    return `<tr onclick="openEditInvoiceModal(${JSON.stringify(inv).replace(/"/g,"'")})">
+      <td class="cell-mono" style="font-weight:600">${escHtml(m.invoice_number||inv.details||'—')}</td>
+      <td style="font-weight:500">${escHtml(m.company_name||'—')}</td>
+      <td><span class="pill p-purple">${escHtml(m.fee_model||'success_fee')}</span></td>
+      <td style="color:var(--green-t);font-weight:600">${m.amount?fmtMoney(m.amount):'—'}</td>
+      <td><span class="pill ${pill}">${status}</span></td>
+      <td class="cell-dim">${m.due_date?fmtDate(m.due_date):'—'}</td>
+      <td class="cell-dim">${fmtDate(inv.created_at)}</td>
+      <td><div class="row-actions">
+        <button class="action-btn" onclick="event.stopPropagation();markInvoicePaid('${inv.id}','${m.invoice_number||''}')" ${status==='paid'?'disabled':''}>Mark Paid</button>
+        <button class="action-btn" onclick="event.stopPropagation();markInvoiceSent('${inv.id}','${m.invoice_number||''}')" ${status==='sent'||status==='paid'?'disabled':''}>Mark Sent</button>
+      </div></td>
+    </tr>`
+  }).join('')
+}
+function filterInvoicesTable(q){
+  const invs = (window._invoices||[]).filter(i=>{
+    const m = i.metadata||{}
+    return (m.invoice_number||'').toLowerCase().includes(q.toLowerCase()) || (m.company_name||'').toLowerCase().includes(q.toLowerCase())
+  })
+  const tbody = document.getElementById('inv-tbody'); if(tbody) tbody.innerHTML = renderInvoiceRows(invs)
+}
+async function markInvoicePaid(id, invNum){
+  if(!confirm(`Mark invoice ${invNum||id} as PAID?`)) return
+  try {
+    await api('/api/invoices/'+id,'PUT',{status:'paid',payment_date:new Date().toISOString().split('T')[0]})
+    showToast('Invoice marked as paid ✅','success'); pageInvoices()
+  } catch(e){ showToast(e.message,'error') }
+}
+async function markInvoiceSent(id, invNum){
+  try {
+    await api('/api/invoices/'+id,'PUT',{status:'sent',sent_date:new Date().toISOString().split('T')[0]})
+    showToast('Invoice marked as sent 📤','success'); pageInvoices()
+  } catch(e){ showToast(e.message,'error') }
+}
+function openNewInvoiceModal(){
+  showModal('+ New Invoice',`
+    <div id="inv-err"></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Company Name <span class="form-req">*</span></label>
+      <input id="inv-co" placeholder="Sunrise Senior Living" list="inv-co-list">
+      <datalist id="inv-co-list"></datalist>
+    </div>
+    <div class="form-group"><label class="form-label">Invoice # <span class="form-req">*</span></label>
+      <input id="inv-num" placeholder="INV-001" value="INV-${Date.now().toString().slice(-5)}"></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Amount ($) <span class="form-req">*</span></label>
+      <input id="inv-amt" type="number" step="0.01" placeholder="0.00"></div>
+    <div class="form-group"><label class="form-label">Fee Model</label>
+      <select id="inv-model"><option value="success_fee">Success Fee (8–15%)</option><option value="flat_fee">Flat Fee</option><option value="retainer">Retainer</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Status</label>
+      <select id="inv-status"><option value="draft">Draft</option><option value="sent">Sent</option><option value="paid">Paid</option></select></div>
+    <div class="form-group"><label class="form-label">Due Date</label>
+      <input id="inv-due" type="date"></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Notes</label>
+      <textarea id="inv-notes" rows="3" placeholder="Invoice notes, payment terms..."></textarea></div></div>`,
+  async()=>{
+    const co = document.getElementById('inv-co').value.trim()
+    const num = document.getElementById('inv-num').value.trim()
+    const amt = document.getElementById('inv-amt').value
+    const err = document.getElementById('inv-err')
+    if(!co){err.innerHTML='<div class="alert alert-error">Company name required</div>';return false}
+    if(!num){err.innerHTML='<div class="alert alert-error">Invoice number required</div>';return false}
+    if(!amt||isNaN(amt)){err.innerHTML='<div class="alert alert-error">Valid amount required</div>';return false}
+    try{
+      await api('/api/invoices','POST',{
+        invoice_number:num, company_name:co, amount:parseFloat(amt),
+        fee_model:document.getElementById('inv-model').value,
+        status:document.getElementById('inv-status').value,
+        due_date:document.getElementById('inv-due').value||null,
+        notes:document.getElementById('inv-notes').value||null
+      })
+      showToast('Invoice created ✅','success'); pageInvoices()
+    }catch(e){err.innerHTML=`<div class="alert alert-error">${escHtml(e.message)}</div>`;return false}
+  },'modal-lg')
+  api('/api/companies?limit=500').then(r=>{
+    const dl = document.getElementById('inv-co-list'); if(!dl) return
+    ;(r.data||[]).forEach(c=>{const o=document.createElement('option');o.value=c.company_name;dl.appendChild(o)})
+  }).catch(()=>{})
+}
+function openEditInvoiceModal(inv){
+  const m = inv.metadata || {}
+  showModal('Edit Invoice',`
+    <div class="form-row"><div class="form-group"><div class="form-label">Invoice #</div><input value="${escHtml(m.invoice_number||inv.details||'')}" disabled style="opacity:.6"></div>
+    <div class="form-group"><div class="form-label">Company</div><input value="${escHtml(m.company_name||'')}" disabled style="opacity:.6"></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Amount ($)</label><input id="einv-amt" type="number" value="${m.amount||''}"></div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select id="einv-status">
+        <option value="draft"${m.status==='draft'?' selected':''}>Draft</option>
+        <option value="sent"${m.status==='sent'?' selected':''}>Sent</option>
+        <option value="paid"${m.status==='paid'?' selected':''}>Paid</option>
+        <option value="overdue"${m.status==='overdue'?' selected':''}>Overdue</option>
+        <option value="void"${m.status==='void'?' selected':''}>Void</option>
+      </select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Due Date</label><input id="einv-due" type="date" value="${m.due_date||''}"></div>
+    <div class="form-group"><label class="form-label">Payment Date</label><input id="einv-paid" type="date" value="${m.payment_date||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Notes</label><textarea id="einv-notes" rows="3">${escHtml(m.notes||'')}</textarea></div></div>`,
+  async()=>{
+    try{
+      await api('/api/invoices/'+inv.id,'PUT',{
+        amount:document.getElementById('einv-amt').value||undefined,
+        status:document.getElementById('einv-status').value,
+        due_date:document.getElementById('einv-due').value||null,
+        payment_date:document.getElementById('einv-paid').value||null,
+        notes:document.getElementById('einv-notes').value||null
+      })
+      showToast('Invoice updated','success'); pageInvoices()
+    }catch(e){showToast(e.message,'error');return false}
+  })
 }
 async function pageContracts(){
-  setTopbar('Contracts','')
-  document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">📄</div><div class="empty-text">Contracts</div><div class="empty-sub">Track your grant contracts and agreements here</div></div>`
+  setTopbar('Contracts','Grant Contracts & Agreements',`
+    <button class="btn btn-primary" onclick="openNewContractModal()">+ New Contract</button>`)
+  clearViewbar()
+  const pa = document.getElementById('page-area')
+  pa.innerHTML = `<div class="loading">⏳ Loading contracts...</div>`
+  let data = []
+  try { data = (await api('/api/contracts?limit=200')).data || [] } catch(e) { pa.innerHTML=`<div class="alert alert-error">⚠️ ${escHtml(e.message)}</div>`; return }
+  window._contracts = data
+  const summary = { draft:0, active:0, signed:0, expired:0, totalVal:0 }
+  data.forEach(c=>{ const m=c.metadata||{}; const s=m.status||'draft'; summary[s]=(summary[s]||0)+1; summary.totalVal+=Number(m.value||0) })
+  pa.innerHTML = `
+  <div class="g4" style="margin-bottom:12px">
+    <div class="metric"><div class="metric-label">Total Contracts</div><div class="metric-value">${data.length}</div></div>
+    <div class="metric"><div class="metric-label">Active</div><div class="metric-value" style="color:var(--green)">${summary.active||0}</div></div>
+    <div class="metric"><div class="metric-label">Draft</div><div class="metric-value" style="color:var(--text2)">${summary.draft||0}</div></div>
+    <div class="metric"><div class="metric-label">Total Value</div><div class="metric-value">${fmtMoney(summary.totalVal)}</div></div>
+  </div>
+  <div class="att-wrap">
+    <div class="att-toolbar">
+      <div class="att-toolbar-l">
+        <div class="card-title">📄 Contracts</div>
+        <div class="search-inp"><span>🔍</span><input placeholder="Search contracts..." oninput="filterContractsTable(this.value)"></div>
+        <select class="filter-btn" id="ctr-status-filter" onchange="filterContractsTable('')">
+          <option value="">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="active">Active</option>
+          <option value="signed">Signed</option>
+          <option value="expired">Expired</option>
+          <option value="terminated">Terminated</option>
+        </select>
+      </div>
+    </div>
+    ${data.length===0?`<div class="empty-state"><div class="empty-icon">📄</div><div class="empty-text">No contracts yet</div><div class="empty-sub">Track your grant consulting agreements and employer contracts</div><button class="btn btn-primary" onclick="openNewContractModal()">+ New Contract</button></div>`:`
+    <table class="att-tbl"><thead><tr>
+      <th><div class="th-i">Contract #</div></th>
+      <th><div class="th-i">Company</div></th>
+      <th><div class="th-i">Type</div></th>
+      <th><div class="th-i">Value</div></th>
+      <th><div class="th-i">Status</div></th>
+      <th><div class="th-i">Signed</div></th>
+      <th><div class="th-i">Expires</div></th>
+      <th></th>
+    </tr></thead>
+    <tbody id="ctr-tbody">${renderContractRows(data)}</tbody></table>
+    <div class="att-footer"><span>${data.length} contract${data.length!==1?'s':''} · Total value: ${fmtMoney(summary.totalVal)}</span></div>`}
+  </div>`
+}
+function renderContractRows(ctrs){
+  const statusFilter = document.getElementById('ctr-status-filter')?.value || ''
+  const filtered = statusFilter ? ctrs.filter(c=>(c.metadata?.status||'draft')===statusFilter) : ctrs
+  if(!filtered.length) return `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📄</div><div class="empty-text">No contracts match this filter</div></div></td></tr>`
+  return filtered.map(c=>{
+    const m = c.metadata || {}
+    const status = m.status || 'draft'
+    const pill = status==='active'||status==='signed'?'p-green':status==='expired'||status==='terminated'?'p-red':status==='draft'?'p-amber':'p-gray'
+    return `<tr onclick="openEditContractModal(${JSON.stringify(c).replace(/"/g,"'")})">
+      <td class="cell-mono" style="font-weight:600">${escHtml(m.contract_number||c.details||'—')}</td>
+      <td style="font-weight:500">${escHtml(m.company_name||'—')}</td>
+      <td><span class="pill p-blue">${escHtml(m.contract_type||'Consulting')}</span></td>
+      <td style="color:var(--green-t);font-weight:600">${m.value?fmtMoney(m.value):'—'}</td>
+      <td><span class="pill ${pill}">${status}</span></td>
+      <td class="cell-dim">${m.signed_date?fmtDate(m.signed_date):'—'}</td>
+      <td class="cell-dim" style="${m.expiry_date&&new Date(m.expiry_date)<new Date()?'color:var(--red)':''}">${m.expiry_date?fmtDate(m.expiry_date):'—'}</td>
+      <td><div class="row-actions">
+        <button class="action-btn" onclick="event.stopPropagation();activateContract('${c.id}')" ${status==='active'?'disabled':''}>Activate</button>
+      </div></td>
+    </tr>`
+  }).join('')
+}
+function filterContractsTable(q){
+  const ctrs = (window._contracts||[]).filter(c=>{
+    const m = c.metadata||{}
+    return (m.contract_number||'').toLowerCase().includes(q.toLowerCase()) || (m.company_name||'').toLowerCase().includes(q.toLowerCase())
+  })
+  const tbody = document.getElementById('ctr-tbody'); if(tbody) tbody.innerHTML = renderContractRows(ctrs)
+}
+async function activateContract(id){
+  try{
+    await api('/api/contracts/'+id,'PUT',{status:'active',signed_date:new Date().toISOString().split('T')[0]})
+    showToast('Contract activated ✅','success'); pageContracts()
+  }catch(e){showToast(e.message,'error')}
+}
+function openNewContractModal(){
+  showModal('+ New Contract',`
+    <div id="ctr-err"></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Company Name <span class="form-req">*</span></label>
+      <input id="ctr-co" placeholder="Sunrise Senior Living" list="ctr-co-list">
+      <datalist id="ctr-co-list"></datalist>
+    </div>
+    <div class="form-group"><label class="form-label">Contract Type</label>
+      <select id="ctr-type"><option value="Consulting Agreement">Consulting Agreement</option><option value="Grant Administration">Grant Administration</option><option value="Services Agreement">Services Agreement</option><option value="MOU">MOU</option><option value="Other">Other</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Contract Value ($)</label>
+      <input id="ctr-val" type="number" step="0.01" placeholder="0.00"></div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select id="ctr-status"><option value="draft">Draft</option><option value="active">Active</option><option value="signed">Signed</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Signed Date</label>
+      <input id="ctr-signed" type="date"></div>
+    <div class="form-group"><label class="form-label">Expiry Date</label>
+      <input id="ctr-exp" type="date"></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Notes</label>
+      <textarea id="ctr-notes" rows="3" placeholder="Key terms, payment schedule, deliverables..."></textarea></div></div>`,
+  async()=>{
+    const co=document.getElementById('ctr-co').value.trim()
+    const err=document.getElementById('ctr-err')
+    if(!co){err.innerHTML='<div class="alert alert-error">Company name required</div>';return false}
+    try{
+      await api('/api/contracts','POST',{
+        company_name:co,
+        contract_type:document.getElementById('ctr-type').value,
+        value:document.getElementById('ctr-val').value||null,
+        status:document.getElementById('ctr-status').value,
+        signed_date:document.getElementById('ctr-signed').value||null,
+        expiry_date:document.getElementById('ctr-exp').value||null,
+        notes:document.getElementById('ctr-notes').value||null
+      })
+      showToast('Contract created ✅','success'); pageContracts()
+    }catch(e){err.innerHTML=`<div class="alert alert-error">${escHtml(e.message)}</div>`;return false}
+  },'modal-lg')
+  api('/api/companies?limit=500').then(r=>{
+    const dl=document.getElementById('ctr-co-list');if(!dl)return
+    ;(r.data||[]).forEach(c=>{const o=document.createElement('option');o.value=c.company_name;dl.appendChild(o)})
+  }).catch(()=>{})
+}
+function openEditContractModal(c){
+  const m=c.metadata||{}
+  showModal('Edit Contract',`
+    <div class="form-row"><div class="form-group"><div class="form-label">Contract #</div><input value="${escHtml(m.contract_number||c.details||'')}" disabled style="opacity:.6"></div>
+    <div class="form-group"><div class="form-label">Company</div><input value="${escHtml(m.company_name||'')}" disabled style="opacity:.6"></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Value ($)</label><input id="ectr-val" type="number" value="${m.value||''}"></div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select id="ectr-status">
+        ${['draft','active','signed','expired','terminated'].map(s=>`<option value="${s}"${m.status===s?' selected':''}>${s}</option>`).join('')}
+      </select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Signed Date</label><input id="ectr-signed" type="date" value="${m.signed_date||''}"></div>
+    <div class="form-group"><label class="form-label">Expiry Date</label><input id="ectr-exp" type="date" value="${m.expiry_date||''}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Notes</label><textarea id="ectr-notes" rows="3">${escHtml(m.notes||'')}</textarea></div></div>`,
+  async()=>{
+    try{
+      await api('/api/contracts/'+c.id,'PUT',{
+        value:document.getElementById('ectr-val').value||undefined,
+        status:document.getElementById('ectr-status').value,
+        signed_date:document.getElementById('ectr-signed').value||null,
+        expiry_date:document.getElementById('ectr-exp').value||null,
+        notes:document.getElementById('ectr-notes').value||null
+      })
+      showToast('Contract updated','success'); pageContracts()
+    }catch(e){showToast(e.message,'error');return false}
+  })
 }
 async function pageGrants(){
-  setTopbar('Grant Awards','')
-  document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🏆</div><div class="empty-text">Grant Awards</div><div class="empty-sub">Awarded grants appear here automatically</div></div>`
+  setTopbar('Grant Awards','Awarded & Active Grants',`
+    <div class="ie-wrap">
+      <button class="btn ie-btn" onclick="toggleIEMenu('ga-ie')">⬆ Export ∨</button>
+      <div class="ie-menu" id="ga-ie">
+        <div class="ie-item" onclick="closeAllIE();exportCSV('applications')"><span class="ie-icon">📤</span>Export CSV</div>
+      </div>
+    </div>`)
+  clearViewbar()
+  const pa = document.getElementById('page-area')
+  pa.innerHTML = `<div class="loading">⏳ Loading grant awards...</div>`
+  let data = []
+  try { data = (await api('/api/grant-awards')).data || [] } catch(e) { pa.innerHTML=`<div class="alert alert-error">⚠️ ${escHtml(e.message)}</div>`; return }
+  window._grants = data
+  const totalAwarded = data.reduce((s,g)=>s+Number(g.award_amount_approved||0),0)
+  const totalFees = data.reduce((s,g)=>s+Number(g.revenue?.calculated_success_fee||0),0)
+  const byStatus = {}
+  data.forEach(g=>{ byStatus[g.status]=(byStatus[g.status]||0)+1 })
+  pa.innerHTML = `
+  <div class="rev-band" style="margin-bottom:12px">
+    <div class="rev-item"><div class="rev-n">${data.length}</div><div class="rev-l">Total Awarded</div></div>
+    <div class="rev-item"><div class="rev-n">${fmtMoney(totalAwarded)}</div><div class="rev-l">Grant $ Secured</div></div>
+    <div class="rev-item"><div class="rev-n">${fmtMoney(totalFees)}</div><div class="rev-l">Valor Fees Earned</div></div>
+    <div class="rev-item"><div class="rev-n">${byStatus.active||0}</div><div class="rev-l">Active</div></div>
+    <div class="rev-item"><div class="rev-n">${byStatus.completed||0}</div><div class="rev-l">Completed</div></div>
+  </div>
+  <div class="att-wrap">
+    <div class="att-toolbar">
+      <div class="att-toolbar-l">
+        <div class="card-title">🏆 Awarded Grants</div>
+        <div class="search-inp"><span>🔍</span><input placeholder="Search company or WIB..." oninput="filterGrantsTable(this.value)"></div>
+        <select class="filter-btn" id="ga-status-filter" onchange="filterGrantsTable(document.querySelector('.search-inp input')?.value||'')">
+          <option value="">All statuses</option>
+          <option value="awarded">Awarded</option>
+          <option value="active">Active</option>
+          <option value="completed">Completed</option>
+          <option value="closed">Closed</option>
+        </select>
+      </div>
+    </div>
+    ${data.length===0?`<div class="empty-state"><div class="empty-icon">🏆</div><div class="empty-text">No awarded grants yet</div><div class="empty-sub">Grants appear here when application status is set to Awarded, Active, or Completed</div><button class="btn btn-primary" onclick="loadPage('applications')">View Applications →</button></div>`:`
+    <table class="att-tbl"><thead><tr>
+      <th><div class="th-i">Company</div></th>
+      <th><div class="th-i">WIB</div></th>
+      <th><div class="th-i">Funding Program</div></th>
+      <th><div class="th-i">Status</div></th>
+      <th><div class="th-i">Award Amount</div></th>
+      <th><div class="th-i">Valor Fee</div></th>
+      <th><div class="th-i">Invoice</div></th>
+      <th><div class="th-i">Decision Date</div></th>
+      <th></th>
+    </tr></thead>
+    <tbody id="ga-tbody">${renderGrantRows(data)}</tbody></table>
+    <div class="att-footer"><span>${data.length} grant${data.length!==1?'s':''} · ${fmtMoney(totalAwarded)} secured · ${fmtMoney(totalFees)} in fees</span></div>`}
+  </div>`
+}
+function renderGrantRows(grants){
+  const statusFilter = document.getElementById('ga-status-filter')?.value || ''
+  const filtered = statusFilter ? grants.filter(g=>g.status===statusFilter) : grants
+  if(!filtered.length) return `<tr><td colspan="9"><div class="empty-state"><div class="empty-icon">🏆</div><div class="empty-text">No grants match this filter</div></div></td></tr>`
+  return filtered.map(g=>{
+    const rev = g.revenue || {}
+    const invoicePill = rev.invoice_status==='paid'?'<span class="pill p-green">Paid ✅</span>':rev.invoice_status==='sent'?'<span class="pill p-blue">Sent</span>':rev.invoice_status?`<span class="pill p-amber">${rev.invoice_status}</span>`:'<span class="pill p-gray">—</span>'
+    return `<tr onclick="openEditApplicationModal(${JSON.stringify(g).replace(/"/g,"'")})">
+      <td style="font-weight:600"><span style="margin-right:4px">🏢</span>${escHtml(g.company?.company_name||'—')}</td>
+      <td class="cell-dim">${escHtml((g.wib?.wib_name||'—').split(' ').slice(0,4).join(' '))}</td>
+      <td class="cell-dim" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(g.funding_opportunity?.opportunity_name||'—')}</td>
+      <td>${appStatusPill(g.status)}</td>
+      <td style="color:var(--green-t);font-weight:700">${g.award_amount_approved?fmtMoney(g.award_amount_approved):'—'}</td>
+      <td style="color:var(--green-t);font-weight:600">${rev.calculated_success_fee?fmtMoney(rev.calculated_success_fee):'—'}</td>
+      <td>${invoicePill}</td>
+      <td class="cell-dim">${g.decision_date?fmtDate(g.decision_date):'—'}</td>
+      <td><div class="row-actions">
+        <button class="action-btn" onclick="event.stopPropagation();openEditApplicationModal(${JSON.stringify(g).replace(/"/g,"'")})">Edit</button>
+      </div></td>
+    </tr>`
+  }).join('')
+}
+function filterGrantsTable(q){
+  const grants=(window._grants||[]).filter(g=>(g.company?.company_name||'').toLowerCase().includes(q.toLowerCase())||(g.wib?.wib_name||'').toLowerCase().includes(q.toLowerCase()))
+  const tbody=document.getElementById('ga-tbody');if(tbody)tbody.innerHTML=renderGrantRows(grants)
 }
 async function pagePayments(){
-  setTopbar('Payment Tracking','')
-  document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">💳</div><div class="empty-text">Payment Tracking</div><div class="empty-sub">Track grant disbursements and employer payments</div></div>`
+  setTopbar('Payment Tracking','Grant Disbursements & Collections',`
+    <div class="ie-wrap">
+      <button class="btn ie-btn" onclick="toggleIEMenu('pay-ie')">⬆ Export ∨</button>
+      <div class="ie-menu" id="pay-ie">
+        <div class="ie-item" onclick="closeAllIE();exportCSV('revenue')"><span class="ie-icon">📤</span>Export CSV</div>
+      </div>
+    </div>`)
+  clearViewbar()
+  const pa = document.getElementById('page-area')
+  pa.innerHTML = `<div class="loading">⏳ Loading payments...</div>`
+  let revData = [], dashboard = {}
+  try {
+    [revData, dashboard] = await Promise.all([
+      api('/api/revenue').then(r=>r.data||[]),
+      api('/api/revenue/dashboard').catch(()=>({}))
+    ])
+  } catch(e) { pa.innerHTML=`<div class="alert alert-error">⚠️ ${escHtml(e.message)}</div>`; return }
+  window._payments = revData
+  const totalReceived = revData.filter(r=>r.invoice_status==='paid').reduce((s,r)=>s+Number(r.calculated_success_fee||0),0)
+  const totalPending  = revData.filter(r=>r.invoice_status!=='paid').reduce((s,r)=>s+Number(r.calculated_success_fee||0),0)
+  const overdue       = revData.filter(r=>r.invoice_status==='overdue').length
+  pa.innerHTML = `
+  <div class="rev-band" style="margin-bottom:12px">
+    <div class="rev-item"><div class="rev-n">${fmtMoney(totalReceived)}</div><div class="rev-l">Collected</div></div>
+    <div class="rev-item"><div class="rev-n">${fmtMoney(totalPending)}</div><div class="rev-l">Outstanding</div></div>
+    <div class="rev-item"><div class="rev-n" style="color:${overdue>0?'#fca5a5':'var(--cream)'}">${overdue}</div><div class="rev-l">Overdue</div></div>
+    <div class="rev-item"><div class="rev-n">${fmtMoney(dashboard.total_revenue_ytd||0)}</div><div class="rev-l">YTD Revenue</div></div>
+    <div class="rev-item"><div class="rev-n">${fmtMoney(dashboard.pipeline_value||0)}</div><div class="rev-l">Pipeline Value</div></div>
+  </div>
+  <div class="att-wrap">
+    <div class="att-toolbar">
+      <div class="att-toolbar-l">
+        <div class="card-title">💳 Payment Register</div>
+        <div class="search-inp"><span>🔍</span><input placeholder="Search company..." oninput="filterPaymentsTable(this.value)"></div>
+        <select class="filter-btn" id="pay-status-filter" onchange="filterPaymentsTable('')">
+          <option value="">All statuses</option>
+          <option value="pending">Pending</option>
+          <option value="sent">Invoiced</option>
+          <option value="paid">Paid</option>
+          <option value="overdue">Overdue</option>
+        </select>
+      </div>
+    </div>
+    ${revData.length===0?`<div class="empty-state"><div class="empty-icon">💳</div><div class="empty-text">No payment records yet</div><div class="empty-sub">Payment records are auto-created when grants are awarded</div><button class="btn btn-primary" onclick="loadPage('grants')">View Grant Awards →</button></div>`:`
+    <table class="att-tbl"><thead><tr>
+      <th><div class="th-i">Company</div></th>
+      <th><div class="th-i">WIB</div></th>
+      <th><div class="th-i">Fee Model</div></th>
+      <th><div class="th-i">Grant Award</div></th>
+      <th><div class="th-i">Valor Fee Due</div></th>
+      <th><div class="th-i">Invoice Status</div></th>
+      <th><div class="th-i">Payment Date</div></th>
+      <th></th>
+    </tr></thead>
+    <tbody id="pay-tbody">${renderPaymentRows(revData)}</tbody></table>
+    <div class="att-footer"><span>${revData.length} record${revData.length!==1?'s':''} · ${fmtMoney(totalReceived)} collected · ${fmtMoney(totalPending)} outstanding</span></div>`}
+  </div>`
+}
+function renderPaymentRows(recs){
+  const statusFilter = document.getElementById('pay-status-filter')?.value || ''
+  const filtered = statusFilter ? recs.filter(r=>r.invoice_status===statusFilter) : recs
+  if(!filtered.length) return `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">💳</div><div class="empty-text">No payments match this filter</div></div></td></tr>`
+  return filtered.map(r=>{
+    const s = r.invoice_status || 'pending'
+    const pill = s==='paid'?'p-green':s==='overdue'?'p-red':s==='sent'?'p-blue':'p-amber'
+    return `<tr>
+      <td style="font-weight:500">${escHtml(r.company?.company_name||'—')}</td>
+      <td class="cell-dim">${escHtml((r.wib?.wib_name||'—').split(' ').slice(0,4).join(' '))}</td>
+      <td><span class="pill p-purple">${escHtml(r.fee_model||'—')}</span></td>
+      <td style="color:var(--green-t)">${r.grant_award_amount?fmtMoney(r.grant_award_amount):'—'}</td>
+      <td style="color:var(--green-t);font-weight:700">${r.calculated_success_fee?fmtMoney(r.calculated_success_fee):'—'}</td>
+      <td><span class="pill ${pill}">${s}</span></td>
+      <td class="cell-dim">${r.payment_received_date?fmtDate(r.payment_received_date):'—'}</td>
+      <td><div class="row-actions">
+        ${s!=='paid'?`<button class="action-btn" onclick="markRevPaid('${r.id}')">Mark Paid</button>`:''}
+        ${s==='pending'?`<button class="action-btn" onclick="markRevSent('${r.id}')">Mark Invoiced</button>`:''}
+      </div></td>
+    </tr>`
+  }).join('')
+}
+async function markRevSent(id){
+  try{
+    await api('/api/revenue/'+id,'PUT',{invoice_status:'sent',invoice_sent_date:new Date().toISOString().split('T')[0]})
+    showToast('Marked as invoiced 📤','success'); pagePayments()
+  }catch(e){showToast(e.message,'error')}
+}
+function filterPaymentsTable(q){
+  const recs=(window._payments||[]).filter(r=>(r.company?.company_name||'').toLowerCase().includes(q.toLowerCase()))
+  const tbody=document.getElementById('pay-tbody');if(tbody)tbody.innerHTML=renderPaymentRows(recs)
 }
 async function pageTraining(){
-  setTopbar('Training Providers','')
-  document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🎓</div><div class="empty-text">Training Providers</div><div class="empty-sub">Manage approved training providers and curricula</div></div>`
+  setTopbar('Training Providers','Approved Curriculum Partners',`
+    <button class="btn btn-primary" onclick="openNewTrainingProviderModal()">+ Add Provider</button>`)
+  clearViewbar()
+  const pa = document.getElementById('page-area')
+  pa.innerHTML = `<div class="loading">⏳ Loading training providers...</div>`
+  let data = []
+  try { data = (await api('/api/training-providers?limit=200')).data || [] } catch(e) { pa.innerHTML=`<div class="alert alert-error">⚠️ ${escHtml(e.message)}</div>`; return }
+  window._trainingProviders = data
+  pa.innerHTML = `
+  <div class="g3" style="margin-bottom:12px">
+    <div class="metric"><div class="metric-label">Total Providers</div><div class="metric-value">${data.length}</div></div>
+    <div class="metric"><div class="metric-label">Active</div><div class="metric-value" style="color:var(--green)">${data.filter(d=>(d.metadata?.status||'active')==='active').length}</div></div>
+    <div class="metric"><div class="metric-label">States Covered</div><div class="metric-value">${new Set(data.map(d=>d.metadata?.state).filter(Boolean)).size}</div></div>
+  </div>
+  <div class="att-wrap">
+    <div class="att-toolbar">
+      <div class="att-toolbar-l">
+        <div class="card-title">🎓 Training Providers</div>
+        <div class="search-inp"><span>🔍</span><input placeholder="Search providers..." oninput="filterTrainingTable(this.value)"></div>
+        <select class="filter-btn" id="tp-type-filter" onchange="filterTrainingTable('')">
+          <option value="">All types</option>
+          <option value="Community College">Community College</option>
+          <option value="Vocational School">Vocational School</option>
+          <option value="Online Platform">Online Platform</option>
+          <option value="Employer-based">Employer-based</option>
+          <option value="Non-profit">Non-profit</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+    </div>
+    ${data.length===0?`<div class="empty-state"><div class="empty-icon">🎓</div><div class="empty-text">No training providers yet</div><div class="empty-sub">Add approved training partners for IWT and OJT grant programs</div><button class="btn btn-primary" onclick="openNewTrainingProviderModal()">+ Add Provider</button></div>`:`
+    <table class="att-tbl"><thead><tr>
+      <th><div class="th-i">Provider Name</div></th>
+      <th><div class="th-i">Type</div></th>
+      <th><div class="th-i">State</div></th>
+      <th><div class="th-i">Programs</div></th>
+      <th><div class="th-i">Contact</div></th>
+      <th><div class="th-i">Status</div></th>
+      <th><div class="th-i">Website</div></th>
+      <th></th>
+    </tr></thead>
+    <tbody id="tp-tbody">${renderTrainingRows(data)}</tbody></table>
+    <div class="att-footer"><span>${data.length} provider${data.length!==1?'s':''}</span></div>`}
+  </div>`
+}
+function renderTrainingRows(providers){
+  const typeFilter = document.getElementById('tp-type-filter')?.value || ''
+  const filtered = typeFilter ? providers.filter(p=>(p.metadata?.provider_type||'')=== typeFilter) : providers
+  if(!filtered.length) return `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">🎓</div><div class="empty-text">No providers match this filter</div></div></td></tr>`
+  return filtered.map(p=>{
+    const m = p.metadata || {}
+    const status = m.status || 'active'
+    const programs = Array.isArray(m.programs) ? m.programs : (m.programs||'').split(',').map(x=>x.trim()).filter(Boolean)
+    return `<tr onclick="openEditTrainingModal(${JSON.stringify(p).replace(/"/g,"'")})">
+      <td style="font-weight:600"><span style="margin-right:5px">🎓</span>${escHtml(p.details||m.name||'—')}</td>
+      <td><span class="pill p-blue">${escHtml(m.provider_type||'Other')}</span></td>
+      <td class="cell-dim">${escHtml(m.state||'—')}</td>
+      <td>${programs.slice(0,3).map(pg=>`<span class="pill p-teal" style="margin-right:2px">${escHtml(pg)}</span>`).join('')}${programs.length>3?`<span class="cell-dim">+${programs.length-3}</span>`:''}</td>
+      <td class="cell-dim">${m.contact_email?`<a href="mailto:${escHtml(m.contact_email)}" onclick="event.stopPropagation()" class="field-link">${escHtml(m.contact_email)}</a>`:'—'}</td>
+      <td><span class="pill ${status==='active'?'p-green':'p-gray'}">${status}</span></td>
+      <td>${m.website?`<a href="${escUrl(m.website,'https')}" target="_blank" onclick="event.stopPropagation()" class="field-link">↗ Visit</a>`:'—'}</td>
+      <td><div class="row-actions">
+        <button class="action-btn" onclick="event.stopPropagation();openEditTrainingModal(${JSON.stringify(p).replace(/"/g,"'")})">Edit</button>
+        <button class="action-btn" onclick="event.stopPropagation();deleteTrainingProvider('${p.id}')">Delete</button>
+      </div></td>
+    </tr>`
+  }).join('')
+}
+function filterTrainingTable(q){
+  const providers=(window._trainingProviders||[]).filter(p=>(p.details||p.metadata?.name||'').toLowerCase().includes(q.toLowerCase())||(p.metadata?.state||'').toLowerCase().includes(q.toLowerCase()))
+  const tbody=document.getElementById('tp-tbody');if(tbody)tbody.innerHTML=renderTrainingRows(providers)
+}
+function openNewTrainingProviderModal(){
+  showModal('+ Add Training Provider',`
+    <div id="tp-err"></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Provider Name <span class="form-req">*</span></label>
+      <input id="tp-name" placeholder="Community College of Denver"></div>
+    <div class="form-group"><label class="form-label">Type</label>
+      <select id="tp-type"><option>Community College</option><option>Vocational School</option><option>Online Platform</option><option>Employer-based</option><option>Non-profit</option><option>Other</option></select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">State</label>
+      <input id="tp-state" placeholder="CO" maxlength="2"></div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select id="tp-status"><option value="active">Active</option><option value="inactive">Inactive</option></select></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Programs Offered</label>
+      <input id="tp-programs" placeholder="IWT, OJT, Apprenticeship, CNA, etc."></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Contact Email</label>
+      <input id="tp-email" type="email" placeholder="contact@provider.edu"></div>
+    <div class="form-group"><label class="form-label">Contact Phone</label>
+      <input id="tp-phone" placeholder="(303) 555-0100"></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Website</label>
+      <input id="tp-web" type="url" placeholder="https://"></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Notes</label>
+      <textarea id="tp-notes" rows="3" placeholder="Eligible programs, contacts, approval status..."></textarea></div></div>`,
+  async()=>{
+    const name = document.getElementById('tp-name').value.trim()
+    const err  = document.getElementById('tp-err')
+    if(!name){err.innerHTML='<div class="alert alert-error">Provider name required</div>';return false}
+    try{
+      await api('/api/training-providers','POST',{
+        name, provider_type:document.getElementById('tp-type').value,
+        state:document.getElementById('tp-state').value||null,
+        programs:document.getElementById('tp-programs').value||null,
+        contact_email:document.getElementById('tp-email').value||null,
+        contact_phone:document.getElementById('tp-phone').value||null,
+        website:document.getElementById('tp-web').value||null,
+        notes:document.getElementById('tp-notes').value||null,
+        status:document.getElementById('tp-status').value
+      })
+      showToast('Provider added ✅','success'); pageTraining()
+    }catch(e){err.innerHTML=`<div class="alert alert-error">${escHtml(e.message)}</div>`;return false}
+  },'modal-lg')
+}
+function openEditTrainingModal(p){
+  const m = p.metadata || {}
+  showModal('Edit Training Provider',`
+    <div class="form-row"><div class="form-group"><label class="form-label">Name</label><input id="etp-name" value="${escHtml(m.name||p.details||'')}"></div>
+    <div class="form-group"><label class="form-label">Type</label>
+      <select id="etp-type">${['Community College','Vocational School','Online Platform','Employer-based','Non-profit','Other'].map(t=>`<option${m.provider_type===t?' selected':''}>${t}</option>`).join('')}</select></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">State</label><input id="etp-state" value="${escHtml(m.state||'')}" maxlength="2"></div>
+    <div class="form-group"><label class="form-label">Status</label>
+      <select id="etp-status"><option value="active"${m.status==='active'?' selected':''}>Active</option><option value="inactive"${m.status==='inactive'?' selected':''}>Inactive</option></select></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Programs</label>
+      <input id="etp-programs" value="${escHtml(Array.isArray(m.programs)?m.programs.join(', '):(m.programs||''))}"></div></div>
+    <div class="form-row"><div class="form-group"><label class="form-label">Contact Email</label><input id="etp-email" type="email" value="${escHtml(m.contact_email||'')}"></div>
+    <div class="form-group"><label class="form-label">Contact Phone</label><input id="etp-phone" value="${escHtml(m.contact_phone||'')}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Website</label><input id="etp-web" type="url" value="${escHtml(m.website||'')}"></div></div>
+    <div class="form-row form-full"><div class="form-group"><label class="form-label">Notes</label><textarea id="etp-notes" rows="3">${escHtml(m.notes||'')}</textarea></div></div>`,
+  async()=>{
+    try{
+      await api('/api/training-providers/'+p.id,'PUT',{
+        name:document.getElementById('etp-name').value.trim(),
+        provider_type:document.getElementById('etp-type').value,
+        state:document.getElementById('etp-state').value||null,
+        programs:document.getElementById('etp-programs').value||null,
+        contact_email:document.getElementById('etp-email').value||null,
+        contact_phone:document.getElementById('etp-phone').value||null,
+        website:document.getElementById('etp-web').value||null,
+        notes:document.getElementById('etp-notes').value||null,
+        status:document.getElementById('etp-status').value
+      })
+      showToast('Provider updated','success'); pageTraining()
+    }catch(e){showToast(e.message,'error');return false}
+  },'modal-lg')
+}
+async function deleteTrainingProvider(id){
+  if(!confirm('Delete this training provider? This cannot be undone.'))return
+  try{ await api('/api/training-providers/'+id,'DELETE'); showToast('Provider deleted','success'); pageTraining() }
+  catch(e){ showToast(e.message,'error') }
 }
 
 /* ═══════════════════════════════════════════════════
@@ -6777,57 +7409,118 @@ function updateNewNoteAuthor(sel){
 /* ═══════════════════════════════════════════════════
    CALLS PAGE
 ═══════════════════════════════════════════════════ */
-function pageCalls(){
-  setTopbar('Calls','',`
-    <div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--text2)">
-      <span>📞 Calls 129</span>
-      <span style="color:var(--text4)">|</span>
-      <span>⊡ Insight Templates 0</span>
+async function pageCalls(){
+  // Load both Aircall-synced calls and manually logged call notes in parallel
+  let aircallRows = [], notesCalls = [], totalCalls = 0
+  try {
+    const [notesRes] = await Promise.all([
+      api('/api/notes?limit=500').catch(()=>({data:[]}))
+    ])
+    notesCalls = (notesRes.data||[]).filter(n=>isAircallNote(n)||getNoteType(n)==='Call'||getNoteType(n)==='call')
+    totalCalls = notesCalls.length
+  } catch(e) {}
+  window._callsData = notesCalls
+
+  setTopbar('Calls & Activity Log','',`
+    <div style="display:flex;align-items:center;gap:8px">
+      <select id="calls-dir-filter" class="filter-btn" onchange="renderCallsList()">
+        <option value="">All directions</option>
+        <option value="inbound">Inbound</option>
+        <option value="outbound">Outbound</option>
+      </select>
+      <button class="btn btn-sm btn-ghost" onclick="filterCallsThisWeek()">This week</button>
+      <button class="btn btn-sm btn-ghost" onclick="window._callsData=window._allCallsData||window._callsData;renderCallsList()">All time</button>
     </div>
-    <button class="btn btn-sm">⊟ Filter</button>
-    <button class="btn btn-sm btn-ghost">⊞ View settings</button>
-    <button class="btn btn-primary" onclick="addAircallNote()">+ Log Call</button>`)
-  document.getElementById('page-area').innerHTML=`
+    <button class="btn btn-primary" onclick="addAircallNote()">📞 Log Call</button>`)
+  clearViewbar()
+
+  const pa = document.getElementById('page-area')
+  const thisWeek = notesCalls.filter(c=>new Date(c.created_at)>new Date(Date.now()-7*86400000))
+  const outbound = notesCalls.filter(c=>(c.metadata?.direction||'').toLowerCase()==='outbound'||!(c.metadata?.direction))
+  const inbound  = notesCalls.filter(c=>(c.metadata?.direction||'').toLowerCase()==='inbound')
+  const totalDurSec = notesCalls.reduce((s,c)=>{
+    const d=c.metadata?.duration_seconds;return s+(d?parseInt(d,10):0)
+  },0)
+  const avgDur = notesCalls.length ? Math.round(totalDurSec/notesCalls.length) : 0
+
+  window._allCallsData = notesCalls
+
+  pa.innerHTML = `
+  <div class="g4" style="margin-bottom:12px">
+    <div class="metric"><div class="metric-label">Total Calls</div><div class="metric-value">${totalCalls}</div><div class="metric-sub">All time</div></div>
+    <div class="metric"><div class="metric-label">This Week</div><div class="metric-value" style="color:var(--blue)">${thisWeek.length}</div></div>
+    <div class="metric"><div class="metric-label">Outbound</div><div class="metric-value">${outbound.length}</div><div class="metric-sub">${inbound.length} inbound</div></div>
+    <div class="metric"><div class="metric-label">Avg Duration</div><div class="metric-value">${Math.floor(avgDur/60)}m ${avgDur%60}s</div></div>
+  </div>
   <div class="att-wrap">
     <div class="att-toolbar">
       <div class="att-toolbar-l">
-        <div class="vb-sort">☰ Sorted by Date</div>
-        <button class="btn btn-sm">⊟ Filter</button>
+        <div class="card-title">📞 Call Log</div>
+        <div class="search-inp"><span>🔍</span><input placeholder="Search calls..." oninput="filterCallsBySearch(this.value)"></div>
       </div>
-      <div class="topbar-icon">🔍</div>
     </div>
-    <div style="padding:7px 14px;font-size:10.5px;color:var(--text3);border-bottom:.5px solid var(--border);display:grid;grid-template-columns:1fr 280px 140px 100px">
-      <span>Call recording</span><span>Record</span><span>Participant</span><span>Date</span>
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr 100px 100px 90px;padding:7px 14px;font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;border-bottom:.5px solid var(--border);background:var(--gray)">
+      <span>Call Summary</span><span>Record / Contact</span><span>Agent</span><span>Direction</span><span>Duration</span><span>Date</span>
     </div>
-    <div id="calls-list"><div class="loading">⏳ Loading calls...</div></div>
-    <div class="att-footer" id="calls-footer"><span>This week —</span></div>
+    <div id="calls-list">${renderCallRows(notesCalls)}</div>
+    <div class="att-footer" id="calls-footer"><span>${totalCalls} call${totalCalls!==1?'s':''} · ${thisWeek.length} this week</span><span style="color:var(--text3)">Aircall webhook auto-syncs new calls</span></div>
   </div>`
-  api('/api/notes?limit=200').then(r=>{
-    const calls=(r.data||[]).filter(n=>isAircallNote(n))
-    const el=document.getElementById('calls-list'),footer=document.getElementById('calls-footer');if(!el)return
-    if(footer)footer.innerHTML=`<span>Total: ${calls.length} call${calls.length!==1?'s':''}</span>`
-    if(!calls.length){el.innerHTML='<div class="empty-state"><div class="empty-icon">📞</div><div class="empty-text">No calls logged yet</div><div class="empty-sub">Log a call manually or connect Aircall to auto-sync</div><button class="btn btn-primary" onclick="addAircallNote()">📱 Log Your First Call</button></div>';return}
-    const thisWeek=calls.filter(c=>new Date(c.created_at)>new Date(Date.now()-7*86400000))
-    el.innerHTML=`<div style="padding:6px 14px;font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.6px;background:var(--gray);border-bottom:.5px solid var(--border)">This week ${thisWeek.length}</div>`+
-    calls.map(c=>{
-      const durMatch=c.details?.match(/\((\d+)m\)/);const dur=durMatch?durMatch[1]+'min':'—'
-      const dir=c.metadata?.direction||'Outbound'
-      const title=getNoteContent(c).split('\n')[0]?.replace(/Call \(\d+m\)[^—]*—\s*/,'')||'Call'
-      const recordName=c.record_type?.replace('_records','').replace('_',' ')||'—'
-      return`<div class="call-row" onclick="showNoteDetail('${c.id}')">
-        <div class="call-icon ${dir.toLowerCase()==='inbound'?'inbound':'outbound'}">D</div>
-        <div class="call-info">
-          <div class="call-name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px">${title} <span style="font-size:10px;color:var(--text3)">${dur}</span></div>
+}
+function renderCallRows(calls){
+  if(!calls||!calls.length) return `<div class="empty-state"><div class="empty-icon">📞</div><div class="empty-text">No calls logged yet</div><div class="empty-sub">Log a call manually or connect Aircall in Settings to auto-sync</div><button class="btn btn-primary" onclick="addAircallNote()">📱 Log Your First Call</button></div>`
+  const dirFilter = document.getElementById('calls-dir-filter')?.value||''
+  const filtered = dirFilter ? calls.filter(c=>(c.metadata?.direction||'outbound').toLowerCase()===dirFilter) : calls
+  if(!filtered.length) return `<div class="empty-state"><div class="empty-icon">📞</div><div class="empty-text">No ${dirFilter} calls found</div></div>`
+  return filtered.map(c=>{
+    const m = c.metadata||{}
+    const dir = (m.direction||'outbound').toLowerCase()
+    const isInbound = dir==='inbound'
+    const content = getNoteContent(c)
+    const firstLine = content.split('\n')[0].replace(/^\[AIRCALL NOTE\][^\|]*\|[^\|]*\|[^\|]*\|?\s*/,'').substring(0,80)||'Call logged'
+    const durSec = m.duration_seconds ? parseInt(m.duration_seconds,10) : 0
+    const durStr = durSec>0 ? (Math.floor(durSec/60)>0?Math.floor(durSec/60)+'m ':'')+durSec%60+'s' : m.duration||'—'
+    const agent = c.user?.full_name || m.agent || '—'
+    const initials = (agent==='—'?'?':agent).slice(0,2).toUpperCase()
+    const recordLabel = c.record_type ? (c.record_type.replace(/_records$/,'').replace(/_/g,' '))+' record' : '—'
+    const aircall = isAircallNote(c)
+    return `<div class="call-row" onclick="showNoteDetail('${c.id}')" style="display:grid;grid-template-columns:2fr 1fr 1fr 100px 100px 90px;padding:10px 14px;border-bottom:.5px solid #f9fafb;cursor:pointer;transition:background .1s" onmouseover="this.style.background='#fafafa'" onmouseout="this.style.background=''">
+      <div style="display:flex;align-items:flex-start;gap:9px;min-width:0">
+        <div style="width:28px;height:28px;border-radius:50%;background:${isInbound?'var(--blue-bg)':'var(--green-bg)'};display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0">
+          ${isInbound?'📲':'📤'}
         </div>
-        <div style="font-size:11px;color:var(--text2);min-width:200px">${recordName}</div>
-        <div style="display:flex;align-items:center;gap:6px;min-width:120px">
-          <span style="width:22px;height:22px;border-radius:50%;background:var(--blue-bg);color:var(--blue-t);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">${(c.user?.full_name||'?').slice(0,1)}</span>
-          <span class="cell-dim" style="font-size:10.5px">${escHtml(c.user?.full_name||'—')}</span>
+        <div style="min-width:0">
+          <div style="font-size:12px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(firstLine)}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:2px;display:flex;gap:5px;align-items:center">
+            ${aircall?'<span style="color:var(--green-t);font-weight:600">● Aircall</span>':'<span style="color:var(--text3)">Manual log</span>'}
+            ${m.recording_url?`<a href="${escUrl(m.recording_url,'https')}" target="_blank" onclick="event.stopPropagation()" style="color:var(--blue)">🎙 Recording</a>`:''}
+          </div>
         </div>
-        <div class="call-meta"><div class="call-time">${fmtAgo(c.created_at)}</div></div>
-      </div>`
-    }).join('')
-  }).catch(()=>{const el=document.getElementById('calls-list');if(el)el.innerHTML='<div class="empty-state"><div class="empty-icon">📞</div><div class="empty-text">Could not load calls</div></div>'})
+      </div>
+      <div style="font-size:11px;color:var(--text2);align-self:center">${escHtml(recordLabel)}</div>
+      <div style="display:flex;align-items:center;gap:5px;align-self:center">
+        <span style="width:22px;height:22px;border-radius:50%;background:var(--blue-bg);color:var(--blue-t);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0">${escHtml(initials)}</span>
+        <span style="font-size:11px;color:var(--text2)">${escHtml(agent)}</span>
+      </div>
+      <div style="align-self:center"><span class="pill ${isInbound?'p-blue':'p-green'}">${isInbound?'↙ In':'↗ Out'}</span></div>
+      <div style="font-size:11px;color:var(--text2);align-self:center">${escHtml(durStr)}</div>
+      <div style="font-size:10.5px;color:var(--text3);align-self:center">${fmtAgo(c.created_at)}</div>
+    </div>`
+  }).join('')
+}
+function renderCallsList(){
+  const el = document.getElementById('calls-list')
+  if(el) el.innerHTML = renderCallRows(window._callsData||[])
+}
+function filterCallsBySearch(q){
+  const filtered = (window._allCallsData||[]).filter(c=>getNoteContent(c).toLowerCase().includes(q.toLowerCase())||(c.user?.full_name||'').toLowerCase().includes(q.toLowerCase()))
+  window._callsData = filtered
+  renderCallsList()
+  const footer=document.getElementById('calls-footer');if(footer)footer.querySelector('span').textContent=filtered.length+' call'+(filtered.length!==1?'s':'')+' found'
+}
+function filterCallsThisWeek(){
+  window._callsData=(window._allCallsData||[]).filter(c=>new Date(c.created_at)>new Date(Date.now()-7*86400000))
+  renderCallsList()
+  const footer=document.getElementById('calls-footer');if(footer)footer.querySelector('span').textContent=window._callsData.length+' calls this week'
 }
 
 /* ═══════════════════════════════════════════════════
