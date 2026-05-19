@@ -1108,7 +1108,111 @@ async function doLogin(){
   try{
     const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})})
     const d=await r.json();if(!r.ok)throw new Error(d.error)
-    token=d.token;localStorage.setItem('valor_token',token);render()
+    token=d.token;localStorage.setItem('valor_token',token);
+// ═══════════════════════════════════════════════════════════════════════════
+// WIB IMPORT — uses dedicated /api/import/wibs/csv endpoint that correctly maps:
+//   Company_Name → wib_name (the WIB board name)
+//   First_Name   → nested NOTE contact record (NOT a WIB entry)
+//   Email/Phone  → wib_email / wib_phone
+//   Website      → website / source_url
+//   Description  → notes
+// ═══════════════════════════════════════════════════════════════════════════
+async function importWibsCSV() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.csv,.xlsx,.xls'
+  input.onchange = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    showToast('Uploading WIB file...', 'info')
+    const fd = new FormData()
+    fd.append('file', file)
+    try {
+      const r = await fetch('/api/import/wibs/csv', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: fd,
+      })
+      const result = await r.json()
+      if (!r.ok) throw new Error(result.error || 'Import failed')
+      showToast(
+        `WIB Import complete: ${result.created} new boards added, ${result.updated} updated, ${result.contacts_saved} contacts saved as board notes.` +
+        (result.error_count > 0 ? ` (${result.error_count} errors)` : ''),
+        result.error_count > 0 ? 'warning' : 'success'
+      )
+      if (result.errors?.length) {
+        console.warn('WIB import errors:', result.errors)
+      }
+      pageWibs()
+    } catch (err) {
+      showToast('WIB import failed: ' + err.message, 'error')
+    }
+  }
+  input.click()
+}
+
+// ── Admin: Preview which WIB records are contaminated ──────────────────────
+async function runWibDryPurge() {
+  if (!['super_admin','admin'].includes(currentUser?.role)) {
+    showToast('Admin access required', 'error'); return
+  }
+  showToast('Scanning for contaminated records...', 'info')
+  try {
+    const result = await api('/api/admin/purge-wib-contamination', 'POST', { dry_run: true })
+    const msg = `Data Scan Results:\n\n` +
+      `Total WIB records: ${result.total_wib_records}\n` +
+      `Contaminated (company records): ${result.contaminated_count}\n` +
+      `Clean WIB records: ${result.clean_count}\n\n` +
+      `Sample contaminated names:\n${(result.sample_contaminated||[]).slice(0,10).map(c => `• ${c.name} (${c.state}) — ${c.reason}`).join('\n')}\n\n` +
+      `Click "Remove Contaminated Records" to delete these from the WIB list.`
+    alert(msg)
+  } catch (e) {
+    showToast('Scan failed: ' + e.message, 'error')
+  }
+}
+
+// ── Admin: Execute the WIB decontamination ─────────────────────────────────
+async function runWibPurge() {
+  if (!['super_admin','admin'].includes(currentUser?.role)) {
+    showToast('Admin access required', 'error'); return
+  }
+  // First show dry run count
+  let dryResult
+  try {
+    dryResult = await api('/api/admin/purge-wib-contamination', 'POST', { dry_run: true })
+  } catch(e) {
+    showToast('Failed to scan: ' + e.message, 'error'); return
+  }
+
+  if (dryResult.contaminated_count === 0) {
+    showToast('No contaminated records found. WIB list is clean!', 'success'); return
+  }
+
+  const confirmed = confirm(
+    `This will permanently delete ${dryResult.contaminated_count} non-WIB records from the Workforce Boards list.\n\n` +
+    `These are company/employer records that were incorrectly imported as WIBs.\n\n` +
+    `${dryResult.clean_count} legitimate WIB records will be preserved.\n\n` +
+    `This action cannot be undone. Continue?`
+  )
+  if (!confirmed) return
+
+  showToast(`Removing ${dryResult.contaminated_count} contaminated records...`, 'info')
+  try {
+    const result = await api('/api/admin/purge-wib-contamination', 'POST', {
+      dry_run: false,
+      confirm_phrase: 'CONFIRM PURGE',
+    })
+    showToast(
+      `Cleanup complete! Deleted ${result.deleted} contaminated records. ${result.clean_preserved} legitimate WIBs preserved.`,
+      'success'
+    )
+    pageWibs()
+  } catch (e) {
+    showToast('Purge failed: ' + e.message, 'error')
+  }
+}
+
+render()
   }catch(e){
     document.getElementById('login-err').innerHTML=`<div class="alert alert-error">⚠️ ${e.message}</div>`
     btn.disabled=false;btn.textContent='Sign in'
@@ -1600,12 +1704,18 @@ async function pageWibs(){
       <div class="ie-menu" id="wib-ie">
         <div class="ie-menu-hd">Import & Export</div>
         <div class="ie-group-label">Import</div>
-        <div class="ie-item" onclick="closeAllIE();importCSV('wibs')"><span class="ie-icon">📥</span>Import from CSV / Excel<span class="ie-item-hint">Any format</span></div>
+        <div class="ie-item" onclick="closeAllIE();importWibsCSV()"><span class="ie-icon">📥</span>Import WIBs from CSV / Excel<span class="ie-item-hint">Company_Name=Board, First_Name=Contact</span></div>
         <div class="ie-sep"></div>
         <div class="ie-group-label">Export</div>
         <div class="ie-item" onclick="closeAllIE();exportCSV('wibs')"><span class="ie-icon">📤</span>Export as CSV</div>
         <div class="ie-item" onclick="closeAllIE();exportExcel('wibs')"><span class="ie-icon">📊</span>Export as Excel (.xlsx)</div>
         <div class="ie-item" onclick="closeAllIE();exportPDF('wibs')"><span class="ie-icon">📄</span>Export as PDF</div>
+        ${['super_admin','admin'].includes(currentUser?.role) ? `
+        <div class="ie-sep"></div>
+        <div class="ie-group-label" style="color:var(--red-t)">Admin Tools</div>
+        <div class="ie-item" onclick="closeAllIE();runWibDryPurge()" style="color:var(--red-t)"><span class="ie-icon">🔍</span>Preview Data Cleanup<span class="ie-item-hint">Shows contaminated records</span></div>
+        <div class="ie-item" onclick="closeAllIE();runWibPurge()" style="color:var(--red-t)"><span class="ie-icon">🗑</span>Remove Contaminated Records<span class="ie-item-hint">Removes non-WIB entries</span></div>
+        ` : ''}
       </div>
     </div>
     <button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button>`)
@@ -2455,7 +2565,7 @@ async function runDeduplication() {
   })
 }
 
-function openWibModal(wib=null){
+async function openWibModal(wib=null){
   const statusOpts=['not_contacted','contacted','funding_available','follow_up_needed','funding_not_available','network_member'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${wib?.state===s?' selected':''}>${s}</option>`).join('')
@@ -3009,7 +3119,7 @@ async function saveCompanyNote(){
 }
 
 /* ─── Company Modal ─── */
-function openCompanyModal(co=null){
+async function openCompanyModal(co=null){
   const statusOpts=['prospect','contacted','qualified','active_client','churned','dnc'].map(s=>`<option value="${s}"${co?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${co?.state===s?' selected':''}>${s}</option>`).join('')
@@ -3694,7 +3804,7 @@ async function togglePermission(perm,role,value){
   }
 }
 
-function deleteUserConfirm(id,name){
+async function deleteUserConfirm(id,name){
   showModal(`⚠️ Delete User — Irreversible`,`
     <div class="alert alert-error">⚠️ You are about to permanently delete <strong>${name}</strong>. This will:<br><br>• Immediately revoke all system access<br>• Terminate all active sessions<br>• Remove login credentials permanently<br>• This CANNOT be undone</div>
     <div style="margin-top:12px;font-size:12px">Type <strong>DELETE</strong> to confirm:</div>
@@ -3705,7 +3815,7 @@ function deleteUserConfirm(id,name){
   })
 }
 
-function openUserModal(){
+async function openUserModal(){
   showModal('Add New User',`
     <div class="alert alert-info">Set a temporary password and share it securely. The user can change it using the 🔐 button.</div>
     <div id="user-err"></div>
@@ -3735,7 +3845,7 @@ function openUserModal(){
   })
 }
 
-function openEditUserModal(u){
+async function openEditUserModal(u){
   showModal(`Edit User: ${escHtml(u.full_name||u.email)}`,`
     <div class="form-row"><div class="form-group"><div class="form-label">Full Name</div><input id="eu-name" value="${escHtml(u.full_name||'')}"></div>
     <div class="form-group"><div class="form-label">Role</div><select id="eu-role">
@@ -4763,7 +4873,6 @@ function getSelectedStates(containerId) {
   return [...document.querySelectorAll(`#${containerId} .rs-chk:checked`)].map(c => c.value)
 }
 // ─────────────────────────────────────────────────────────────────────────────
-async 
 // ── WIB Data Decontamination (removes person names / company names imported as WIBs) ──
 async function runWibDecontamination(){
   if(!['super_admin','admin'].includes(currentUser?.role)){
@@ -4887,7 +4996,7 @@ function showConfirmModal(title, bodyHtml, confirmLabel='Confirm', variant='prim
   })
 }
 
-function openNewTerritoryModal(){
+async function openNewTerritoryModal(){
   // Pre-fetch users so the dropdown is ready when the modal opens
   let allUsers=[]
   try{const r=await api('/api/users');allUsers=(r.data||[]).filter(u=>u.is_active!==false)}catch(_){}
@@ -5019,7 +5128,7 @@ async function openEditTerritoryModal(tEncoded){
   setTimeout(()=>buildRegionSelector('et-region-selector', t.states||[]),80)
 }
 
-function deleteTerritoryConfirm(id,name){
+async function deleteTerritoryConfirm(id,name){
   showModal('⚠️ Delete Territory',`
     <div class="alert alert-error">
       Deleting <strong>${escHtml(name)}</strong> will unassign it from all WIBs and users. This cannot be undone.
@@ -5195,14 +5304,14 @@ function showAiKeyBanner(){
 }
 
 /* ─── AI Quick Action Modals ─── */
-function researchWIB(){showModal('🏛 Research a WIB',`<div class="form-row form-full"><div class="form-group"><div class="form-label">WIB Name or State</div><input id="rw-name" placeholder="TX - Texas Workforce Investment Council..."></div></div><div id="rw-result"></div>`,async()=>{const n=document.getElementById('rw-name').value;const el=document.getElementById('rw-result');el.innerHTML='<div class="loading">⏳ Researching...</div>';const r=await apiAI(`Research this Workforce Investment Board (WIB) and provide: official website, contact information, IWT program details, funding amounts, eligibility requirements, and current program status: ${n}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
-function draftEmail(){showModal('📧 Draft Outreach Email',`<div class="form-row form-full"><div class="form-group"><div class="form-label">WIB or employer context</div><textarea id="de-ctx" rows="4" placeholder="WIB: TX Workforce Commission&#10;Contact: John Smith, Director&#10;Purpose: Introduce IWT grant opportunities..."></textarea></div></div><div id="de-result"></div>`,async()=>{const c=document.getElementById('de-ctx').value;const el=document.getElementById('de-result');el.innerHTML='<div class="loading">⏳ Drafting...</div>';const r=await apiAI(`Draft a professional outreach email for a workforce grant consultant. Context: ${c}. Make it concise, compelling, and include a clear call to action.`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
-function summarizeCall(){showModal('📞 Summarize Call',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste call notes or bullet points</div><textarea id="sc-notes" rows="6" placeholder="• Spoke with IWT coordinator&#10;• Program open until June 30&#10;• Max $50K per employer..."></textarea></div></div><div id="sc-result"></div>`,async()=>{const n=document.getElementById('sc-notes').value;const el=document.getElementById('sc-result');el.innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Turn these call notes into a professional CRM note with: Summary, Key Points, Follow-up Tasks, and Next Steps: ${n}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
-function analyzeEmployer(){showModal('🏢 Employer Eligibility Analysis',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Employer Details</div><textarea id="ea-details" rows="4" placeholder="Company: Heritage Senior Living&#10;Employees: 45&#10;Industry: Skilled Nursing&#10;State: TX..."></textarea></div></div><div id="ea-result"></div>`,async()=>{const d=document.getElementById('ea-details').value;const el=document.getElementById('ea-result');el.innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`Analyze if this employer likely qualifies for IWT/incumbent worker training grants. Provide: eligibility assessment, recommended approach, potential award amounts, and next steps: ${d}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
-function draftApplication(){showModal('📋 Application Assistant',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Employer & WIB context</div><textarea id="da-ctx" rows="4" placeholder="Employer: Heritage Senior Living, 45 CNAs&#10;WIB: TX Workforce Commission, $40K max..."></textarea></div></div><div id="da-result"></div>`,async()=>{const c=document.getElementById('da-ctx').value;const el=document.getElementById('da-result');el.innerHTML='<div class="loading">⏳ Drafting...</div>';const r=await apiAI(`Help draft key sections of an IWT grant application: employer need statement, training plan description, expected outcomes, and cost breakdown. Context: ${c}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
-function checkCompliance(){showModal('🛡 Compliance Check',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Grant situation description</div><textarea id="cc-ctx" rows="4" placeholder="Grant award: $45,000&#10;Training completion: April 30&#10;Documents: attendance, payroll&#10;Missing: final report..."></textarea></div></div><div id="cc-result"></div>`,async()=>{const c=document.getElementById('cc-ctx').value;const el=document.getElementById('cc-result');el.innerHTML='<div class="loading">⏳ Checking...</div>';const r=await apiAI(`Review this grant compliance situation. Identify risks, missing items, urgent actions, and deadlines: ${c}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
-function recommendNext(){showModal('🎯 Recommend Next Steps',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Current situation</div><textarea id="rn-ctx" rows="4" placeholder="WIB: TX Gulf Coast, contacted 2 weeks ago&#10;Status: Follow Up Needed&#10;Blockers: Director hasn't responded..."></textarea></div></div><div id="rn-result"></div>`,async()=>{const c=document.getElementById('rn-ctx').value;const el=document.getElementById('rn-result');el.innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`As a workforce grant consultant, recommend specific next actions to advance this relationship and close the deal: ${c}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
-function generateMeetingNotes(){showModal('📝 Meeting Notes',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste rough notes or bullet points</div><textarea id="mn-notes" rows="5" placeholder="• Met with WIB director&#10;• Discussed Q3 cycle&#10;• They want 10 employer referrals&#10;• Decision by June 1..."></textarea></div></div><div id="mn-result"></div>`,async()=>{const n=document.getElementById('mn-notes').value;const el=document.getElementById('mn-result');el.innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Convert these rough notes into professional meeting notes. Format with: Date, Attendees, Key Discussion Points, Decisions Made, Action Items: ${n}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+async function researchWIB(){showModal('🏛 Research a WIB',`<div class="form-row form-full"><div class="form-group"><div class="form-label">WIB Name or State</div><input id="rw-name" placeholder="TX - Texas Workforce Investment Council..."></div></div><div id="rw-result"></div>`,async()=>{const n=document.getElementById('rw-name').value;const el=document.getElementById('rw-result');el.innerHTML='<div class="loading">⏳ Researching...</div>';const r=await apiAI(`Research this Workforce Investment Board (WIB) and provide: official website, contact information, IWT program details, funding amounts, eligibility requirements, and current program status: ${n}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+async function draftEmail(){showModal('📧 Draft Outreach Email',`<div class="form-row form-full"><div class="form-group"><div class="form-label">WIB or employer context</div><textarea id="de-ctx" rows="4" placeholder="WIB: TX Workforce Commission&#10;Contact: John Smith, Director&#10;Purpose: Introduce IWT grant opportunities..."></textarea></div></div><div id="de-result"></div>`,async()=>{const c=document.getElementById('de-ctx').value;const el=document.getElementById('de-result');el.innerHTML='<div class="loading">⏳ Drafting...</div>';const r=await apiAI(`Draft a professional outreach email for a workforce grant consultant. Context: ${c}. Make it concise, compelling, and include a clear call to action.`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+async function summarizeCall(){showModal('📞 Summarize Call',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste call notes or bullet points</div><textarea id="sc-notes" rows="6" placeholder="• Spoke with IWT coordinator&#10;• Program open until June 30&#10;• Max $50K per employer..."></textarea></div></div><div id="sc-result"></div>`,async()=>{const n=document.getElementById('sc-notes').value;const el=document.getElementById('sc-result');el.innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Turn these call notes into a professional CRM note with: Summary, Key Points, Follow-up Tasks, and Next Steps: ${n}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+async function analyzeEmployer(){showModal('🏢 Employer Eligibility Analysis',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Employer Details</div><textarea id="ea-details" rows="4" placeholder="Company: Heritage Senior Living&#10;Employees: 45&#10;Industry: Skilled Nursing&#10;State: TX..."></textarea></div></div><div id="ea-result"></div>`,async()=>{const d=document.getElementById('ea-details').value;const el=document.getElementById('ea-result');el.innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`Analyze if this employer likely qualifies for IWT/incumbent worker training grants. Provide: eligibility assessment, recommended approach, potential award amounts, and next steps: ${d}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+async function draftApplication(){showModal('📋 Application Assistant',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Employer & WIB context</div><textarea id="da-ctx" rows="4" placeholder="Employer: Heritage Senior Living, 45 CNAs&#10;WIB: TX Workforce Commission, $40K max..."></textarea></div></div><div id="da-result"></div>`,async()=>{const c=document.getElementById('da-ctx').value;const el=document.getElementById('da-result');el.innerHTML='<div class="loading">⏳ Drafting...</div>';const r=await apiAI(`Help draft key sections of an IWT grant application: employer need statement, training plan description, expected outcomes, and cost breakdown. Context: ${c}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+async function checkCompliance(){showModal('🛡 Compliance Check',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Grant situation description</div><textarea id="cc-ctx" rows="4" placeholder="Grant award: $45,000&#10;Training completion: April 30&#10;Documents: attendance, payroll&#10;Missing: final report..."></textarea></div></div><div id="cc-result"></div>`,async()=>{const c=document.getElementById('cc-ctx').value;const el=document.getElementById('cc-result');el.innerHTML='<div class="loading">⏳ Checking...</div>';const r=await apiAI(`Review this grant compliance situation. Identify risks, missing items, urgent actions, and deadlines: ${c}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+async function recommendNext(){showModal('🎯 Recommend Next Steps',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Current situation</div><textarea id="rn-ctx" rows="4" placeholder="WIB: TX Gulf Coast, contacted 2 weeks ago&#10;Status: Follow Up Needed&#10;Blockers: Director hasn't responded..."></textarea></div></div><div id="rn-result"></div>`,async()=>{const c=document.getElementById('rn-ctx').value;const el=document.getElementById('rn-result');el.innerHTML='<div class="loading">⏳ Analyzing...</div>';const r=await apiAI(`As a workforce grant consultant, recommend specific next actions to advance this relationship and close the deal: ${c}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
+async function generateMeetingNotes(){showModal('📝 Meeting Notes',`<div class="form-row form-full"><div class="form-group"><div class="form-label">Paste rough notes or bullet points</div><textarea id="mn-notes" rows="5" placeholder="• Met with WIB director&#10;• Discussed Q3 cycle&#10;• They want 10 employer referrals&#10;• Decision by June 1..."></textarea></div></div><div id="mn-result"></div>`,async()=>{const n=document.getElementById('mn-notes').value;const el=document.getElementById('mn-result');el.innerHTML='<div class="loading">⏳ Generating...</div>';const r=await apiAI(`Convert these rough notes into professional meeting notes. Format with: Date, Attendees, Key Discussion Points, Decisions Made, Action Items: ${n}`);el.innerHTML=`<div class="${r.startsWith('🔑')?'alert alert-warn':r.startsWith('⚠️')||r.startsWith('⏱')?'alert alert-error':'alert alert-info'}" style="white-space:pre-wrap;margin-top:10px">${escHtml(r).replace(/\n/g,'<br>')}</div>`;return false})}
 
 /* ═══════════════════════════════════════════════════
    CHAT
@@ -5476,7 +5585,7 @@ async function markInvoiceSent(id, invNum){
     showToast('Invoice marked as sent 📤','success'); pageInvoices()
   } catch(e){ showToast(e.message,'error') }
 }
-function openNewInvoiceModal(){
+async function openNewInvoiceModal(){
   showModal('+ New Invoice',`
     <div id="inv-err"></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Company Name <span class="form-req">*</span></label>
@@ -5519,7 +5628,7 @@ function openNewInvoiceModal(){
     ;(r.data||[]).forEach(c=>{const o=document.createElement('option');o.value=c.company_name;dl.appendChild(o)})
   }).catch(()=>{})
 }
-function openEditInvoiceModal(inv){
+async function openEditInvoiceModal(inv){
   const m = inv.metadata || {}
   showModal('Edit Invoice',`
     <div class="form-row"><div class="form-group"><div class="form-label">Invoice #</div><input value="${escHtml(m.invoice_number||inv.details||'')}" disabled style="opacity:.6"></div>
@@ -5632,7 +5741,7 @@ async function activateContract(id){
     showToast('Contract activated ✅','success'); pageContracts()
   }catch(e){showToast(e.message,'error')}
 }
-function openNewContractModal(){
+async function openNewContractModal(){
   showModal('+ New Contract',`
     <div id="ctr-err"></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Company Name <span class="form-req">*</span></label>
@@ -5673,7 +5782,7 @@ function openNewContractModal(){
     ;(r.data||[]).forEach(c=>{const o=document.createElement('option');o.value=c.company_name;dl.appendChild(o)})
   }).catch(()=>{})
 }
-function openEditContractModal(c){
+async function openEditContractModal(c){
   const m=c.metadata||{}
   showModal('Edit Contract',`
     <div class="form-row"><div class="form-group"><div class="form-label">Contract #</div><input value="${escHtml(m.contract_number||c.details||'')}" disabled style="opacity:.6"></div>
@@ -5950,7 +6059,7 @@ function filterTrainingTable(q){
   const providers=(window._trainingProviders||[]).filter(p=>(p.details||p.metadata?.name||'').toLowerCase().includes(q.toLowerCase())||(p.metadata?.state||'').toLowerCase().includes(q.toLowerCase()))
   const tbody=document.getElementById('tp-tbody');if(tbody)tbody.innerHTML=renderTrainingRows(providers)
 }
-function openNewTrainingProviderModal(){
+async function openNewTrainingProviderModal(){
   showModal('+ Add Training Provider',`
     <div id="tp-err"></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Provider Name <span class="form-req">*</span></label>
@@ -5990,7 +6099,7 @@ function openNewTrainingProviderModal(){
     }catch(e){err.innerHTML=`<div class="alert alert-error">${escHtml(e.message)}</div>`;return false}
   },'modal-lg')
 }
-function openEditTrainingModal(p){
+async function openEditTrainingModal(p){
   const m = p.metadata || {}
   showModal('Edit Training Provider',`
     <div class="form-row"><div class="form-group"><label class="form-label">Name</label><input id="etp-name" value="${escHtml(m.name||p.details||'')}"></div>
@@ -6219,7 +6328,7 @@ function simulateDriveSync(){
   },200)
 }
 
-function openDriveUpload(folderId='root'){
+async function openDriveUpload(folderId='root'){
   showModal('⬆ Upload to Google Drive', `
     <div class="alert alert-info" style="margin-bottom:12px">
       Files will be uploaded to ${folderId === 'root' ? 'My Drive' : 'the current folder'}.
@@ -6656,7 +6765,7 @@ async function saveProfile(){
   }catch(e){showToast(e.message,'error')}
 }
 
-function openChangePasswordModal(){
+async function openChangePasswordModal(){
   showModal('🔐 Change Password',`
     <div id="cpw-err"></div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Current Password <span class="form-req">*</span></div><input id="cpw-cur" type="password"></div></div>
@@ -6790,7 +6899,7 @@ function renderLocationsTable(locs){
   </div>`
 }
 
-function openLocationModal(loc=null){
+async function openLocationModal(loc=null){
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${loc?.state===s?' selected':''}>${s}</option>`).join('')
   const statusOpts=['not_contacted','contacted','application_in_progress','client','network_member','dnc','open','stop_applications'].map(s=>`<option value="${s}"${loc?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
@@ -6941,7 +7050,7 @@ async function pageFunding(){
   ],'all',[],'')
   document.getElementById('page-area').innerHTML = renderFundingTableInner(window._funding||[])
 }
-function openFundingModal(f=null){
+async function openFundingModal(f=null){
   showModal(f?`Edit: ${escHtml(f.opportunity_name)}`:'New Funding Opportunity',`
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Opportunity Name <span class="form-req">*</span></div><input id="fo-name" value="${escHtml(f?.opportunity_name||'')}"></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Status</div><select id="fo-status">
@@ -7119,7 +7228,7 @@ function filterAppsTable(q){
   const tbody=document.getElementById('apps-tbody');if(tbody)tbody.innerHTML=renderAppsRows(apps)
 }
 
-function openNewApplicationModal(){
+async function openNewApplicationModal(){
   showModal('New Application',`
     <div id="app-err"></div>
     <div class="form-row form-full"><div class="form-group"><label class="form-label">Company <span class="form-req">*</span></label>
@@ -7168,7 +7277,7 @@ function openNewApplicationModal(){
   }).catch(()=>{})
 }
 
-function openEditApplicationModal(a){
+async function openEditApplicationModal(a){
   const appLink=a.notes?.match(/https?:\/\/[^\s]+/)?.[0]||''
   showModal('Edit Application',`
     <div class="form-row"><div class="form-group"><div class="form-label">Company</div><input value="${escHtml(a.company?.company_name||'—')}" disabled style="opacity:.6"></div>
@@ -7412,7 +7521,7 @@ function showTaskFilterModal(){
 // ─── CREATE TASK MODAL ────────────────────────────────────────────────────────
 // openTaskModal(record_type, record_id) — called from all "+ New Task" buttons
 // Uses the existing showModal() infrastructure so it matches the app's modal style
-function openTaskModal(record_type, record_id) {
+async function openTaskModal(record_type, record_id) {
   showModal('Create Task', `
     <div class="form-row form-full"><div class="form-group">
       <div class="form-label">Title <span style="color:var(--red)">*</span></div>
@@ -7460,7 +7569,7 @@ function openTaskModal(record_type, record_id) {
   })
 }
 
-function openTaskEdit(id){
+async function openTaskEdit(id){
   const t=(window._tasks||[]).find(t=>t.id===id);if(!t)return
   const m=getTaskMeta(t)
   showModal('Edit Task',`
@@ -7579,7 +7688,7 @@ function showNoteDetail(id){
   showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${initials}</div><div><div class="note-author">${escHtml(authorName)}</div><div class="note-time">${noteDateTime}</div></div><span class="note-badge" style="margin-left:auto">${escHtml(meta.note_type||'Note')}</span></div><div class="note-content" style="margin-top:8px">${escHtml(getNoteContent(n)).replace(/\n/g,'<br>')}</div></div>`)
 }
 
-function openNewNoteModal(){
+async function openNewNoteModal(){
   // Pre-build the WIB option list for the link-to-record selector
   const wibOpts=(window._wibs||[]).map(w=>`<option value="wib:${escAttr(w.id)}">${escHtml(w.wib_name)}${w.state?' ('+w.state+')':''}</option>`).join('')
   const coOpts=(window._companies||[]).map(c=>`<option value="co:${escAttr(c.id)}">${escHtml(c.company_name)}</option>`).join('')
@@ -7782,7 +7891,7 @@ function filterCallsThisWeek(){
 /* ═══════════════════════════════════════════════════
    EMAIL COMPOSE
 ═══════════════════════════════════════════════════ */
-function openComposeEmail(prefillTo='',prefillSubject='',prefillBody=''){
+async function openComposeEmail(prefillTo='',prefillSubject='',prefillBody=''){
   showModal('✉ Compose Email',`
     <div id="compose-err"></div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">To <span class="form-req">*</span></div>
@@ -7859,7 +7968,7 @@ function pageEmails(){
 /* ═══════════════════════════════════════════════════
    AIRCALL NOTE
 ═══════════════════════════════════════════════════ */
-function addAircallNote(recordId='',recordType=''){
+async function addAircallNote(recordId='',recordType=''){
   showModal('📞 Log Call / Aircall Note',`
     <div class="alert alert-info">Log a manual call note or paste Aircall auto-summary. This will appear in the Notes and Calls tabs of the record.</div>
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Call Notes / Summary <span class="form-req">*</span></div>
@@ -8015,7 +8124,7 @@ const IMPORT_FIELD_DEFS={
   ]
 }
 
-function importCSV(type){
+async function importCSV(type){
   closeAllIE()
   window._importType=type
   window._importRows=null
@@ -9717,7 +9826,7 @@ function aircallDialOut(phoneNumber, contactName) {
 /* ═══════════════════════════════════════════════════
    SMS MODAL
 ═══════════════════════════════════════════════════ */
-function openSmsModal(phoneNumber,contactName){
+async function openSmsModal(phoneNumber,contactName){
   if(!phoneNumber){showToast('No phone number on this record','warn');return}
   const digits=String(phoneNumber).replace(/[^0-9+]/g,'')
   const label=contactName||'Contact'
@@ -9784,7 +9893,7 @@ function openSmsModal(phoneNumber,contactName){
    Fires simultaneous API calls (not sequential) using Promise.allSettled.
 ═══════════════════════════════════════════════════ */
 window._aircallListenerActive = false
-function initAircallWebhookListener() {
+async function initAircallWebhookListener() {
   if (window._aircallListenerActive) return
   window._aircallListenerActive = true
 
@@ -10427,7 +10536,7 @@ function fwFireNotification(senderName, text, channel){
 }
 
 // ── Import/Export helpers for Training Providers ────────────────────────────
-function importTrainingProviders(){
+async function importTrainingProviders(){
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = '.csv,.xlsx,.xls'
@@ -10485,7 +10594,7 @@ async function exportTrainingProvidersXlsx(){
 }
 
 // ── Import/Export helpers for Invoices ─────────────────────────────────────
-function importInvoices(){
+async function importInvoices(){
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = '.csv,.xlsx,.xls'
