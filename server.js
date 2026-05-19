@@ -1033,15 +1033,48 @@ app.post('/api/import/:type', async (req, res) => {
       }
       const stateAbbr = { 'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA','colorado':'CO','connecticut':'CT','delaware':'DE','florida':'FL','georgia':'GA','hawaii':'HI','idaho':'ID','illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS','kentucky':'KY','louisiana':'LA','maine':'ME','maryland':'MD','massachusetts':'MA','michigan':'MI','minnesota':'MN','mississippi':'MS','missouri':'MO','montana':'MT','nebraska':'NE','nevada':'NV','new hampshire':'NH','new jersey':'NJ','new mexico':'NM','new york':'NY','north carolina':'NC','north dakota':'ND','ohio':'OH','oklahoma':'OK','oregon':'OR','pennsylvania':'PA','rhode island':'RI','south carolina':'SC','south dakota':'SD','tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT','virginia':'VA','washington':'WA','west virginia':'WV','wisconsin':'WI','wyoming':'WY','district of columbia':'DC','puerto rico':'PR' }
       const getWibField = (row, ...keys) => {
+        // CONTACT-PERSON COLUMN GUARD: bare 'name', 'first_name', 'full_name'
+        // columns contain the contact person, not the WIB board name.
+        // The fuzzy match must never return these for WIB name resolution.
+        const CONTACT_COLS = new Set(['name','first_name','firstname','full_name','fullname','contact','contact_name'])
         for (const k of keys) { const v = row[k]??row[k.toLowerCase()]??row[k.toUpperCase()]; if (v!==undefined&&String(v).trim()!==''&&String(v).trim()!=='Not applicable') return String(v).trim() }
-        for (const k of keys) { const found=Object.keys(row).find(rk=>rk.toLowerCase().replace(/[^a-z]/g,'').includes(k.toLowerCase().replace(/[^a-z]/g,''))); if (found&&String(row[found]).trim()&&String(row[found]).trim()!=='Not applicable') return String(row[found]).trim() }
+        for (const k of keys) {
+          const found = Object.keys(row).find(rk => {
+            const normalized = rk.toLowerCase().replace(/[^a-z]/g,'')
+            // Never fuzzy-match contact-person columns
+            if (CONTACT_COLS.has(normalized)) return false
+            return normalized.includes(k.toLowerCase().replace(/[^a-z]/g,''))
+          })
+          if (found && String(row[found]).trim() && String(row[found]).trim() !== 'Not applicable') return String(row[found]).trim()
+        }
         return null
       }
       const valid = []
       for (const row of rows) {
-        const rawName = getWibField(row,'wib_name','Workforce Board','WIB Name','WIB','Name','Record','Board Name')
+        // ── WIB name resolution ──────────────────────────────────────────────
+        // CSV column priority (highest first):
+        //   Company_Name  → WIB board name          (WIB_National_Leads_CRM_Import.csv)
+        //   Workforce Board, WIB Name                (generic CRM exports)
+        //   Record, Board Name, wib_name             (legacy formats)
+        // IMPORTANT: 'First_Name' and 'Name' alone are CONTACT person fields,
+        // NOT WIB board names. They must never be used as the WIB name.
+        // The fuzzy fallback is therefore restricted to WIB-specific key variants only.
+        const rawName = getWibField(row,
+          'Company_Name','company_name','COMPANY_NAME',
+          'Workforce Board','WIB Name','WIB_Name','Board Name',
+          'wib_name','Record'
+          // Intentionally EXCLUDES bare 'Name' — that column is the contact person
+        )
         const name    = rawName ? stripHtml(rawName) : null
-        if (!name?.trim()) { results.errors.push('Skipped — no WIB name'); continue }
+        if (!name?.trim()) { results.errors.push('Skipped — no WIB name (no Company_Name or equivalent column found)'); continue }
+
+        // ── Contact person extraction ─────────────────────────────────────────
+        // First_Name / Full_Name / Contact_Name columns contain the WIB's
+        // primary human contact, NOT the board name. Extract it here and save
+        // as a nested contact note AFTER the WIB record is created.
+        const contactPersonName  = getWibField(row, 'First_Name','Full_Name','Contact_Name','Contact Name','Primary Contact','Contact')
+        const contactPersonEmail = getWibField(row, 'Email','email','Contact Email','Email Address') || null
+        const contactPersonPhone = getWibField(row, 'Phone','phone','Contact Phone','Phone Number')  || null
         const rawStatus=(getWibField(row,'Status','WIB Status','Funding Status')||'').toLowerCase().trim()
         const status=wibStatusMap[rawStatus]||'no_reachout_complete'
         const website=getWibField(row,'Website','URL','Web','Homepage','WIB Website')
@@ -1060,10 +1093,82 @@ app.post('/api/import/:type', async (req, res) => {
         const sfn=(()=>{const m=name.match(/^([A-Z]{2})\s*-\s*/);return m?m[1]:null})()
         const rawState=getWibField(row,'State','Region','State/Province','Zipcode > State','State Zipcode > State')
         const stateValue=sfn||(rawState&&rawState.length===2?rawState.toUpperCase():null)||(rawState?stateAbbr[rawState.toLowerCase()]:null)||'US'
-        const wr={ wib_name:name, short_name:getWibField(row,'Short Name','Short','Abbreviation','Acronym')||null, state:stateValue, status, wib_email:getWibField(row,'WIB Email Address','Email Address','Email','Contact Email')||null, wib_phone:getWibField(row,'Phone','WIB Phone','Contact Phone','Phone Number')||null, website:domain||null, source_url:website||name||'https://careeronestop.org', notes:noteParts.join('\n')||null, independent_creation_logged:true, owner_id:importUser.id, last_verified_date:new Date().toISOString().split('T')[0] }
-        if (cpn>0) wr.call_priority_score=cpn; valid.push(wr)
+        const wr={ wib_name:name,
+          short_name: getWibField(row,'Short Name','Short','Abbreviation','Acronym','short_name') || null,
+          state:      stateValue,
+          status,
+          // Email/Phone from CSV = the contact person's details (used as WIB outreach email)
+          wib_email:  contactPersonEmail || getWibField(row,'WIB Email','Board Email','wib_email') || null,
+          wib_phone:  contactPersonPhone || getWibField(row,'WIB Phone','Board Phone','wib_phone') || null,
+          website:    domain || null,
+          source_url: website || ('https://careeronestop.org/LocalHelp/service-locator.aspx?location=' + (stateValue||'')),
+          notes:      noteParts.join('\n') || null,
+          independent_creation_logged: true,
+          owner_id:  importUser.id,
+          last_verified_date: new Date().toISOString().split('T')[0],
+        }
+        if (cpn>0) wr.call_priority_score=cpn
+        // Store contact person for post-insert contact creation (kept out of wib_records table)
+        if (contactPersonName) wr._contact = {
+          name:  stripHtml(contactPersonName),
+          email: contactPersonEmail,
+          phone: contactPersonPhone,
+        }
+        valid.push(wr)
       }
-      for (let i=0;i<valid.length;i+=100) await bulkInsert('wib_records',valid.slice(i,i+100))
+      // ── Insert WIBs and save contact persons as nested contact records ──────
+      // Strip the _contact helper field before inserting into wib_records
+      // (it's not a database column), then create a contact NOTE record
+      // linked to the newly-created WIB so contacts appear under the WIB
+      // profile, NOT as top-level WIB board entries.
+      for (let i = 0; i < valid.length; i += 100) {
+        const chunk = valid.slice(i, i + 100)
+        // Remove _contact before inserting
+        const cleanChunk = chunk.map(({ _contact, ...wib }) => wib)
+        const { data: inserted, error: insertErr } = await supabase
+          .from('wib_records')
+          .insert(cleanChunk)
+          .select('id, wib_name')
+
+        if (insertErr) {
+          // Fall back to one-at-a-time to isolate failing rows
+          for (let j = 0; j < chunk.length; j++) {
+            const { _contact, ...wib } = chunk[j]
+            const { data: single, error: sErr } = await supabase
+              .from('wib_records').insert(wib).select('id,wib_name').single()
+            if (sErr) { results.errors.push(`"${wib.wib_name}": ${sErr.message}`); continue }
+            results.created++
+            // Save contact person as a nested NOTE on this WIB record
+            if (_contact && single?.id) {
+              await safeInsertLog({
+                user_id:     importUser.id,
+                action:      'NOTE',
+                record_type: 'wib_records',
+                record_id:   single.id,
+                details:     `Primary Contact: ${_contact.name}${_contact.email ? ' | ' + _contact.email : ''}${_contact.phone ? ' | ' + _contact.phone : ''}`,
+                metadata: { note_type: 'Contact', contact_name: _contact.name, contact_email: _contact.email, contact_phone: _contact.phone, is_primary: true, content: `Primary Contact: ${_contact.name}` },
+              }).catch(() => {})
+            }
+          }
+        } else {
+          results.created += (inserted || cleanChunk).length
+          // Save contact persons for successfully inserted WIBs
+          for (let j = 0; j < chunk.length; j++) {
+            const { _contact } = chunk[j]
+            const insertedWib  = inserted?.[j]
+            if (_contact && insertedWib?.id) {
+              await safeInsertLog({
+                user_id:     importUser.id,
+                action:      'NOTE',
+                record_type: 'wib_records',
+                record_id:   insertedWib.id,
+                details:     `Primary Contact: ${_contact.name}${_contact.email ? ' | ' + _contact.email : ''}${_contact.phone ? ' | ' + _contact.phone : ''}`,
+                metadata: { note_type: 'Contact', contact_name: _contact.name, contact_email: _contact.email, contact_phone: _contact.phone, is_primary: true, content: `Primary Contact: ${_contact.name}` },
+              }).catch(() => {})
+            }
+          }
+        }
+      }
 
     // ═════════════ COMPANIES ════════════════════════════════════════════════
     } else if (type === 'companies') {
@@ -1748,12 +1853,52 @@ app.get('/api/notifications', auth, async (req,res)=>{
     let q=supabase.from('notifications').select('*, sender:user_profiles!sender_id(full_name,email)',{count:'exact'}).eq('recipient_id',req.user.id).order('created_at',{ascending:false}).limit(Math.min(+limit,100))
     if (unread_only==='true') q=q.eq('is_read',false)
     const { data, error } = await q; if (error) return res.status(400).json({error:error.message})
+
+    // Ghost badge fix: unread_count derives EXCLUSIVELY from the notifications table.
+    // The activity_summary (notes/tasks) is supplementary context ONLY — the frontend
+    // badge must use unread_count, not sum activity_summary fields.
+    const { count: trueUnreadCount } = await supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('recipient_id', req.user.id)
+      .eq('is_read', false)
+
     const wa=new Date(Date.now()-7*24*3600*1000).toISOString()
-    const [nr,tr]=await Promise.all([supabase.from('activity_log').select('id',{count:'exact',head:true}).eq('action','NOTE').gte('created_at',wa),supabase.from('activity_log').select('id',{count:'exact',head:true}).eq('action','TASK').gte('created_at',wa)])
+    const [nr,tr]=await Promise.all([
+      supabase.from('activity_log').select('id',{count:'exact',head:true}).eq('action','NOTE').gte('created_at',wa),
+      supabase.from('activity_log').select('id',{count:'exact',head:true}).eq('action','TASK').gte('created_at',wa),
+    ])
+
     const notifications=(data||[]).map(n=>({...n,sender_name:n.sender?.full_name||n.sender?.email||'System'}))
-    res.json({data:notifications,unread_count:notifications.filter(n=>!n.is_read).length,activity_summary:{notes_this_week:nr.count||0,tasks_completed:tr.count||0,wibs_contacted:null,apps_submitted:null}})
+
+    res.json({
+      data: notifications,
+      // This is the ONLY value the frontend badge should display.
+      // It reflects the exact number of is_read=false rows in the DB.
+      unread_count: trueUnreadCount || 0,
+      activity_summary:{
+        notes_this_week:  nr.count||0,
+        tasks_completed:  tr.count||0,
+        wibs_contacted:   null,
+        apps_submitted:   null,
+      },
+    })
   } catch (e) { res.status(500).json({error:e.message}) }
 })
+// GET /api/notifications/unread-count — lightweight badge polling endpoint
+// Returns ONLY the DB-authoritative unread count. Frontend should use this
+// for the badge number, polling every 30s, rather than relying on a stale
+// count computed from the full notification list response.
+app.get('/api/notifications/unread-count', auth, async (req, res) => {
+  const { count, error } = await supabase
+    .from('notifications')
+    .select('id', { count: 'exact', head: true })
+    .eq('recipient_id', req.user.id)
+    .eq('is_read', false)
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ unread_count: count || 0 })
+})
+
 app.put('/api/notifications/:id/read', auth, async (req,res)=>{ const { error }=await supabase.from('notifications').update({is_read:true}).eq('id',req.params.id).eq('recipient_id',req.user.id); if (error) return res.status(400).json({error:error.message}); res.json({success:true}) })
 app.post('/api/notifications/mark-all-read', auth, async (req,res)=>{ const { error }=await supabase.from('notifications').update({is_read:true}).eq('recipient_id',req.user.id).eq('is_read',false); if (error) return res.status(400).json({error:error.message}); res.json({success:true}) })
 app.post('/api/notifications/:id/respond', auth, async (req,res)=>{
@@ -3214,6 +3359,426 @@ app.get('/api/admin/cron/daily', async (req, res) => {
 
   console.log('[CRON] Daily job completed:', JSON.stringify(results.tasks))
   res.json(results)
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DEDICATED WIB CSV IMPORT ENDPOINT
+// POST /api/import/wibs/csv — handles the exact WIB_National_Leads_CRM_Import.csv
+// column layout and any similar files.
+//
+// CSV column → DB field mapping (authoritative):
+//   State         → wib_records.state
+//   Company_Name  → wib_records.wib_name      ← WIB board name
+//   First_Name    → contact NOTE on the WIB   ← contact person (NOT a WIB)
+//   Email         → wib_records.wib_email (outreach email for the WIB)
+//   Phone         → wib_records.wib_phone
+//   Website       → wib_records.website
+//   Description   → wib_records.notes
+// ═══════════════════════════════════════════════════════════════════════════════
+app.post('/api/import/wibs/csv', auth, requireAdmin, (req, res) => {
+  if (!memUpload) return res.status(503).json({ error: 'multer not installed — run: npm install multer' })
+
+  memUpload.single('file')(req, res, async (uploadErr) => {
+    if (uploadErr) return res.status(400).json({ error: uploadErr.message })
+    if (!req.file)  return res.status(400).json({ error: 'No file uploaded' })
+
+    const csvText = req.file.buffer.toString('utf8')
+    const lines   = csvText.split(/\r?\n/).filter(Boolean)
+    if (lines.length < 2) return res.status(400).json({ error: 'CSV must have a header row and at least one data row' })
+
+    // Parse CSV
+    const parseCSVLine = (line) => {
+      const result = []; let current = '', inQuotes = false
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i]
+        if (ch === '"' && line[i+1] === '"') { current += '"'; i++; continue }
+        if (ch === '"') { inQuotes = !inQuotes; continue }
+        if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ''; continue }
+        current += ch
+      }
+      result.push(current.trim()); return result
+    }
+
+    const rawHeaders = parseCSVLine(lines[0])
+    const headers    = rawHeaders.map(h => h.trim())
+
+    // Validate required columns
+    if (!headers.includes('Company_Name') && !headers.includes('company_name') && !headers.includes('Workforce Board')) {
+      return res.status(400).json({
+        error: 'Missing required column: Company_Name (WIB board name)',
+        found: headers,
+        hint:  'CSV must have Company_Name column for the WIB board name and First_Name for the contact person.',
+      })
+    }
+
+    const results = { total: lines.length - 1, created: 0, updated: 0, contacts_saved: 0, errors: [], skipped: 0 }
+
+    // Pre-load existing WIB names to avoid duplicates
+    const { data: existingWibs } = await supabase.from('wib_records').select('id,wib_name,state')
+    const existingMap = new Map()
+    for (const w of (existingWibs || [])) {
+      existingMap.set(w.wib_name.trim().toLowerCase(), w.id)
+      existingMap.set((w.wib_name.trim().toLowerCase() + '|' + (w.state||'').toLowerCase()), w.id)
+    }
+
+    for (let i = 1; i < lines.length; i++) {
+      if (!lines[i].trim()) continue
+      const values  = parseCSVLine(lines[i])
+      const row     = {}
+      headers.forEach((h, idx) => { row[h] = (values[idx] || '').trim() })
+
+      // ── Resolve fields from this specific CSV layout ──────────────────────
+      const wibName       = stripHtml(row.Company_Name || row.company_name || row['Workforce Board'] || '').trim()
+      const contactPerson = stripHtml(row.First_Name   || row.Full_Name    || row.Contact || '').trim()
+      const state         = (row.State || row.state || '').trim().toUpperCase().substring(0, 2)
+      const email         = (row.Email || row.email || '').trim() || null
+      const phone         = (row.Phone || row.phone || '').trim() || null
+      const website       = (row.Website || row.website || '').trim() || null
+      const description   = (row.Description || row.description || row.Notes || '').trim() || null
+      const domain        = website ? website.replace(/^https?:\/\/(www\.)?/,'').split('/')[0] : null
+
+      if (!wibName) { results.errors.push(`Row ${i}: no WIB name (Company_Name is blank)`); results.skipped++; continue }
+
+      // Duplicate check: same name + state
+      const existingId = existingMap.get(wibName.toLowerCase()) || existingMap.get(wibName.toLowerCase() + '|' + state.toLowerCase())
+
+      const wibPayload = {
+        wib_name:   wibName,
+        state:      state || null,
+        wib_email:  email,
+        wib_phone:  phone,
+        website:    domain,
+        source_url: website || `https://careeronestop.org/LocalHelp/service-locator.aspx?location=${state}`,
+        notes:      description,
+        status:     'no_reachout_complete',
+        independent_creation_logged: true,
+        owner_id:   req.user.id,
+        last_verified_date: new Date().toISOString().split('T')[0],
+      }
+
+      let wibId = existingId
+      if (existingId) {
+        // Update blank fields on existing record
+        const updates = {}
+        if (!wibPayload.wib_email || wibPayload.wib_email) updates.wib_email = email
+        if (phone)   updates.wib_phone = phone
+        if (website) updates.website   = domain
+        if (description) updates.notes = description
+        if (Object.keys(updates).length) {
+          await supabase.from('wib_records').update(updates).eq('id', existingId)
+          results.updated++
+        }
+      } else {
+        const { data: inserted, error: insErr } = await supabase
+          .from('wib_records').insert(wibPayload).select('id').single()
+        if (insErr) { results.errors.push(`Row ${i} "${wibName}": ${insErr.message}`); continue }
+        wibId = inserted.id
+        results.created++
+        existingMap.set(wibName.toLowerCase(), wibId)
+      }
+
+      // ── Save contact person as a nested NOTE on the WIB record ───────────
+      // This is the critical data isolation fix: the contact person (First_Name)
+      // is stored as a NOTE under the WIB, NOT as a standalone WIB record.
+      if (contactPerson && wibId) {
+        const contactDetail = [
+          `Primary Contact: ${contactPerson}`,
+          email ? `Email: ${email}` : '',
+          phone ? `Phone: ${phone}` : '',
+        ].filter(Boolean).join(' | ')
+
+        await safeInsertLog({
+          user_id:     req.user.id,
+          action:      'NOTE',
+          record_type: 'wib_records',
+          record_id:   wibId,
+          details:     contactDetail,
+          metadata: {
+            note_type:     'Contact',
+            contact_name:  contactPerson,
+            contact_email: email,
+            contact_phone: phone,
+            is_primary:    true,
+            content:       contactDetail,
+          },
+        }).catch(() => {})
+        results.contacts_saved++
+      }
+    }
+
+    try { await safeInsertLog({ user_id: req.user.id, action: 'IMPORT', details: `WIB CSV import: ${results.created} created, ${results.updated} updated, ${results.contacts_saved} contacts saved from ${req.file.originalname}` }) } catch (_) {}
+
+    res.json({
+      success:       results.errors.length === 0,
+      total:         results.total,
+      created:       results.created,
+      updated:       results.updated,
+      contacts_saved: results.contacts_saved,
+      skipped:       results.skipped,
+      error_count:   results.errors.length,
+      errors:        results.errors.slice(0, 25),
+      truncated:     results.errors.length > 25,
+      message:       `Import complete. ${results.created} new WIBs added, ${results.updated} updated, ${results.contacts_saved} contact persons saved as WIB notes.`,
+    })
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CLAUDE AI WIB TERRITORY AUTO-POPULATION ENGINE
+// POST /api/admin/ai/generate-wib-territories
+//
+// Admin-only button in the dashboard. When triggered:
+// 1. Reads all existing WIB records + their notes (contact persons)
+// 2. Asks Claude to audit gaps, suggest missing WIBs for under-represented states,
+//    and generate a structured data payload
+// 3. Inserts the Claude-generated WIBs and contacts into the database
+// 4. Returns a summary with state coverage stats that feed the WIB Territories tab
+//
+// Rate limit: one generation per 10 minutes (stored in global flag)
+// ═══════════════════════════════════════════════════════════════════════════════
+let _lastTerritoryGeneration = 0
+
+app.post('/api/admin/ai/generate-wib-territories', auth, requireAdmin, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured in Render environment variables' })
+
+  // Rate limit: prevent concurrent / rapid repeated generations
+  const now = Date.now()
+  if (now - _lastTerritoryGeneration < 10 * 60 * 1000) {
+    const secondsLeft = Math.ceil((10 * 60 * 1000 - (now - _lastTerritoryGeneration)) / 1000)
+    return res.status(429).json({ error: `Territory generation was recently run. Please wait ${secondsLeft}s before running again.` })
+  }
+
+  const { target_states, max_new_wibs = 20, dry_run = false } = req.body
+
+  // Step 1: Read current WIB coverage
+  const { data: existingWibs, error: wibErr } = await supabase
+    .from('wib_records')
+    .select('id, wib_name, state, wib_email, wib_phone, website, status, notes')
+    .order('state')
+
+  if (wibErr) return res.status(500).json({ error: `Failed to read existing WIBs: ${wibErr.message}` })
+
+  // Build coverage map
+  const coverageByState = {}
+  for (const wib of (existingWibs || [])) {
+    const s = wib.state || 'Unknown'
+    if (!coverageByState[s]) coverageByState[s] = []
+    coverageByState[s].push({ name: wib.wib_name, email: wib.wib_email, status: wib.status })
+  }
+
+  const ALL_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DC','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY']
+  const missingStates  = ALL_STATES.filter(s => !coverageByState[s] || coverageByState[s].length === 0)
+  const sparseStates   = ALL_STATES.filter(s => coverageByState[s]?.length > 0 && coverageByState[s].length < 2)
+  const targetStateSet = target_states ? new Set(target_states) : new Set([...missingStates, ...sparseStates])
+
+  if (targetStateSet.size === 0) {
+    return res.json({ message: 'All 51 states have WIB coverage. No new WIBs needed.', coverage: coverageByState, inserted: 0 })
+  }
+
+  // Step 2: Ask Claude to generate missing WIBs
+  const targetList = [...targetStateSet].slice(0, 15) // Limit per generation to control token usage
+  const existingSummary = targetList.map(s => {
+    const wibs = coverageByState[s] || []
+    return `${s}: ${wibs.length === 0 ? '(no WIBs)' : wibs.map(w => w.name).join(', ')}`
+  }).join('\n')
+
+  const generationPrompt = `You are a workforce grant intelligence system. Generate accurate WIB (Workforce Innovation Board) records for these states that have missing or insufficient coverage in our CRM.
+
+CURRENT COVERAGE:
+${existingSummary}
+
+Generate up to ${Math.min(max_new_wibs, targetList.length * 2)} WIB records. For each, provide:
+- The official WIB board name (e.g., "Alabama Workforce Development Board")
+- State abbreviation (2 letters)
+- Official website URL (use real government .gov or .org domains)
+- Primary contact email (use official domain format, e.g., director@stateboard.gov)
+- Phone number (real format)
+- Description (what grant programs they offer — 1 sentence, mention IWT/WIOA if applicable)
+- A primary contact person's full name and title (invent realistic professional names)
+
+CRITICAL RULES:
+1. Only generate WIBs for the listed states above
+2. Use realistic government domain emails (never Gmail/Yahoo)
+3. WIB names must match official government naming conventions
+4. Return ONLY valid JSON, no markdown, no explanation text
+
+Return this EXACT JSON structure:
+{
+  "wibs": [
+    {
+      "state": "XX",
+      "board_name": "Full Official WIB Name",
+      "website": "https://official-website.gov",
+      "email": "director@board.gov",
+      "phone": "555-555-5555",
+      "description": "IWT and WIOA employer training grants",
+      "contact_name": "Jane Smith",
+      "contact_title": "Executive Director"
+    }
+  ]
+}`
+
+  let generatedData = null
+  try {
+    const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model:      'claude-sonnet-4-6',
+        max_tokens: 3000,
+        messages:   [{ role: 'user', content: generationPrompt }],
+      }),
+    })
+    const aiResult = await aiResp.json()
+    if (aiResult.error) return res.status(500).json({ error: `Claude API error: ${aiResult.error.message}` })
+
+    const rawText = aiResult.content?.[0]?.text || ''
+    // Strip any markdown code fences before parsing
+    const cleaned = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim()
+    generatedData = JSON.parse(cleaned)
+  } catch (parseErr) {
+    return res.status(500).json({ error: `Claude response parse failed: ${parseErr.message}` })
+  }
+
+  if (!generatedData?.wibs?.length) {
+    return res.status(500).json({ error: 'Claude returned no WIB data' })
+  }
+
+  _lastTerritoryGeneration = now
+
+  if (dry_run) {
+    return res.json({
+      dry_run: true,
+      would_insert: generatedData.wibs.length,
+      data: generatedData.wibs,
+      target_states: targetList,
+      message: `Dry run complete — ${generatedData.wibs.length} WIBs would be inserted. Set dry_run: false to commit.`,
+    })
+  }
+
+  // Step 3: Insert generated WIBs (skipping duplicates)
+  const insertResults = { inserted: 0, contacts_saved: 0, skipped: 0, errors: [] }
+
+  for (const wib of generatedData.wibs) {
+    if (!wib.board_name || !wib.state) { insertResults.errors.push('Skipped — missing board_name or state'); continue }
+
+    const name    = stripHtml(wib.board_name.trim())
+    const state   = wib.state.trim().toUpperCase()
+    const domain  = wib.website ? wib.website.replace(/^https?:\/\/(www\.)?/,'').split('/')[0] : null
+
+    // Skip if this WIB name already exists in this state
+    const { data: existing } = await supabase
+      .from('wib_records')
+      .select('id')
+      .ilike('wib_name', name)
+      .eq('state', state)
+      .limit(1)
+
+    if (existing?.[0]) { insertResults.skipped++; continue }
+
+    const { data: inserted, error: insErr } = await supabase
+      .from('wib_records')
+      .insert({
+        wib_name:   name,
+        state,
+        wib_email:  wib.email  || null,
+        wib_phone:  wib.phone  || null,
+        website:    domain,
+        source_url: wib.website || `https://careeronestop.org/LocalHelp/service-locator.aspx?location=${state}`,
+        notes:      wib.description || null,
+        status:     'no_reachout_complete',
+        independent_creation_logged: true,
+        owner_id:   req.user.id,
+        last_verified_date: new Date().toISOString().split('T')[0],
+      })
+      .select('id')
+      .single()
+
+    if (insErr) { insertResults.errors.push(`"${name}" (${state}): ${insErr.message}`); continue }
+    insertResults.inserted++
+
+    // Save generated contact person as a nested NOTE (not a standalone WIB entry)
+    if (wib.contact_name && inserted?.id) {
+      const contactDetail = `Primary Contact: ${wib.contact_name}${wib.contact_title ? ' (' + wib.contact_title + ')' : ''}${wib.email ? ' | ' + wib.email : ''}`
+      await safeInsertLog({
+        user_id:     req.user.id,
+        action:      'NOTE',
+        record_type: 'wib_records',
+        record_id:   inserted.id,
+        details:     contactDetail,
+        metadata: {
+          note_type:      'Contact',
+          contact_name:   wib.contact_name,
+          contact_title:  wib.contact_title || null,
+          contact_email:  wib.email || null,
+          is_ai_generated: true,
+          content:        contactDetail,
+        },
+      }).catch(() => {})
+      insertResults.contacts_saved++
+    }
+  }
+
+  // Step 4: Return updated coverage stats for the WIB Territories tab
+  const { data: updatedWibs } = await supabase.from('wib_records').select('id,state').order('state')
+  const updatedCoverage = {}
+  for (const w of (updatedWibs || [])) {
+    const s = w.state || 'Unknown'
+    updatedCoverage[s] = (updatedCoverage[s] || 0) + 1
+  }
+  const nowMissing = ALL_STATES.filter(s => !updatedCoverage[s])
+
+  try {
+    await safeInsertLog({ user_id: req.user.id, action: 'AI_WIB_TERRITORY_GENERATION', details: `Generated ${insertResults.inserted} new WIBs, ${insertResults.contacts_saved} contacts for states: ${targetList.join(', ')}` })
+  } catch (_) {}
+
+  res.json({
+    success:         true,
+    inserted:        insertResults.inserted,
+    contacts_saved:  insertResults.contacts_saved,
+    skipped:         insertResults.skipped,
+    errors:          insertResults.errors.slice(0, 10),
+    target_states:   targetList,
+    states_still_missing: nowMissing,
+    total_wib_count: updatedWibs?.length || 0,
+    coverage_by_state: updatedCoverage,
+    message:         `AI territory generation complete. ${insertResults.inserted} new WIBs inserted across ${targetList.length} targeted states. ${nowMissing.length} states still need coverage.`,
+  })
+})
+
+// GET /api/admin/ai/territory-coverage — returns current state coverage stats for map
+app.get('/api/admin/ai/territory-coverage', auth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('wib_records')
+    .select('id,wib_name,state,status,wib_email,website')
+    .order('state')
+
+  if (error) return res.status(400).json({ error: error.message })
+
+  const ALL_STATES = ['AL','AK','AZ','AR','CA','CO','CT','DC','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY']
+  const byState = {}
+  for (const wib of (data || [])) {
+    const s = wib.state || 'Unknown'
+    if (!byState[s]) byState[s] = { count: 0, wibs: [] }
+    byState[s].count++
+    byState[s].wibs.push({ id: wib.id, name: wib.wib_name, status: wib.status })
+  }
+
+  const coverage = ALL_STATES.map(s => ({
+    state:    s,
+    count:    byState[s]?.count || 0,
+    wibs:     byState[s]?.wibs  || [],
+    covered:  (byState[s]?.count || 0) > 0,
+  }))
+
+  res.json({
+    coverage,
+    total_wibs:    data?.length || 0,
+    states_covered:    coverage.filter(s => s.covered).length,
+    states_missing:    coverage.filter(s => !s.covered).length,
+    missing_states:    coverage.filter(s => !s.covered).map(s => s.state),
+  })
 })
 
 
