@@ -1099,6 +1099,190 @@ app.get('/api/grant-awards', auth, async (req, res) => {
   res.json({ data })
 })
 
+// ─── PURGE BROKEN IMPORT RECOVERY ROUTE ──────────────────────────────────────
+// Single-use administrative endpoint to remove records erroneously created
+// when the CSV parser fell back to the catalog origin string (e.g. "CMS Provider
+// Data Catalog - HH Provider Apr2026") instead of the Facility_Name column.
+//
+// HOW TO USE:
+//   GET /api/admin/purge-broken-imports
+//   Authorization: Bearer <your_admin_or_super_admin_token>
+//
+// The route is intentionally a GET so it can be triggered directly from the
+// browser address bar or a curl command without a request body.
+// After a successful run the endpoint logs the action to activity_log and
+// returns a JSON summary of every table that was touched.
+// Once the broken records are gone, re-upload the corrected CSV using the
+// repaired /api/import/companies endpoint below.
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/api/admin/purge-broken-imports', auth, requireAdmin, async (req, res) => {
+  // Catalog-origin sentinel strings that should never appear as company names.
+  // Add any additional variants here before triggering the purge.
+  const BAD_PREFIXES = [
+    'CMS Provider Data Catalog',
+    'CMS NH Provider',
+    'CMS HH Provider',
+    'CMS Provider Data',
+  ]
+
+  const report = {
+    triggered_by:    req.user.email,
+    triggered_at:    new Date().toISOString(),
+    bad_prefixes:    BAD_PREFIXES,
+    companies:       { fetched: 0, deleted: 0, ids: [] },
+    locations:       { deleted: 0 },
+    applications:    { deleted: 0 },
+    activity_log:    { deleted: 0 },
+    errors:          [],
+  }
+
+  try {
+    // ── Step 1: Collect all bad company IDs ─────────────────────────────────
+    // We gather IDs first so we can cascade-delete child records safely before
+    // removing the parent rows. Supabase PostgREST does not expose ON DELETE
+    // CASCADE visibility, so we handle it explicitly here.
+    let badIds = []
+    for (const prefix of BAD_PREFIXES) {
+      // ilike with both a starts-with and a contains pattern to catch every
+      // variant: exact prefix match and embedded substring match.
+      const { data: startsWith, error: e1 } = await supabase
+        .from('companies')
+        .select('id, company_name, created_at')
+        .ilike('company_name', `${prefix}%`)
+        .limit(2000)
+
+      if (e1) {
+        report.errors.push(`companies ilike startsWith "${prefix}": ${e1.message}`)
+      } else {
+        for (const row of (startsWith || [])) {
+          if (!badIds.includes(row.id)) badIds.push(row.id)
+        }
+      }
+
+      const { data: contains, error: e2 } = await supabase
+        .from('companies')
+        .select('id, company_name, created_at')
+        .ilike('company_name', `%${prefix}%`)
+        .not('company_name', 'ilike', `${prefix}%`)  // avoid double-counting
+        .limit(2000)
+
+      if (e2) {
+        report.errors.push(`companies ilike contains "${prefix}": ${e2.message}`)
+      } else {
+        for (const row of (contains || [])) {
+          if (!badIds.includes(row.id)) badIds.push(row.id)
+        }
+      }
+    }
+
+    report.companies.fetched = badIds.length
+    report.companies.ids     = badIds
+
+    if (badIds.length === 0) {
+      report.message = 'No matching broken records found. Database is already clean.'
+      try {
+        await safeInsertLog({
+          user_id:     req.user.id,
+          action:      'PURGE_BROKEN_IMPORTS',
+          record_type: 'companies',
+          details:     'Purge triggered — no broken records found. Nothing deleted.',
+        })
+      } catch (_) {}
+      return res.json(report)
+    }
+
+    // ── Step 2: Delete child applications linked to bad company IDs ──────────
+    // Applications reference companies via company_id. We must remove them
+    // before the parent company row can be deleted cleanly.
+    const { data: deletedApps, error: appErr } = await supabase
+      .from('applications')
+      .delete()
+      .in('company_id', badIds)
+      .select('id')
+
+    if (appErr) {
+      report.errors.push(`applications cascade delete: ${appErr.message}`)
+    } else {
+      report.applications.deleted = (deletedApps || []).length
+    }
+
+    // ── Step 3: Delete child locations linked to bad company IDs ─────────────
+    const { data: deletedLocs, error: locErr } = await supabase
+      .from('locations')
+      .delete()
+      .in('company_id', badIds)
+      .select('id')
+
+    if (locErr) {
+      report.errors.push(`locations cascade delete: ${locErr.message}`)
+    } else {
+      report.locations.deleted = (deletedLocs || []).length
+    }
+
+    // ── Step 4: Delete activity_log rows whose record_id maps to bad IDs ─────
+    // This cleans any notes, tasks, or audit entries that were created during
+    // the broken import batch and reference the bad company records.
+    if (global._hasRecordId !== false && global._hasRecordType !== false) {
+      const { data: deletedLogs, error: logErr } = await supabase
+        .from('activity_log')
+        .delete()
+        .eq('record_type', 'companies')
+        .in('record_id', badIds)
+        .select('id')
+
+      if (logErr) {
+        report.errors.push(`activity_log cascade delete: ${logErr.message}`)
+      } else {
+        report.activity_log.deleted = (deletedLogs || []).length
+      }
+    }
+
+    // ── Step 5: Delete the bad company rows themselves ────────────────────────
+    // Process in chunks of 200 to stay within PostgREST URL-length limits.
+    const CHUNK = 200
+    let totalDeleted = 0
+    for (let i = 0; i < badIds.length; i += CHUNK) {
+      const chunk = badIds.slice(i, i + CHUNK)
+      const { data: deletedCos, error: coErr } = await supabase
+        .from('companies')
+        .delete()
+        .in('id', chunk)
+        .select('id')
+
+      if (coErr) {
+        report.errors.push(`companies delete chunk ${i}–${i + CHUNK}: ${coErr.message}`)
+      } else {
+        totalDeleted += (deletedCos || []).length
+      }
+    }
+    report.companies.deleted = totalDeleted
+
+    // ── Step 6: Invalidate the company import cache so the next import run ────
+    // builds a fresh map that no longer contains the purged IDs.
+    global._importCoCache = null
+
+    // ── Step 7: Write a permanent audit trail entry ───────────────────────────
+    const summary = `Purge completed by ${req.user.email}: ${report.companies.deleted} companies, ${report.locations.deleted} locations, ${report.applications.deleted} applications, ${report.activity_log.deleted} activity_log rows removed. Bad prefixes: ${BAD_PREFIXES.join(', ')}.`
+    try {
+      await safeInsertLog({
+        user_id:     req.user.id,
+        action:      'PURGE_BROKEN_IMPORTS',
+        record_type: 'companies',
+        details:     summary,
+      })
+    } catch (_) {}
+
+    report.message = summary
+    console.log('[PURGE]', summary)
+    res.json(report)
+
+  } catch (e) {
+    console.error('purge-broken-imports fatal error:', e.message)
+    report.errors.push('Fatal: ' + e.message)
+    res.status(500).json(report)
+  }
+})
+
 // ─── IMPORT — lightweight JWT auth to support long multi-batch runs ───────────
 app.post('/api/import/:type', async (req, res) => {
   // Decode JWT locally — avoids a Supabase Auth round-trip on every batch
@@ -1279,50 +1463,178 @@ app.post('/api/import/:type', async (req, res) => {
         return null
       }
 
-      const nameKey = rows[0]
-        ? Object.keys(rows[0]).find(k => /^(company.?name|record|name|company|employer|organization|account.?name|business.?name)$/i.test(k.trim()))
+      // ── Facility_Name-first name resolution ─────────────────────────────────
+      // The CMS Provider Data Catalog exports use 'Facility_Name' as the
+      // primary identifier column. We check for it (and common casing variants)
+      // BEFORE falling back to the generic nameKey scan. This prevents the
+      // catalog's own origin-text from being mistakenly treated as the
+      // company name when the Facility_Name column is present but was
+      // not being matched by the previous regex.
+      const hasFacilityNameKey = rows[0]
+        ? Object.keys(rows[0]).find(k => /^facility[_\s]?name$/i.test(k.trim()))
         : null
 
-      const mappedKeys = new Set(['Status','Stage','status','stage','Record Stage','Phone numbers','Phone Number','Phone','Mobile','Business Phone','primary_contact_phone','Contact Phone','Email addresses','Email Address','Email','Primary Email','primary_contact_email','Contact Email','Website','website','Domain','domain','URL','Homepage','Contact Name','Contact','Primary Contact','Owner Name','Account Owner','primary_contact_name','Rep','Account Manager','Employee Count','Employees','Number of Employees','employee_count_total','Staff','Headcount','Size','Notes','Description','Comments','notes','Summary','Bio','About','Details','Type','Company Type','Industry','Sector','Category','company_type','Avg Wage','Average Wage','Avg Hourly Wage','Hourly Rate','avg_hourly_wage','FEIN','EIN','Tax ID','fein','Federal Tax ID','Training Needs','Training','training_needs','Street','Address','Street Address','Address Line 1','Street 1','Mailing Street','City','Mailing City','State','Province','Mailing State','Zip','Zip Code','Postal Code','Mailing Zip','Country','Mailing Country','LinkedIn','LinkedIn URL','linkedin_url','LinkedIn Profile','Tags','Labels','Categories','tag','label','Owner','Assigned To','Manager','Lead Source','Source','How did you hear','Channel','Record ID','id','ID','Created','Created At','Updated','Updated At'])
+      // Generic fallback key for non-CMS files (existing behaviour preserved).
+      const nameKey = hasFacilityNameKey || (rows[0]
+        ? Object.keys(rows[0]).find(k => /^(company.?name|record|name|company|employer|organization|account.?name|business.?name)$/i.test(k.trim()))
+        : null)
+
+      // Expanded mappedKeys set now includes all CMS column variants so they
+      // are not incorrectly spilled into the 'extra / Additional Fields' block.
+      const mappedKeys = new Set([
+        // CMS-specific columns
+        'Facility_Name','facility_name','FACILITY_NAME',
+        'Facility Name','facility name',
+        'Address','address','ADDRESS',
+        'City','city','CITY',
+        'State','state','STATE',
+        'Zip','zip','ZIP','Zip Code','zip code','ZIP CODE',
+        'Zipcode','zipcode','ZIPCODE',
+        'Phone','phone','PHONE',
+        'County','county','COUNTY',
+        'CMS Certification Number (CCN)','ccn','CCN',
+        'Ownership Type','ownership_type','Ownership',
+        'Number of Certified Beds','certified_beds','Certified Beds',
+        'Number of Residents in Certified Beds','residents','Residents',
+        'Provider Type','provider_type','Provider type',
+        'Provider Sub-Type','provider_sub_type',
+        'Certification Date','certification_date',
+        'Participation Date','participation_date',
+        'Overall Rating','overall_rating',
+        'Health Inspection Rating','health_inspection_rating',
+        'QM Rating','qm_rating',
+        'Staffing Rating','staffing_rating',
+        'RN Staffing Rating','rn_staffing_rating',
+        'Provider Name','provider_name','PROVIDER_NAME',
+        // Standard CRM columns
+        'Status','Stage','status','stage','Record Stage',
+        'Phone numbers','Phone Number','Mobile','Business Phone',
+        'primary_contact_phone','Contact Phone','Main Phone',
+        'Email addresses','Email Address','Email','email',
+        'Primary Email','primary_contact_email','Contact Email','Business Email',
+        'Website','website','Domain','domain','URL','Homepage','Web','Site',
+        'Contact Name','Contact','Primary Contact','Owner Name','Account Owner',
+        'primary_contact_name','Rep','Account Manager','Point of Contact',
+        'Employee Count','Employees','Number of Employees','employee_count_total',
+        'Staff','Headcount','Size',
+        'Notes','Description','Comments','notes','Summary','Bio','About','Details',
+        'Type','Company Type','Industry','Sector','Category','company_type',
+        'Avg Wage','Average Wage','Avg Hourly Wage','Hourly Rate','avg_hourly_wage',
+        'FEIN','EIN','Tax ID','fein','Federal Tax ID',
+        'Training Needs','Training','training_needs',
+        'Street','Street Address','Address Line 1','Street 1','Mailing Street',
+        'Mailing City','Province','Mailing State',
+        'Postal Code','Mailing Zip','Country','Mailing Country',
+        'LinkedIn','LinkedIn URL','linkedin_url','LinkedIn Profile',
+        'Tags','Labels','Categories','tag','label',
+        'Owner','Assigned To','Manager','Lead Source','Source',
+        'How did you hear','Channel',
+        'Record ID','id','ID','Created','Created At','Updated','Updated At',
+      ])
 
       for (const row of rows) {
-        const name = (nameKey ? row[nameKey] : null)?.trim()
-          || getField(row, 'Company Name','company_name','Record','Name','Company','Employer','Organization','Account Name','Business Name')
+        // ── Name resolution: Facility_Name wins outright when present ─────────
+        // We read the exact matched header key so casing variants ('facility_name',
+        // 'Facility_Name', 'FACILITY_NAME') all resolve correctly.
+        // After extracting the name we immediately guard against the catalog
+        // sentinel strings so they can never be inserted as company_name.
+        let name = hasFacilityNameKey
+          ? (row[hasFacilityNameKey] || '').toString().trim()
+          : null
+
+        // If Facility_Name column was present but this specific row had it empty,
+        // fall back to the generic key (handles mixed CSV layouts gracefully).
+        if (!name) {
+          name = (nameKey && nameKey !== hasFacilityNameKey ? row[nameKey] : null)?.toString().trim()
+            || getField(row,
+                'Company Name','company_name','Record','Name','Company',
+                'Employer','Organization','Account Name','Business Name')
+        }
+
         if (!name) { results.errors.push('Skipped — no company name found'); continue }
+
+        // ── Sentinel guard: reject any row whose resolved name looks like a ───
+        // catalog origin string rather than an actual business name.
+        const BAD_NAME_PATTERNS = [
+          /^CMS\s+Provider\s+Data\s+Catalog/i,
+          /^CMS\s+NH\s+Provider/i,
+          /^CMS\s+HH\s+Provider/i,
+          /^CMS\s+Provider\s+Data/i,
+          /Provider\s+Data\s+Catalog/i,
+        ]
+        if (BAD_NAME_PATTERNS.some(p => p.test(name))) {
+          results.errors.push(`Skipped — name looks like catalog origin string: "${name.substring(0, 80)}"`)
+          continue
+        }
 
         const rawStatus = (getField(row, 'Status','Stage','status','stage','Record Stage','Company Stage') || '').toLowerCase().trim()
         const status    = coStatusMap[rawStatus] || 'prospect'
-        const phone     = getField(row, 'Phone numbers','Phone Number','Phone','phone','Mobile','Mobile Phone','primary_contact_phone','Contact Phone','Main Phone','Business Phone')
-        const email     = getField(row, 'Email addresses','Email Address','Email','email','Primary Email','primary_contact_email','Contact Email','Business Email')
+
+        // ── Phone: CMS files carry phone in 'Phone' column directly ──────────
+        const phone = getField(row,
+          'Phone','phone','PHONE',
+          'Phone numbers','Phone Number','Mobile','Mobile Phone',
+          'primary_contact_phone','Contact Phone','Main Phone','Business Phone')
+
+        const email = getField(row,
+          'Email addresses','Email Address','Email','email',
+          'Primary Email','primary_contact_email','Contact Email','Business Email')
+
         const rawDomain = getField(row, 'Website','website','Domain','domain','URL','Homepage','Web','Site')
         const domain    = rawDomain ? rawDomain.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : null
-        const contactName  = getField(row, 'Contact Name','Contact','Primary Contact','Owner Name','Account Owner','primary_contact_name','Rep','Account Manager','Point of Contact')
-        const empRaw    = getField(row, 'Employee Count','Employees','Number of Employees','employee_count_total','Staff','Headcount','Size')
+
+        const contactName = getField(row,
+          'Contact Name','Contact','Primary Contact','Owner Name','Account Owner',
+          'primary_contact_name','Rep','Account Manager','Point of Contact')
+
+        const empRaw = getField(row,
+          'Employee Count','Employees','Number of Employees','employee_count_total',
+          'Number of Certified Beds','certified_beds',
+          'Staff','Headcount','Size')
         const employeeCount = empRaw ? parseInt(String(empRaw).replace(/[^0-9]/g, '')) || null : null
-        const notes     = getField(row, 'Notes','Description','Comments','notes','Summary','Bio','About','Details')
-        const rawType   = getField(row, 'Type','Company Type','Industry','Sector','Category','company_type')
+
+        const notes   = getField(row, 'Notes','Description','Comments','notes','Summary','Bio','About','Details')
+        const rawType = getField(row,
+          'Type','Company Type','Provider Type','provider_type',
+          'Ownership Type','ownership_type','Industry','Sector','Category','company_type')
 
         const insertRow = { company_name: name, status }
-        if (rawType)      insertRow.company_type            = rawType
-        if (domain)       insertRow.domain                  = domain
-        if (email)        insertRow.primary_contact_email   = email
-        if (phone)        insertRow.primary_contact_phone   = phone
-        if (contactName)  insertRow.primary_contact_name    = contactName
-        if (employeeCount) insertRow.employee_count_total   = employeeCount
+        if (rawType)       insertRow.company_type          = rawType
+        if (domain)        insertRow.domain                = domain
+        if (email)         insertRow.primary_contact_email = email
+        if (phone)         insertRow.primary_contact_phone = phone
+        if (contactName)   insertRow.primary_contact_name  = contactName
+        if (employeeCount) insertRow.employee_count_total  = employeeCount
 
         const wage = getField(row, 'Avg Wage','Average Wage','Avg Hourly Wage','Hourly Rate','avg_hourly_wage')
         if (wage) { const wageNum = parseFloat(String(wage).replace(/[^0-9.]/g, '')); if (!isNaN(wageNum)) insertRow.avg_hourly_wage = wageNum }
-        const fein     = getField(row, 'FEIN','EIN','Tax ID','fein','Federal Tax ID')
+
+        const fein     = getField(row, 'FEIN','EIN','Tax ID','fein','Federal Tax ID','CMS Certification Number (CCN)','ccn')
         const training = getField(row, 'Training Needs','Training','training_needs')
         if (fein)     insertRow.fein           = fein
         if (training) insertRow.training_needs = training
 
-        const address  = [getField(row,'Street','Address','Street Address','Address Line 1','Street 1','Mailing Street'), getField(row,'City','Mailing City'), getField(row,'State','Province','Mailing State'), getField(row,'Zip','Zip Code','Postal Code','Mailing Zip'), getField(row,'Country','Mailing Country')].filter(Boolean).join(', ')
+        // ── Address assembly: CMS columns are 'Address', 'City', 'State', ─────
+        // 'Zip' exactly. We resolve each part independently so partial data
+        // (e.g. a row with only City + State) still produces a useful string.
+        const streetPart = getField(row,
+          'Address','address','ADDRESS',
+          'Street','Street Address','Address Line 1','Street 1','Mailing Street')
+        const cityPart   = getField(row, 'City','city','CITY','Mailing City')
+        const statePart  = getField(row, 'State','state','STATE','Province','Mailing State')
+        const zipPart    = getField(row,
+          'Zip','zip','ZIP','Zip Code','zip code','Zipcode','zipcode',
+          'Postal Code','Mailing Zip')
+        const countryPart = getField(row, 'Country','Mailing Country')
+        const address     = [streetPart, cityPart, statePart, zipPart, countryPart].filter(Boolean).join(', ')
+
         const linkedin = getField(row, 'LinkedIn','LinkedIn URL','linkedin_url','LinkedIn Profile')
         const tags     = getField(row, 'Tags','Labels','Categories','tag','label')
         const owner    = getField(row, 'Owner','Account Owner','Assigned To','Rep','Manager')
         const source   = getField(row, 'Source','Lead Source','How did you hear','Channel')
-        const extra    = Object.entries(row).filter(([k, v]) => !mappedKeys.has(k) && v && String(v).trim()).map(([k, v]) => `${k}: ${String(v).trim()}`)
+        const extra    = Object.entries(row)
+          .filter(([k, v]) => !mappedKeys.has(k) && v && String(v).trim())
+          .map(([k, v]) => `${k}: ${String(v).trim()}`)
 
         const notesParts = []
         if (notes)    notesParts.push(notes)
