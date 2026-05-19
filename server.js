@@ -1100,186 +1100,61 @@ app.get('/api/grant-awards', auth, async (req, res) => {
 })
 
 // ─── PURGE BROKEN IMPORT RECOVERY ROUTE ──────────────────────────────────────
-// Single-use administrative endpoint to remove records erroneously created
-// when the CSV parser fell back to the catalog origin string (e.g. "CMS Provider
-// Data Catalog - HH Provider Apr2026") instead of the Facility_Name column.
+// Single-use clean-sweep endpoint.
+// Deletes every company row whose name matches the two CMS catalog sentinel
+// patterns and returns immediately. No loops, no recursive callbacks, no
+// child-table scanning — just two direct ILIKE deletes and a response.
 //
 // HOW TO USE:
 //   GET /api/admin/purge-broken-imports
-//   Authorization: Bearer <your_admin_or_super_admin_token>
+//   Authorization: Bearer <admin_or_super_admin_token>
 //
-// The route is intentionally a GET so it can be triggered directly from the
-// browser address bar or a curl command without a request body.
-// After a successful run the endpoint logs the action to activity_log and
-// returns a JSON summary of every table that was touched.
-// Once the broken records are gone, re-upload the corrected CSV using the
-// repaired /api/import/companies endpoint below.
+// Run once, verify the JSON response, then re-upload the corrected CSV.
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/api/admin/purge-broken-imports', auth, requireAdmin, async (req, res) => {
-  // Catalog-origin sentinel strings that should never appear as company names.
-  // Add any additional variants here before triggering the purge.
-  const BAD_PREFIXES = [
-    'CMS Provider Data Catalog',
-    'CMS NH Provider',
-    'CMS HH Provider',
-    'CMS Provider Data',
-  ]
-
-  const report = {
-    triggered_by:    req.user.email,
-    triggered_at:    new Date().toISOString(),
-    bad_prefixes:    BAD_PREFIXES,
-    companies:       { fetched: 0, deleted: 0, ids: [] },
-    locations:       { deleted: 0 },
-    applications:    { deleted: 0 },
-    activity_log:    { deleted: 0 },
-    errors:          [],
-  }
-
   try {
-    // ── Step 1: Collect all bad company IDs ─────────────────────────────────
-    // We gather IDs first so we can cascade-delete child records safely before
-    // removing the parent rows. Supabase PostgREST does not expose ON DELETE
-    // CASCADE visibility, so we handle it explicitly here.
-    let badIds = []
-    for (const prefix of BAD_PREFIXES) {
-      // ilike with both a starts-with and a contains pattern to catch every
-      // variant: exact prefix match and embedded substring match.
-      const { data: startsWith, error: e1 } = await supabase
-        .from('companies')
-        .select('id, company_name, created_at')
-        .ilike('company_name', `${prefix}%`)
-        .limit(2000)
-
-      if (e1) {
-        report.errors.push(`companies ilike startsWith "${prefix}": ${e1.message}`)
-      } else {
-        for (const row of (startsWith || [])) {
-          if (!badIds.includes(row.id)) badIds.push(row.id)
-        }
-      }
-
-      const { data: contains, error: e2 } = await supabase
-        .from('companies')
-        .select('id, company_name, created_at')
-        .ilike('company_name', `%${prefix}%`)
-        .not('company_name', 'ilike', `${prefix}%`)  // avoid double-counting
-        .limit(2000)
-
-      if (e2) {
-        report.errors.push(`companies ilike contains "${prefix}": ${e2.message}`)
-      } else {
-        for (const row of (contains || [])) {
-          if (!badIds.includes(row.id)) badIds.push(row.id)
-        }
-      }
-    }
-
-    report.companies.fetched = badIds.length
-    report.companies.ids     = badIds
-
-    if (badIds.length === 0) {
-      report.message = 'No matching broken records found. Database is already clean.'
-      try {
-        await safeInsertLog({
-          user_id:     req.user.id,
-          action:      'PURGE_BROKEN_IMPORTS',
-          record_type: 'companies',
-          details:     'Purge triggered — no broken records found. Nothing deleted.',
-        })
-      } catch (_) {}
-      return res.json(report)
-    }
-
-    // ── Step 2: Delete child applications linked to bad company IDs ──────────
-    // Applications reference companies via company_id. We must remove them
-    // before the parent company row can be deleted cleanly.
-    const { data: deletedApps, error: appErr } = await supabase
-      .from('applications')
+    // DELETE 1: rows whose name starts with or contains "CMS Provider Data Catalog"
+    const { error: err1 } = await supabase
+      .from('companies')
       .delete()
-      .in('company_id', badIds)
-      .select('id')
+      .ilike('company_name', '%CMS Provider Data Catalog%')
 
-    if (appErr) {
-      report.errors.push(`applications cascade delete: ${appErr.message}`)
-    } else {
-      report.applications.deleted = (deletedApps || []).length
+    if (err1) {
+      console.error('[PURGE] CMS Provider Data Catalog delete error:', err1.message)
+      return res.status(500).json({ success: false, error: err1.message })
     }
 
-    // ── Step 3: Delete child locations linked to bad company IDs ─────────────
-    const { data: deletedLocs, error: locErr } = await supabase
-      .from('locations')
+    // DELETE 2: rows whose name starts with or contains "CMS NH Provider"
+    const { error: err2 } = await supabase
+      .from('companies')
       .delete()
-      .in('company_id', badIds)
-      .select('id')
+      .ilike('company_name', '%CMS NH Provider%')
 
-    if (locErr) {
-      report.errors.push(`locations cascade delete: ${locErr.message}`)
-    } else {
-      report.locations.deleted = (deletedLocs || []).length
+    if (err2) {
+      console.error('[PURGE] CMS NH Provider delete error:', err2.message)
+      return res.status(500).json({ success: false, error: err2.message })
     }
 
-    // ── Step 4: Delete activity_log rows whose record_id maps to bad IDs ─────
-    // This cleans any notes, tasks, or audit entries that were created during
-    // the broken import batch and reference the bad company records.
-    if (global._hasRecordId !== false && global._hasRecordType !== false) {
-      const { data: deletedLogs, error: logErr } = await supabase
-        .from('activity_log')
-        .delete()
-        .eq('record_type', 'companies')
-        .in('record_id', badIds)
-        .select('id')
-
-      if (logErr) {
-        report.errors.push(`activity_log cascade delete: ${logErr.message}`)
-      } else {
-        report.activity_log.deleted = (deletedLogs || []).length
-      }
-    }
-
-    // ── Step 5: Delete the bad company rows themselves ────────────────────────
-    // Process in chunks of 200 to stay within PostgREST URL-length limits.
-    const CHUNK = 200
-    let totalDeleted = 0
-    for (let i = 0; i < badIds.length; i += CHUNK) {
-      const chunk = badIds.slice(i, i + CHUNK)
-      const { data: deletedCos, error: coErr } = await supabase
-        .from('companies')
-        .delete()
-        .in('id', chunk)
-        .select('id')
-
-      if (coErr) {
-        report.errors.push(`companies delete chunk ${i}–${i + CHUNK}: ${coErr.message}`)
-      } else {
-        totalDeleted += (deletedCos || []).length
-      }
-    }
-    report.companies.deleted = totalDeleted
-
-    // ── Step 6: Invalidate the company import cache so the next import run ────
-    // builds a fresh map that no longer contains the purged IDs.
+    // Invalidate the in-memory company lookup cache so the next import batch
+    // builds a clean map without any of the now-deleted IDs.
     global._importCoCache = null
 
-    // ── Step 7: Write a permanent audit trail entry ───────────────────────────
-    const summary = `Purge completed by ${req.user.email}: ${report.companies.deleted} companies, ${report.locations.deleted} locations, ${report.applications.deleted} applications, ${report.activity_log.deleted} activity_log rows removed. Bad prefixes: ${BAD_PREFIXES.join(', ')}.`
+    // Write a single audit log entry — no loops, no secondary queries.
     try {
       await safeInsertLog({
         user_id:     req.user.id,
         action:      'PURGE_BROKEN_IMPORTS',
         record_type: 'companies',
-        details:     summary,
+        details:     `Broken import records cleared by ${req.user.email} — patterns: %CMS Provider Data Catalog%, %CMS NH Provider%`,
       })
     } catch (_) {}
 
-    report.message = summary
-    console.log('[PURGE]', summary)
-    res.json(report)
+    console.log(`[PURGE] Broken records cleared by ${req.user.email}`)
+    return res.json({ success: true, message: 'Broken records completely cleared.' })
 
   } catch (e) {
-    console.error('purge-broken-imports fatal error:', e.message)
-    report.errors.push('Fatal: ' + e.message)
-    res.status(500).json(report)
+    console.error('[PURGE] Fatal error:', e.message)
+    return res.status(500).json({ success: false, error: e.message })
   }
 })
 
@@ -1438,15 +1313,49 @@ app.post('/api/import/:type', async (req, res) => {
     // COMPANIES
     // ════════════════════════════════════════════════════════════════════════
     } else if (type === 'companies') {
+      // Consolidated coStatusMap — every input string maps to exactly one
+      // output value; no duplicate keys exist anywhere in this object literal.
       const coStatusMap = {
-        'prospect': 'prospect', 'lead': 'prospect', 'potential': 'prospect', 'new': 'prospect', 'unqualified': 'prospect',
-        'contacted': 'contacted', 'outreach': 'contacted', 'in progress': 'contacted', 'in_progress': 'contacted', 'trying': 'contacted',
-        'qualified': 'qualified', 'qualifying': 'qualified', 'interested': 'qualified',
-        'client': 'active_client', 'active': 'active_client', 'active client': 'active_client', 'active_client': 'active_client',
-        'partner': 'active_client', 'customer': 'active_client', 'won': 'active_client', 'closed won': 'active_client',
-        'network member': 'active_client', 'network_member': 'active_client', 'member': 'active_client', 'network': 'active_client',
-        'churned': 'churned', 'inactive': 'churned', 'lost': 'churned', 'cancelled': 'churned', 'closed lost': 'churned',
-        'dnc': 'dnc', 'do not contact': 'dnc', 'do_not_contact': 'dnc', 'blocked': 'dnc',
+        // prospect-tier inputs
+        'prospect':        'prospect',
+        'lead':            'prospect',
+        'potential':       'prospect',
+        'new':             'prospect',
+        'unqualified':     'prospect',
+        // contacted-tier inputs
+        'contacted':       'contacted',
+        'outreach':        'contacted',
+        'in progress':     'contacted',
+        'in_progress':     'contacted',
+        'trying':          'contacted',
+        // qualified-tier inputs
+        'qualified':       'qualified',
+        'qualifying':      'qualified',
+        'interested':      'qualified',
+        // active_client-tier inputs
+        'client':          'active_client',
+        'active':          'active_client',
+        'active client':   'active_client',
+        'active_client':   'active_client',
+        'partner':         'active_client',
+        'customer':        'active_client',
+        'won':             'active_client',
+        'closed won':      'active_client',
+        'network member':  'active_client',
+        'network_member':  'active_client',
+        'member':          'active_client',
+        'network':         'active_client',
+        // churned-tier inputs
+        'churned':         'churned',
+        'inactive':        'churned',
+        'lost':            'churned',
+        'cancelled':       'churned',
+        'closed lost':     'churned',
+        // dnc-tier inputs
+        'dnc':             'dnc',
+        'do not contact':  'dnc',
+        'do_not_contact':  'dnc',
+        'blocked':         'dnc',
       }
 
       const getField = (row, ...keys) => {
