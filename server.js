@@ -1802,6 +1802,31 @@ app.get('/api/agreements', auth, async (req, res) => {
   res.json({ data: rows })
 })
 
+// GET /api/agreements/stats — dashboard counts
+app.get('/api/agreements/stats', auth, async (req, res) => {
+  const { data, error } = await supabase.from('activity_log')
+    .select(global._safeActivityCols || 'id,action,created_at')
+    .eq('action', 'AGREEMENT')
+  if (error) return res.status(400).json({ error: error.message })
+  const rows = (data || []).map(r => parseLogRow(r))
+  const stats = {
+    total: rows.length,
+    by_type: {},
+    by_status: {},
+    pending_signature: 0,
+    active: 0,
+  }
+  for (const r of rows) {
+    const t = r.metadata?.agreement_type || 'unknown'
+    const s = r.metadata?.status || 'draft'
+    stats.by_type[t]   = (stats.by_type[t]   || 0) + 1
+    stats.by_status[s] = (stats.by_status[s] || 0) + 1
+    if (s === 'pending_signature') stats.pending_signature++
+    if (s === 'active' || s === 'signed') stats.active++
+  }
+  res.json(stats)
+})
+
 // GET /api/agreements/:id — single agreement
 app.get('/api/agreements/:id', auth, async (req, res) => {
   const { data, error } = await supabase.from('activity_log')
@@ -1894,30 +1919,6 @@ app.delete('/api/agreements/:id', auth, requireAdmin, async (req, res) => {
   res.json({ success: true })
 })
 
-// GET /api/agreements/stats — dashboard counts
-app.get('/api/agreements/stats', auth, async (req, res) => {
-  const { data, error } = await supabase.from('activity_log')
-    .select(global._safeActivityCols || 'id,action,created_at')
-    .eq('action', 'AGREEMENT')
-  if (error) return res.status(400).json({ error: error.message })
-  const rows = (data || []).map(r => parseLogRow(r))
-  const stats = {
-    total: rows.length,
-    by_type: {},
-    by_status: {},
-    pending_signature: 0,
-    active: 0,
-  }
-  for (const r of rows) {
-    const t = r.metadata?.agreement_type || 'unknown'
-    const s = r.metadata?.status || 'draft'
-    stats.by_type[t]   = (stats.by_type[t]   || 0) + 1
-    stats.by_status[s] = (stats.by_status[s] || 0) + 1
-    if (s === 'pending_signature') stats.pending_signature++
-    if (s === 'active' || s === 'signed') stats.active++
-  }
-  res.json(stats)
-})
 
 
 app.post('/api/webhooks/aircall',
