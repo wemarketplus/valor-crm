@@ -1000,8 +1000,11 @@ app.post('/api/admin/purge-wib-contamination', auth, requireAdmin, async (req, r
 
     // Classification: a record is a CONTAMINATED COMPANY (not a WIB) if it matches
     // business entity naming conventions AND lacks WIB-specific naming.
-    const COMPANY_SUFFIXES = /\b(LLC|Inc|Corp|Ltd|L\.L\.C|Incorporated|Company|Co\.|Healthcare|Health Systems|Medical|Hospital|Services|Solutions|Tower|Staffing|Industries)\b/i
-    const WIB_PATTERNS     = /\b(workforce|development\s+board|investment\s+board|works|career|employment|labor|WIB|WIOA|CareerSource|WorkForce|Job|Work\s+Force)\b/i
+    const COMPANY_SUFFIXES = /\b(LLC|Inc|Corp|Ltd|L\.L\.C|Incorporated|Company|Co\.|Healthcare|Health Systems|Medical|Hospital|Services|Solutions|Tower|Staffing|Industries|Nursing|Senior Living|Care|Hospice|Pharmacy|Rehabilitation|Clinic|Center)\b/i
+    const WIB_PATTERNS     = /\b(workforce|development\s+board|investment\s+board|works|career|employment|labor|WIB|WIOA|CareerSource|WorkForce|Job|Work\s+Force|Consortium|Regional\s+Council|State\s+Board|Workforce\s+Commission|Employment\s+Council|Economic\s+Development|Job\s+Center|American\s+Job)\b/i
+    // Person name pattern: 2-3 words, each Title Case, no numbers, no WIB keywords
+    // e.g. "Adriane Grant", "Bruce Ferguson", "Rick Beasley", "John Harvard"
+    const PERSON_NAME_PATTERN = /^[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,2}$/
     const VALID_STATE_ABBRS = new Set(['AL','AK','AZ','AR','CA','CO','CT','DC','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','US'])
 
     const contaminated = []
@@ -1013,9 +1016,14 @@ app.post('/api/admin/purge-wib-contamination', auth, requireAdmin, async (req, r
 
       const looksLikeCompany = COMPANY_SUFFIXES.test(name) && !WIB_PATTERNS.test(name)
       const invalidState     = state && !VALID_STATE_ABBRS.has(state.toUpperCase())
+      // Person name detection: "First Last" or "First Middle Last" pattern with no WIB keywords
+      const looksLikePerson  = PERSON_NAME_PATTERN.test(name.trim()) && !WIB_PATTERNS.test(name)
+      // Very short names that aren't state abbreviations are likely contact names
+      const tooShort         = name.trim().length < 8 && !WIB_PATTERNS.test(name)
 
-      if (looksLikeCompany || invalidState) {
-        contaminated.push({ id: wib.id, name, state, reason: looksLikeCompany ? 'company_suffix' : 'invalid_state' })
+      if (looksLikeCompany || invalidState || looksLikePerson || tooShort) {
+        const reason = looksLikePerson ? 'person_name' : looksLikeCompany ? 'company_suffix' : tooShort ? 'too_short' : 'invalid_state'
+        contaminated.push({ id: wib.id, name, state, reason })
       } else {
         clean.push(wib.id)
       }
