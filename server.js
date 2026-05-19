@@ -3781,6 +3781,126 @@ app.get('/api/admin/ai/territory-coverage', auth, async (req, res) => {
   })
 })
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRAINING PROVIDERS — Stats + CSV/Excel export endpoints
+// Data is stored in activity_log with action='TRAINING_PROVIDER'.
+// Each row has a metadata JSONB field containing: name, provider_type,
+// state, website, contact_email, contact_phone, programs, status, notes.
+// The frontend tab computes stats client-side from the data array, but also
+// calls /stats for a pre-aggregated summary to avoid loading all rows.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// GET /api/training-providers/stats — lightweight aggregate for KPI cards
+app.get('/api/training-providers/stats', auth, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('activity_log')
+      .select('metadata')
+      .eq('action', 'TRAINING_PROVIDER')
+
+    if (error) return res.status(400).json({ error: error.message })
+
+    const providers = (data || []).map(r => {
+      let m = r.metadata
+      if (typeof m === 'string') { try { m = JSON.parse(m) } catch (_) { m = {} } }
+      return m || {}
+    })
+
+    const total  = providers.length
+    const active = providers.filter(p => (p.status || 'active') === 'active').length
+    const states = new Set(providers.map(p => p.state).filter(Boolean))
+
+    res.json({
+      total_providers: total,
+      active:          active,
+      inactive:        total - active,
+      states_covered:  states.size,
+      states:          [...states].sort(),
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// GET /api/training-providers/export/csv — CSV download
+app.get('/api/training-providers/export/csv', auth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('activity_log')
+    .select('metadata, created_at, user:user_profiles!user_id(full_name,email)')
+    .eq('action', 'TRAINING_PROVIDER')
+    .order('created_at', { ascending: false })
+
+  if (error) return res.status(400).json({ error: error.message })
+
+  const escTP = (v) => {
+    const s = String(v == null ? '' : v).replace(/[\r\n]+/g, ' ')
+    return '"' + (/^[=+\-@\t]/.test(s) ? "'" + s : s).replace(/"/g, '""') + '"'
+  }
+
+  const headers = ['Name','Type','State','Website','Contact Email','Contact Phone','Programs','Status','Notes','Added By','Created At']
+  const rows = (data || []).map(r => {
+    let m = r.metadata || {}
+    if (typeof m === 'string') { try { m = JSON.parse(m) } catch (_) { m = {} } }
+    return [
+      m.name||'', m.provider_type||'', m.state||'', m.website||'',
+      m.contact_email||'', m.contact_phone||'', m.programs||'',
+      m.status||'active', m.notes||'',
+      r.user?.full_name||r.user?.email||'', r.created_at?.split('T')[0]||'',
+    ]
+  })
+
+  const csv = [headers.map(escTP).join(','), ...rows.map(r => r.map(escTP).join(','))].join('\n')
+  res.setHeader('Content-Type', 'text/csv')
+  res.setHeader('Content-Disposition', `attachment; filename="training-providers-${new Date().toISOString().split('T')[0]}.csv"`)
+  res.send(csv)
+})
+
+// GET /api/training-providers/export/xlsx — Excel download
+app.get('/api/training-providers/export/xlsx', auth, async (req, res) => {
+  let XLSX
+  try { XLSX = require('xlsx') } catch (_) {
+    return res.status(503).json({ error: 'xlsx not installed — run: npm install xlsx' })
+  }
+
+  const { data, error } = await supabase
+    .from('activity_log')
+    .select('metadata, created_at, user:user_profiles!user_id(full_name,email)')
+    .eq('action', 'TRAINING_PROVIDER')
+    .order('created_at', { ascending: false })
+
+  if (error) return res.status(400).json({ error: error.message })
+
+  const rows = (data || []).map(r => {
+    let m = r.metadata || {}
+    if (typeof m === 'string') { try { m = JSON.parse(m) } catch (_) { m = {} } }
+    return {
+      'Name':          m.name          || '',
+      'Type':          m.provider_type || '',
+      'State':         m.state         || '',
+      'Website':       m.website       || '',
+      'Contact Email': m.contact_email || '',
+      'Contact Phone': m.contact_phone || '',
+      'Programs':      m.programs      || '',
+      'Status':        m.status        || 'active',
+      'Notes':         m.notes         || '',
+      'Added By':      r.user?.full_name || r.user?.email || '',
+      'Created At':    r.created_at?.split('T')[0] || '',
+    }
+  })
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Name: 'No providers yet' }])
+  ws['!cols'] = Object.keys(rows[0] || { Name: '' }).map(k => ({ wch: Math.max(k.length + 4, 14) }))
+  XLSX.utils.book_append_sheet(wb, ws, 'Training Providers')
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+
+  try { await safeInsertLog({ user_id: req.user.id, action: 'EXPORT', details: `Training providers Excel export — ${rows.length} rows` }) } catch (_) {}
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  res.setHeader('Content-Disposition', `attachment; filename="training-providers-${new Date().toISOString().split('T')[0]}.xlsx"`)
+  res.send(buffer)
+})
+
 
 let _htmlPath=null
 function findHtmlPath() {
