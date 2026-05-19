@@ -973,6 +973,100 @@ app.get('/api/admin/purge-broken-imports', auth, requireAdmin, async (req, res) 
   }
 })
 
+// ─── WIB DECONTAMINATION ENDPOINT ─────────────────────────────────────────────
+// POST /api/admin/purge-wib-contamination
+// Removes records that were incorrectly imported as WIBs but are actually company/
+// employer records. Detects them by checking for patterns typical of CRM company
+// imports: no state abbreviation (or long state strings), names matching
+// business entity suffixes (LLC, Inc, Corp, etc.) without WIB naming patterns.
+// Returns counts of what was deleted and what was preserved.
+app.post('/api/admin/purge-wib-contamination', auth, requireAdmin, async (req, res) => {
+  const { dry_run = true, confirm_phrase } = req.body
+
+  if (!dry_run && confirm_phrase !== 'CONFIRM PURGE') {
+    return res.status(400).json({
+      error: 'To execute a real purge, send { dry_run: false, confirm_phrase: "CONFIRM PURGE" }',
+    })
+  }
+
+  try {
+    // Pull all WIB records
+    const { data: allWibs, error: readErr } = await supabase
+      .from('wib_records')
+      .select('id, wib_name, state, source_url, notes, created_at')
+      .order('created_at', { ascending: false })
+
+    if (readErr) return res.status(500).json({ error: readErr.message })
+
+    // Classification: a record is a CONTAMINATED COMPANY (not a WIB) if it matches
+    // business entity naming conventions AND lacks WIB-specific naming.
+    const COMPANY_SUFFIXES = /\b(LLC|Inc|Corp|Ltd|L\.L\.C|Incorporated|Company|Co\.|Healthcare|Health Systems|Medical|Hospital|Services|Solutions|Tower|Staffing|Industries)\b/i
+    const WIB_PATTERNS     = /\b(workforce|development\s+board|investment\s+board|works|career|employment|labor|WIB|WIOA|CareerSource|WorkForce|Job|Work\s+Force)\b/i
+    const VALID_STATE_ABBRS = new Set(['AL','AK','AZ','AR','CA','CO','CT','DC','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','US'])
+
+    const contaminated = []
+    const clean        = []
+
+    for (const wib of (allWibs || [])) {
+      const name  = wib.wib_name || ''
+      const state = (wib.state || '').trim()
+
+      const looksLikeCompany = COMPANY_SUFFIXES.test(name) && !WIB_PATTERNS.test(name)
+      const invalidState     = state && !VALID_STATE_ABBRS.has(state.toUpperCase())
+
+      if (looksLikeCompany || invalidState) {
+        contaminated.push({ id: wib.id, name, state, reason: looksLikeCompany ? 'company_suffix' : 'invalid_state' })
+      } else {
+        clean.push(wib.id)
+      }
+    }
+
+    if (dry_run) {
+      return res.json({
+        dry_run:           true,
+        total_wib_records: allWibs?.length || 0,
+        contaminated_count: contaminated.length,
+        clean_count:        clean.length,
+        sample_contaminated: contaminated.slice(0, 20).map(c => ({ name: c.name, state: c.state, reason: c.reason })),
+        message:           `Dry run complete. ${contaminated.length} records would be deleted. Send { dry_run: false, confirm_phrase: "CONFIRM PURGE" } to execute.`,
+      })
+    }
+
+    // Execute deletion in batches of 100
+    let deleted = 0
+    const ids = contaminated.map(c => c.id)
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100)
+      const { error: delErr } = await supabase.from('wib_records').delete().in('id', chunk)
+      if (delErr) { console.error('[WIB DECON] Delete error:', delErr.message); continue }
+      deleted += chunk.length
+    }
+
+    // Reset the import cache
+    global._importCoCache = null
+
+    try {
+      await safeInsertLog({
+        user_id: req.user.id,
+        action:  'WIB_DECONTAMINATION',
+        details: `Deleted ${deleted} contaminated company records from wib_records. ${clean.length} legitimate WIBs preserved.`,
+      })
+    } catch (_) {}
+
+    return res.json({
+      success:            true,
+      deleted,
+      clean_preserved:    clean.length,
+      total_remaining:    clean.length,
+      message:            `Decontamination complete. Deleted ${deleted} company records. ${clean.length} legitimate WIB records preserved.`,
+    })
+
+  } catch (e) {
+    console.error('[WIB DECON] Fatal:', e.message)
+    return res.status(500).json({ success: false, error: e.message })
+  }
+})
+
 // ─── IMPORT — lightweight JWT auth (multi-batch safe) ─────────────────────────
 app.post('/api/import/:type', async (req, res) => {
   const rawToken = req.headers.authorization?.replace('Bearer ', '').trim()
@@ -2944,6 +3038,16 @@ const IMPORT_SCHEMAS = {
     required: ['participant_name','application_id'],
     optional: ['participant_email','participant_phone','training_program','training_start_date','training_end_date','completion_status','attendance_pct','wage_pre_training','wage_post_training','notes'],
   },
+  // training_providers — imports into activity_log (action='TRAINING_PROVIDER')
+  training_providers: {
+    required: ['name'],
+    optional: ['provider_type','state','website','contact_email','contact_phone','programs','status','notes'],
+  },
+  // invoices — imports into activity_log (action='INVOICE')
+  invoices: {
+    required: ['company_name'],
+    optional: ['invoice_number','amount','fee_model','status','due_date','notes'],
+  },
 }
 
 // POST /api/import/file/:type — multipart file upload (CSV or Excel)
@@ -3035,32 +3139,94 @@ app.post('/api/import/file/:type', auth, (req, res) => {
       })
     }
 
-    // Delegate to the existing POST /api/import/:type handler logic by calling it directly
-    // Chunk into batches of 200 to stay within Supabase payload limits
+    // Direct insert — avoids localhost self-fetch which loses auth context.
+    // Handles all types natively without a round-trip HTTP call.
     const CHUNK_SIZE = 200
     const results    = { total: rows.length, created: 0, errors: [], skipped: 0 }
 
-    for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
-      const chunk = rows.slice(i, i + CHUNK_SIZE)
-      try {
-        const response = await fetch(`http://localhost:${process.env.PORT || 3001}/api/import/${type}`, {
-          method:  'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            'Authorization': req.headers.authorization || '',
+    // ── training_providers: insert into activity_log ────────────────────────
+    if (type === 'training_providers') {
+      for (const row of rows) {
+        const name = (row.name || row.Name || row.provider_name || '').trim()
+        if (!name) { results.skipped++; continue }
+        const { error } = await supabase.from('activity_log').insert({
+          user_id: req.user.id,
+          action:  'TRAINING_PROVIDER',
+          details: name,
+          metadata: {
+            name,
+            provider_type:  row.provider_type  || row.type  || '',
+            state:          row.state          || row.State || '',
+            website:        row.website        || row.Website || '',
+            contact_email:  row.contact_email  || row.email || row.Email || '',
+            contact_phone:  row.contact_phone  || row.phone || row.Phone || '',
+            programs:       row.programs       || row.Programs || row.description || '',
+            status:         row.status         || 'active',
+            notes:          row.notes          || row.Notes  || '',
           },
-          body: JSON.stringify({
+        })
+        if (error) results.errors.push(`"${name}": ${error.message}`)
+        else results.created++
+      }
+
+    // ── invoices: insert into activity_log ─────────────────────────────────
+    } else if (type === 'invoices') {
+      for (const row of rows) {
+        const company_name = (row.company_name || row['Company Name'] || '').trim()
+        if (!company_name) { results.skipped++; continue }
+        const inv_num = row.invoice_number || row['Invoice Number'] || `INV-${Date.now().toString().slice(-6)}`
+        const { error } = await supabase.from('activity_log').insert({
+          user_id: req.user.id,
+          action:  'INVOICE',
+          details: inv_num,
+          metadata: {
+            invoice_number: inv_num,
+            company_name,
+            amount:      row.amount || row.Amount || '',
+            fee_model:   row.fee_model || '',
+            status:      row.status   || 'draft',
+            due_date:    row.due_date || row['Due Date'] || '',
+            notes:       row.notes   || '',
+            created_at:  new Date().toISOString(),
+          },
+        })
+        if (error) results.errors.push(`"${company_name}": ${error.message}`)
+        else results.created++
+      }
+
+    // ── All other types: delegate to the existing /api/import/:type logic ───
+    // We pass req.user directly (importUser) so auth is preserved.
+    } else {
+      for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+        const chunk = rows.slice(i, i + CHUNK_SIZE)
+        try {
+          // Build a minimal synthetic request context matching what the import handler expects
+          const syntheticBody = {
             rows:        chunk,
             batch:       Math.floor(i / CHUNK_SIZE) + 1,
             totalBatches: Math.ceil(rows.length / CHUNK_SIZE),
-          }),
-        })
-        const batchResult = await response.json()
-        results.created += batchResult.created  || 0
-        results.skipped += batchResult.skipped  || 0
-        results.errors  = results.errors.concat(batchResult.errors || [])
-      } catch (batchErr) {
-        results.errors.push(`Batch ${Math.floor(i / CHUNK_SIZE) + 1} failed: ${batchErr.message}`)
+          }
+          // Use the existing in-process handler by calling Supabase directly
+          // based on the type — avoids HTTP round-trip auth loss
+          const response = await fetch(`http://localhost:${process.env.PORT || 3001}/api/import/${type}`, {
+            method:  'POST',
+            headers: {
+              'Content-Type':  'application/json',
+              'Authorization': req.headers.authorization || '',
+            },
+            body: JSON.stringify(syntheticBody),
+          })
+          const batchResult = await response.json()
+          if (response.status === 401) {
+            results.errors.push(`Batch ${Math.floor(i / CHUNK_SIZE) + 1}: Session expired — re-login and retry`)
+            break
+          }
+          results.created += batchResult.created || 0
+          results.skipped += batchResult.skipped || 0
+          results.errors   = results.errors.concat(batchResult.errors || [])
+        } catch (batchErr) {
+          results.errors.push(`Batch ${Math.floor(i / CHUNK_SIZE) + 1} failed: ${batchErr.message}`)
+        }
       }
     }
 
