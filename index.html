@@ -6486,6 +6486,16 @@ function showSettingsSection(name,btn){
               <div><div style="font-size:12px;font-weight:600;color:var(--red-t)">Reset All Data</div><div style="font-size:11px;color:var(--red-t)">Delete ALL records — cannot be undone</div></div>
               <button class="btn btn-danger btn-sm" onclick="if(prompt('Type RESET to confirm')!=='RESET')return;showToast('Contact support to reset data','error')">Delete All</button>
             </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px;border:.5px solid #f97316;border-radius:8px;background:#fff7ed">
+              <div>
+                <div style="font-size:12px;font-weight:600;color:#c2410c">🧹 WIB Data Decontamination</div>
+                <div style="font-size:11px;color:#9a3412">Removes company/employer records incorrectly imported into Workforce Boards. Detects LLC, Inc, Corp, Healthcare etc. patterns. Run dry-run first to preview.</div>
+              </div>
+              <div style="display:flex;gap:6px;flex-direction:column;align-items:flex-end">
+                <button class="btn btn-sm" style="background:#fff7ed;border:.5px solid #f97316;color:#c2410c" onclick="wibDeconDryRun()">Preview (Dry Run)</button>
+                <button class="btn btn-danger btn-sm" onclick="wibDeconExecute()">Run Purge</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>`
@@ -9793,6 +9803,101 @@ if (document.readyState==='complete'||document.readyState==='interactive') { ini
 else document.addEventListener('DOMContentLoaded', initAircallWebhookListener)
 
 render()
+
+// ─── WIB DECONTAMINATION HELPERS (Settings → Danger Zone) ──────────────────
+// Triggered by "Preview (Dry Run)" and "Run Purge" buttons in Settings.
+
+async function wibDeconDryRun() {
+  showToast('Running dry-run preview...', 'info')
+  try {
+    const result = await api('/api/admin/purge-wib-contamination', 'POST', { dry_run: true })
+    const sample = (result.sample_contaminated || []).slice(0,15)
+      .map(r => `• ${r.name} (${r.state||'?'}) — ${r.reason}`).join('\n')
+    const msg = [
+      `Total WIB records in DB:  ${result.total_wib_records}`,
+      `Would DELETE (companies): ${result.contaminated_count}`,
+      `Would KEEP (real WIBs):   ${result.clean_count}`,
+      '',
+      'Sample records that would be deleted:',
+      sample || '(none found)',
+    ].join('\n')
+    _showDeconModal('Dry Run Preview — Nothing Deleted Yet', `
+      <pre style="font-size:11px;white-space:pre-wrap;background:var(--bg2,#f8fafc);padding:12px;border-radius:8px;max-height:340px;overflow-y:auto;line-height:1.5">${escHtml(msg)}</pre>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+        <button class="btn" onclick="_closeDeconModal()">Close</button>
+        <button class="btn btn-danger" onclick="_closeDeconModal();wibDeconExecute()">Run Real Purge →</button>
+      </div>
+    `)
+  } catch(e) {
+    showToast('Dry run failed: ' + e.message, 'error')
+  }
+}
+
+async function wibDeconExecute() {
+  const confirmed = prompt(
+    'WIB DECONTAMINATION\n\n' +
+    'Permanently removes company/employer records incorrectly\n' +
+    'imported into Workforce Boards (LLC, Inc, Healthcare, etc).\n\n' +
+    'Run the Dry Run preview first to see what will be removed.\n\n' +
+    'Type exactly:  CONFIRM PURGE'
+  )
+  if (confirmed !== 'CONFIRM PURGE') {
+    if (confirmed !== null) showToast('Cancelled — must type exactly: CONFIRM PURGE', 'warning')
+    return
+  }
+  showToast('Purging contaminated records...', 'info')
+  try {
+    const result = await api('/api/admin/purge-wib-contamination', 'POST', {
+      dry_run: false,
+      confirm_phrase: 'CONFIRM PURGE',
+    })
+    _showDeconModal('✅ Decontamination Complete', `
+      <div style="text-align:center;padding:8px 0">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0">
+          <div style="background:#fef2f2;padding:14px;border-radius:8px">
+            <div style="font-size:26px;font-weight:700;color:#dc2626">${result.deleted||0}</div>
+            <div style="font-size:11px;color:#dc2626">Records Deleted</div>
+          </div>
+          <div style="background:#f0fdf4;padding:14px;border-radius:8px">
+            <div style="font-size:26px;font-weight:700;color:#16a34a">${result.clean_preserved||0}</div>
+            <div style="font-size:11px;color:#16a34a">WIBs Preserved</div>
+          </div>
+        </div>
+        <p style="font-size:12px;color:var(--text3,#64748b);margin:0 0 16px">${escHtml(result.message||'Done')}</p>
+        <div style="display:flex;gap:8px;justify-content:center">
+          <button class="btn" onclick="_closeDeconModal()">Close</button>
+          <button class="btn btn-primary" onclick="_closeDeconModal();loadPage('wibs')">View Workforce Boards</button>
+        </div>
+      </div>
+    `)
+    showToast('Purge complete — ' + (result.deleted||0) + ' records removed', 'success')
+  } catch(e) {
+    showToast('Purge failed: ' + e.message, 'error')
+  }
+}
+
+function _showDeconModal(title, bodyHtml) {
+  _closeDeconModal()
+  const overlay = document.createElement('div')
+  overlay.id = 'decon-overlay'
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10001;display:flex;align-items:center;justify-content:center'
+  overlay.onclick = (e) => { if(e.target === overlay) _closeDeconModal() }
+  overlay.innerHTML = `
+    <div style="background:var(--bg1,#fff);border-radius:14px;padding:24px;max-width:540px;width:92vw;max-height:82vh;overflow-y:auto;box-shadow:0 8px 40px rgba(0,0,0,.28)">
+      <div style="font-size:14px;font-weight:700;margin-bottom:14px">${escHtml(title)}</div>
+      ${bodyHtml}
+    </div>
+  `
+  document.body.appendChild(overlay)
+}
+
+function _closeDeconModal() {
+  const el = document.getElementById('decon-overlay')
+  if(el) el.remove()
+}
+// ────────────────────────────────────────────────────────────────────────────
+
+
 
 
 // ═══════════════════════════════════════════════════════════════════════════
