@@ -4331,9 +4331,10 @@ window._IMPORT_SYNONYM_TABLE={
   'supported by':'supported_by','is 25%':'is_25_pct_operator','is 25% operator':'is_25_pct_operator',
   'last contact date':'last_contact_date','last contacted':'last_contact_date','last activity date':'last_contact_date','last modified time':'last_contact_date',
   'short name':'short_name','company type':'company_type','industry':'company_type','sector':'company_type',
-  'wib name':'wib_name','workforce board':'wib_name','board name':'wib_name','local board':'wib_name','wib':'wib_name',
-  'wib email':'wib_email','wib email address':'wib_email','wib phone':'wib_phone',
-  'source url':'source_url','website url':'source_url',
+  'wib name':'wib_name','wib board name':'wib_name','workforce board':'wib_name','board name':'wib_name','local board':'wib_name','wib':'wib_name',
+  'primary contact person':'contacts_json','primary contact':'contacts_json','contact person':'contacts_json',
+  'wib email':'wib_email','wib email address':'wib_email','contact email address':'wib_email','wib phone':'wib_phone','phone number':'wib_phone',
+  'source url':'source_url','website url':'source_url','available funding/iwt focus':'notes','available funding':'notes','iwt focus':'notes','funding focus':'notes',
   'wib type':'wib_type','type':{'wibs':'wib_type','companies':'company_type'},'board type':'wib_type',
   'max award':'max_award_per_ein','max award per ein':'max_award_per_ein','maximum award':'max_award_per_ein','max per ein':'max_award_per_ein',
   'max award per employee':'max_award_per_employee','max per employee':'max_award_per_employee',
@@ -4424,7 +4425,7 @@ window._FIELD_KEYWORDS = {
   primary_contact_email:['email','contact','work','business'],
   primary_contact_phone:['phone','mobile','cell','contact'],
   /* WIBs */
-  wib_name:           ['wib','workforce','board','local'],
+  wib_name:           ['wib','workforce','board','local','investment'],
   wib_email:          ['wib','email'],
   wib_phone:          ['wib','phone'],
   /* Funding */
@@ -8293,10 +8294,26 @@ async function processImportFile(input,type){
       const buf=await file.arrayBuffer()
       const wb=XLSX.read(buf,{type:'array'})
       const ws=wb.Sheets[wb.SheetNames[0]]
-      const dataRows=XLSX.utils.sheet_to_json(ws,{defval:''})
-      if(!dataRows.length){preview.innerHTML='<div class="alert alert-error">No data found in Excel file</div>';return}
+      // Smart header detection: find the first row where most cells are non-empty strings
+      // This handles files with 1-3 title/subtitle rows before the real headers
+      const rawAoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:''})
+      let headerRowIdx=0
+      for(let i=0;i<Math.min(rawAoa.length,5);i++){
+        const row=rawAoa[i]
+        const nonEmpty=row.filter(c=>String(c||'').trim().length>0)
+        // Real header row: multiple non-empty cells, no cell is much longer than ~60 chars
+        const looksLikeHeader=nonEmpty.length>=3&&nonEmpty.every(c=>String(c).length<80)
+        // Skip rows that are a single long title string
+        const isTitleRow=nonEmpty.length<=2&&nonEmpty.some(c=>String(c).length>40)
+        if(looksLikeHeader&&!isTitleRow){headerRowIdx=i;break}
+      }
+      const headers=rawAoa[headerRowIdx].map(h=>String(h||'').trim()).filter(Boolean)
+      const dataRows=rawAoa.slice(headerRowIdx+1)
+        .filter(row=>row.some(c=>String(c||'').trim()))
+        .map(row=>{const obj={};headers.forEach((h,i)=>{obj[h]=row[i]===undefined?'':row[i]});return obj})
+      if(!dataRows.length){preview.innerHTML='<div class="alert alert-error">No data found in Excel file (detected headers at row '+(headerRowIdx+1)+')</div>';return}
       renderImportPreviewAndMap(dataRows,type,preview,file.name)
-    }catch(err){preview.innerHTML=`<div class="alert alert-error">Failed to read Excel: ${err.message}</div>`}
+    }catch(err){preview.innerHTML=`<div class="alert alert-error">Failed to read Excel: ${err?.message||String(err)||'unknown error'}</div>`}
     return
   }
   const reader=new FileReader()
