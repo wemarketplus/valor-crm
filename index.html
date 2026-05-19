@@ -1155,7 +1155,7 @@ function renderApp(){
       </div>
       <div class="sb-nav">
         ${sbi('dashboard','🏠','Home')}
-        ${sbi('notifications','🔔','Notifications',3,'red')}
+        ${sbi('notifications','🔔','Notifications',window._notifUnread||'',window._notifUnread?'red':'')}
         ${sbi('tasks','☑','Tasks')}
         ${sbi('notes','📄','Notes')}
         ${sbi('emails','✉','Emails')}
@@ -1220,6 +1220,16 @@ function renderApp(){
   <div id="ie-overlay" onclick="closeAllIE()"></div>`
 
   loadPage('dashboard')
+  // Initialize notification badge immediately after render (fixes ghost badge bug)
+  loadNotificationBadge()
+  // Subscribe to real-time notification pushes via Supabase
+  subscribeToNotifications()
+  // Start SSE connection for live chat and presence
+  initChatSSE()
+  // Poll notification count every 60 seconds
+  if(!window._notifPollInterval){
+    window._notifPollInterval = setInterval(loadNotificationBadge, 60000)
+  }
 }
 
 function sbi(page,icon,label,badge='',badgeColor=''){
@@ -3282,13 +3292,31 @@ window._notifUnread = 0
 // Fetch unread count and update sidebar badge
 async function loadNotificationBadge(){
   try {
-    const data = await api('/api/notifications?limit=1&unread_only=true')
+    // Use the dedicated atomic count endpoint (fixes ghost badge bug)
+    // This avoids the pagination cap that caused old count to be stale
+    const data = await api('/api/notifications/unread-count')
     const count = data.unread_count || 0
     window._notifUnread = count
+    // Update the sidebar nav badge (the dynamic version, not the hardcoded one)
     const badge = document.getElementById('notif-badge')
     if(badge){
       badge.textContent = count > 0 ? (count > 99 ? '99+' : String(count)) : ''
       badge.style.display = count > 0 ? 'inline-flex' : 'none'
+    }
+    // Also update the sb-badge on the notifications nav item if present
+    const navItem = document.getElementById('nav-notifications')
+    if(navItem){
+      let sbBadge = navItem.querySelector('.sb-badge')
+      if(count > 0){
+        if(!sbBadge){
+          sbBadge = document.createElement('span')
+          sbBadge.className = 'sb-badge red'
+          navItem.appendChild(sbBadge)
+        }
+        sbBadge.textContent = count > 99 ? '99+' : String(count)
+      } else {
+        if(sbBadge) sbBadge.remove()
+      }
     }
   } catch(_) {}
 }
@@ -5220,7 +5248,9 @@ async function pageInvoices(){
     <div class="ie-wrap">
       <button class="btn ie-btn" onclick="toggleIEMenu('inv-ie')">⬆ Export ∨</button>
       <div class="ie-menu" id="inv-ie">
+        <div class="ie-item" onclick="closeAllIE();importInvoices()"><span class="ie-icon">📥</span>Import CSV/Excel</div>
         <div class="ie-item" onclick="closeAllIE();exportCSV('invoices')"><span class="ie-icon">📤</span>Export CSV</div>
+        <div class="ie-item" onclick="closeAllIE();exportXlsx('invoices')"><span class="ie-icon">📊</span>Export Excel</div>
       </div>
     </div>
     <button class="btn btn-primary" onclick="openNewInvoiceModal()">+ New Invoice</button>`)
@@ -5715,7 +5745,12 @@ function filterPaymentsTable(q){
 }
 async function pageTraining(){
   setTopbar('Training Providers','Approved Curriculum Partners',`
-    <button class="btn btn-primary" onclick="openNewTrainingProviderModal()">+ Add Provider</button>`)
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-ghost btn-sm" onclick="importTrainingProviders()" title="Import CSV/Excel">⬆ Import</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportTrainingProviders()" title="Export CSV">⬇ Export CSV</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportTrainingProvidersXlsx()" title="Export Excel">⬇ Export Excel</button>
+      <button class="btn btn-primary" onclick="openNewTrainingProviderModal()">+ Add Provider</button>
+    </div>`)
   clearViewbar()
   const pa = document.getElementById('page-area')
   pa.innerHTML = `<div class="loading">⏳ Loading training providers...</div>`
@@ -9758,6 +9793,543 @@ if (document.readyState==='complete'||document.readyState==='interactive') { ini
 else document.addEventListener('DOMContentLoaded', initAircallWebhookListener)
 
 render()
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FLOATING LIVE CHAT WIDGET — Real-time team communication
+// Supports public group channels + User-to-User Direct Messages.
+// Uses SSE (Server-Sent Events) for live message delivery from /api/chat/stream.
+// Falls back to periodic polling if SSE is unavailable.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── State ──────────────────────────────────────────────────────────────────
+window._chatSSE           = null    // EventSource connection
+window._chatSSERetries    = 0       // reconnection counter
+window._chatWidgetOpen    = false   // is the widget expanded?
+window._chatWidgetChannel = 'general' // active channel ('general' or 'dm-<userId>')
+window._chatWidgetDMUser  = null    // DM recipient if in DM mode
+window._chatPollTimer     = null    // fallback polling timer
+window._chatDMUnread      = {}      // {userId: count}
+window._chatNotifEnabled  = false   // browser notification permission
+
+// ── CSS injection ──────────────────────────────────────────────────────────
+;(function injectChatCSS(){
+  if(document.getElementById('chat-widget-css')) return
+  const style = document.createElement('style')
+  style.id = 'chat-widget-css'
+  style.textContent = `
+    /* ── Floating chat widget ───────────────────────────────────────────── */
+    #fw-chat-toggle{
+      position:fixed;bottom:22px;right:22px;width:48px;height:48px;
+      border-radius:50%;background:var(--blue,#1a56db);color:#fff;
+      border:none;cursor:pointer;font-size:20px;box-shadow:0 4px 16px rgba(0,0,0,.3);
+      display:flex;align-items:center;justify-content:center;z-index:9998;
+      transition:transform .15s;
+    }
+    #fw-chat-toggle:hover{transform:scale(1.08)}
+    #fw-chat-badge{
+      position:absolute;top:-4px;right:-4px;width:18px;height:18px;
+      background:#e11d48;color:#fff;border-radius:50%;font-size:9px;
+      display:none;align-items:center;justify-content:center;font-weight:700;
+      border:2px solid #fff;
+    }
+    #fw-chat-panel{
+      position:fixed;bottom:82px;right:22px;width:340px;height:480px;
+      background:var(--bg1,#fff);border:.5px solid var(--border,#e2e8f0);
+      border-radius:14px;box-shadow:0 8px 40px rgba(0,0,0,.18);
+      display:none;flex-direction:column;z-index:9997;overflow:hidden;
+    }
+    #fw-chat-panel.open{display:flex}
+    .fw-ch-header{
+      padding:10px 12px;border-bottom:.5px solid var(--border,#e2e8f0);
+      display:flex;align-items:center;gap:8px;flex-shrink:0;
+      background:var(--bg1,#fff);
+    }
+    .fw-ch-header select{
+      font-size:11px;border:.5px solid var(--border1,#cbd5e0);border-radius:6px;
+      padding:2px 6px;background:var(--bg2,#f8fafc);color:var(--text,#111);
+      flex:1;cursor:pointer;
+    }
+    .fw-ch-status{width:8px;height:8px;border-radius:50%;background:#16a34a;flex-shrink:0}
+    .fw-ch-status.disconnected{background:#dc2626}
+    .fw-ch-msgs{
+      flex:1;overflow-y:auto;padding:10px 10px 6px;
+      display:flex;flex-direction:column;gap:4px;
+    }
+    .fw-msg{display:flex;gap:6px;align-items:flex-start;max-width:100%}
+    .fw-msg.mine{flex-direction:row-reverse}
+    .fw-msg-av{
+      width:26px;height:26px;border-radius:50%;flex-shrink:0;
+      display:flex;align-items:center;justify-content:center;
+      font-size:9px;font-weight:700;
+      background:var(--blue-bg,#eff6ff);color:var(--blue-t,#1e40af);
+    }
+    .fw-msg.mine .fw-msg-av{background:var(--green-bg,#f0fdf4);color:var(--green-t,#166534)}
+    .fw-msg-body{
+      max-width:72%;background:var(--gray2,#f1f5f9);
+      border-radius:10px 10px 10px 2px;padding:6px 9px;
+      font-size:11.5px;line-height:1.4;color:var(--text,#111);
+      word-break:break-word;
+    }
+    .fw-msg.mine .fw-msg-body{
+      background:var(--blue,#1a56db);color:#fff;
+      border-radius:10px 10px 2px 10px;
+    }
+    .fw-msg-meta{font-size:9px;color:var(--text3,#94a3b8);margin-top:1px}
+    .fw-msg-sender{font-size:9px;font-weight:600;color:var(--text2,#64748b);margin-bottom:1px}
+    .fw-ch-input-row{
+      padding:8px 10px;border-top:.5px solid var(--border,#e2e8f0);
+      display:flex;gap:6px;flex-shrink:0;align-items:flex-end;
+    }
+    .fw-ch-input-row textarea{
+      flex:1;border:.5px solid var(--border1,#cbd5e0);border-radius:8px;
+      padding:6px 8px;font-size:11.5px;font-family:inherit;
+      resize:none;outline:none;min-height:32px;max-height:80px;
+      background:var(--bg2,#f8fafc);color:var(--text,#111);line-height:1.4;
+    }
+    .fw-send-btn{
+      width:32px;height:32px;border-radius:8px;border:none;
+      background:var(--blue,#1a56db);color:#fff;cursor:pointer;
+      display:flex;align-items:center;justify-content:center;font-size:14px;
+      flex-shrink:0;
+    }
+    .fw-send-btn:hover{opacity:.85}
+    .fw-ch-empty{
+      text-align:center;font-size:11px;color:var(--text3,#94a3b8);
+      padding:20px;margin:auto;
+    }
+    .fw-presence-bar{
+      padding:4px 10px;font-size:9px;color:var(--text3,#94a3b8);
+      border-bottom:.5px solid var(--border,#e2e8f0);flex-shrink:0;
+      display:flex;align-items:center;gap:4px;
+    }
+    .fw-presence-dot{width:6px;height:6px;background:#16a34a;border-radius:50%}
+    .fw-notif-req{
+      padding:2px 10px;font-size:9px;color:var(--text3,#94a3b8);
+      cursor:pointer;text-decoration:underline;
+    }
+  `
+  document.head.appendChild(style)
+})()
+
+// ── Build the floating widget DOM ──────────────────────────────────────────
+function buildChatWidget(){
+  if(document.getElementById('fw-chat-toggle')) return
+
+  // Toggle button
+  const btn = document.createElement('button')
+  btn.id = 'fw-chat-toggle'
+  btn.title = 'Team Chat'
+  btn.innerHTML = `💬<span id="fw-chat-badge"></span>`
+  btn.onclick = toggleChatWidget
+  document.body.appendChild(btn)
+
+  // Panel
+  const panel = document.createElement('div')
+  panel.id = 'fw-chat-panel'
+  panel.innerHTML = `
+    <div class="fw-ch-header">
+      <span class="fw-ch-status disconnected" id="fw-sse-status" title="Connecting..."></span>
+      <select id="fw-ch-select" onchange="fwSwitchChannel(this.value)" style="flex:1">
+        <option value="general"># general</option>
+        <option value="wib-outreach"># wib-outreach</option>
+        <option value="applications"># applications</option>
+        <option value="compliance"># compliance</option>
+        <option value="announcements"># announcements</option>
+      </select>
+      <span id="fw-notif-req" class="fw-notif-req" onclick="requestChatNotifPerms()" title="Enable browser notifications" style="display:none">🔔 Enable alerts</span>
+      <button style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--text3,#94a3b8);padding:0 0 0 4px" onclick="toggleChatWidget()" title="Minimize">✕</button>
+    </div>
+    <div class="fw-presence-bar" id="fw-presence-bar">
+      <span class="fw-presence-dot"></span>
+      <span id="fw-presence-count">Connecting...</span>
+    </div>
+    <div class="fw-ch-msgs" id="fw-chat-msgs"></div>
+    <div class="fw-ch-input-row">
+      <textarea id="fw-chat-input" rows="1"
+        placeholder="Message #general... (Enter to send)"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();fwSendMsg()}"
+        oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px'"></textarea>
+      <button class="fw-send-btn" onclick="fwSendMsg()" title="Send">➤</button>
+    </div>
+  `
+  document.body.appendChild(panel)
+
+  // Request browser notification permission if not yet granted
+  if(Notification.permission === 'default'){
+    document.getElementById('fw-notif-req').style.display = 'inline'
+  } else if(Notification.permission === 'granted'){
+    window._chatNotifEnabled = true
+  }
+}
+
+function toggleChatWidget(){
+  window._chatWidgetOpen = !window._chatWidgetOpen
+  const panel = document.getElementById('fw-chat-panel')
+  if(!panel) { buildChatWidget(); window._chatWidgetOpen = true }
+  const p = document.getElementById('fw-chat-panel')
+  if(window._chatWidgetOpen){
+    p.classList.add('open')
+    // Clear unread badge
+    const badge = document.getElementById('fw-chat-badge')
+    if(badge){ badge.textContent=''; badge.style.display='none' }
+    fwLoadMessages()
+  } else {
+    p.classList.remove('open')
+  }
+}
+
+function requestChatNotifPerms(){
+  Notification.requestPermission().then(perm => {
+    window._chatNotifEnabled = perm === 'granted'
+    const el = document.getElementById('fw-notif-req')
+    if(el) el.style.display = 'none'
+  })
+}
+
+function fwSwitchChannel(ch){
+  window._chatWidgetChannel = ch
+  const input = document.getElementById('fw-chat-input')
+  if(input) input.placeholder = `Message #${ch}... (Enter to send)`
+  fwLoadMessages()
+}
+
+// ── Load message history ────────────────────────────────────────────────────
+async function fwLoadMessages(){
+  const msgsEl = document.getElementById('fw-chat-msgs')
+  if(!msgsEl) return
+  msgsEl.innerHTML = '<div class="fw-ch-empty">⏳ Loading...</div>'
+  try {
+    const ch = window._chatWidgetChannel
+    const isDM = ch.startsWith('dm-')
+    let msgs = []
+    if(isDM){
+      const userId = ch.replace('dm-', '')
+      const data = await api('/api/dm/' + userId)
+      msgs = data.data || []
+    } else {
+      const data = await api('/api/chat/' + encodeURIComponent(ch) + '?limit=40')
+      msgs = (data.data || []).reverse()
+    }
+    if(!msgs.length){
+      msgsEl.innerHTML = '<div class="fw-ch-empty">No messages yet. Say hello! 👋</div>'
+      return
+    }
+    msgsEl.innerHTML = msgs.map(m => fwRenderMsg(m)).join('')
+    msgsEl.scrollTop = msgsEl.scrollHeight
+  } catch(e){
+    const msgsEl2 = document.getElementById('fw-chat-msgs')
+    if(msgsEl2) msgsEl2.innerHTML = `<div class="fw-ch-empty">⚠️ ${escHtml(e.message)}</div>`
+  }
+}
+
+function fwRenderMsg(m){
+  const isMine = m.sender_id === currentUser?.id || m.is_mine
+  const name = escHtml(m.sender_name || '?')
+  const initials = name.slice(0,2).toUpperCase()
+  const time = m.created_at ? new Date(m.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : ''
+  const body = escHtml(m.content || '')
+  return `<div class="fw-msg${isMine?' mine':''}">
+    <div class="fw-msg-av">${initials}</div>
+    <div>
+      ${!isMine ? `<div class="fw-msg-sender">${name}</div>` : ''}
+      <div class="fw-msg-body">${body}</div>
+      <div class="fw-msg-meta">${time}</div>
+    </div>
+  </div>`
+}
+
+function fwAppendMsg(m){
+  const msgsEl = document.getElementById('fw-chat-msgs')
+  if(!msgsEl) return
+  // Remove empty state
+  const empty = msgsEl.querySelector('.fw-ch-empty')
+  if(empty) empty.remove()
+  const el = document.createElement('div')
+  el.innerHTML = fwRenderMsg(m)
+  msgsEl.appendChild(el.firstChild)
+  msgsEl.scrollTop = msgsEl.scrollHeight
+}
+
+// ── Send message ────────────────────────────────────────────────────────────
+async function fwSendMsg(){
+  const input = document.getElementById('fw-chat-input')
+  if(!input) return
+  const text = input.value.trim()
+  if(!text) return
+  input.value = ''; input.style.height = '32px'
+
+  const ch = window._chatWidgetChannel
+  const isDM = ch.startsWith('dm-')
+
+  // Optimistic render
+  fwAppendMsg({
+    sender_id:   currentUser?.id,
+    sender_name: currentUser?.full_name || currentUser?.email || 'You',
+    content:     text,
+    created_at:  new Date().toISOString(),
+    is_mine:     true,
+  })
+
+  try {
+    if(isDM){
+      const userId = ch.replace('dm-', '')
+      await api('/api/dm/' + userId, 'POST', { content: text })
+    } else {
+      await api('/api/chat/' + encodeURIComponent(ch), 'POST', { content: text })
+    }
+  } catch(e){
+    showToast('Message failed: ' + e.message, 'error')
+  }
+}
+
+// ── SSE connection for live updates ──────────────────────────────────────────
+function initChatSSE(){
+  if(!window.token || window._chatSSE) return
+
+  const connectSSE = () => {
+    if(window._chatSSE) { try { window._chatSSE.close() } catch(_){} }
+
+    const url = '/api/chat/stream?token=' + encodeURIComponent(window.token)
+    const es  = new EventSource(url)
+    window._chatSSE = es
+
+    es.addEventListener('presence', e => {
+      try {
+        const users = JSON.parse(e.data)
+        const presenceEl = document.getElementById('fw-presence-count')
+        if(presenceEl) presenceEl.textContent = users.length + ' online'
+        // Update status dot
+        const dot = document.getElementById('fw-sse-status')
+        if(dot){ dot.classList.remove('disconnected'); dot.title='Connected' }
+        window._chatSSERetries = 0
+      } catch(_) {}
+    })
+
+    es.addEventListener('chat_message', e => {
+      try {
+        const { channel, msg } = JSON.parse(e.data)
+        // If widget is open on this channel, append the message
+        if(window._chatWidgetOpen && window._chatWidgetChannel === channel){
+          // Only append if not from ourselves (optimistic already showed it)
+          if(msg.sender_id !== currentUser?.id) fwAppendMsg(msg)
+        } else {
+          // Flash the chat toggle button and show badge
+          fwIncrementChatBadge()
+          // Fire browser notification
+          fwFireNotification(msg.sender_name || 'Team', msg.content, channel)
+        }
+      } catch(_) {}
+    })
+
+    es.addEventListener('dm', e => {
+      try {
+        const msg = JSON.parse(e.data)
+        const dmCh = 'dm-' + msg.sender_id
+        if(window._chatWidgetOpen && window._chatWidgetChannel === dmCh){
+          if(!msg.is_mine) fwAppendMsg(msg)
+        } else {
+          fwIncrementChatBadge()
+          fwFireNotification(msg.sender_name || 'Direct Message', msg.content, 'DM')
+          // Track DM unread
+          if(msg.sender_id) window._chatDMUnread[msg.sender_id] = (window._chatDMUnread[msg.sender_id]||0)+1
+        }
+      } catch(_) {}
+    })
+
+    es.onerror = () => {
+      const dot = document.getElementById('fw-sse-status')
+      if(dot){ dot.classList.add('disconnected'); dot.title='Disconnected — reconnecting...' }
+      es.close(); window._chatSSE = null
+      window._chatSSERetries++
+      // Exponential backoff: 3s, 6s, 12s, max 30s
+      const delay = Math.min(3000 * Math.pow(2, window._chatSSERetries - 1), 30000)
+      console.log(`[Chat SSE] Reconnecting in ${delay}ms (attempt ${window._chatSSERetries})`)
+      setTimeout(connectSSE, delay)
+    }
+
+    es.onopen = () => {
+      const dot = document.getElementById('fw-sse-status')
+      if(dot){ dot.classList.remove('disconnected'); dot.title='Connected' }
+      window._chatSSERetries = 0
+    }
+  }
+
+  connectSSE()
+
+  // Heartbeat to keep server presence alive
+  setInterval(async () => {
+    if(window.token) {
+      try { await api('/api/chat/heartbeat', 'POST', {}) } catch(_){}
+    }
+  }, 25000)
+}
+
+function fwIncrementChatBadge(){
+  const badge = document.getElementById('fw-chat-badge')
+  if(!badge) return
+  const current = parseInt(badge.textContent) || 0
+  badge.textContent = current + 1 > 99 ? '99+' : String(current + 1)
+  badge.style.display = 'inline-flex'
+  // Flash animation
+  const btn = document.getElementById('fw-chat-toggle')
+  if(btn){ btn.style.animation='none'; setTimeout(()=>{ btn.style.animation='' },10) }
+}
+
+function fwFireNotification(senderName, text, channel){
+  if(!window._chatNotifEnabled || Notification.permission !== 'granted') return
+  if(document.hasFocus() && window._chatWidgetOpen) return  // don't notify if widget is visible
+  try {
+    const notif = new Notification(`${senderName} — ${channel}`, {
+      body: (text||'').substring(0,80),
+      icon: '/favicon.ico',
+      tag:  'valor-chat-' + channel,
+    })
+    notif.onclick = () => { window.focus(); if(!window._chatWidgetOpen) toggleChatWidget() }
+    setTimeout(() => notif.close(), 5000)
+  } catch(_) {}
+}
+
+// ── Import/Export helpers for Training Providers ────────────────────────────
+function importTrainingProviders(){
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.csv,.xlsx,.xls'
+  input.onchange = async (e) => {
+    const file = e.target.files[0]
+    if(!file) return
+    showToast('Importing training providers...', 'info')
+    const fd = new FormData()
+    fd.append('file', file)
+    try {
+      const r = await fetch('/api/import/file/training_providers', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + window.token },
+        body: fd,
+      })
+      const result = await r.json()
+      if(!r.ok) throw new Error(result.error || 'Import failed')
+      showToast(`Import complete: ${result.created} providers added${result.error_count>0?' ('+result.error_count+' errors)':''}`, result.error_count>0?'warning':'success')
+      pageTraining()
+    } catch(err) { showToast('Import failed: ' + err.message, 'error') }
+  }
+  input.click()
+}
+
+async function exportTrainingProviders(){
+  try {
+    showToast('Exporting...', 'info')
+    const r = await fetch('/api/training-providers/export/csv', {
+      headers: { 'Authorization': 'Bearer ' + window.token }
+    })
+    if(!r.ok) throw new Error('Export failed')
+    const blob = await r.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url; a.download = `training-providers-${new Date().toISOString().split('T')[0]}.csv`
+    a.click(); URL.revokeObjectURL(url)
+    showToast('Export downloaded', 'success')
+  } catch(e) { showToast('Export failed: ' + e.message, 'error') }
+}
+
+async function exportTrainingProvidersXlsx(){
+  try {
+    showToast('Exporting Excel...', 'info')
+    const r = await fetch('/api/training-providers/export/xlsx', {
+      headers: { 'Authorization': 'Bearer ' + window.token }
+    })
+    if(!r.ok) throw new Error('Export failed')
+    const blob = await r.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url; a.download = `training-providers-${new Date().toISOString().split('T')[0]}.xlsx`
+    a.click(); URL.revokeObjectURL(url)
+    showToast('Excel export downloaded', 'success')
+  } catch(e) { showToast('Excel export failed: ' + e.message, 'error') }
+}
+
+// ── Import/Export helpers for Invoices ─────────────────────────────────────
+function importInvoices(){
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.csv,.xlsx,.xls'
+  input.onchange = async (e) => {
+    const file = e.target.files[0]
+    if(!file) return
+    showToast('Importing invoices...', 'info')
+    const fd = new FormData()
+    fd.append('file', file)
+    try {
+      // Map invoice imports through the companies-style import endpoint
+      const r = await fetch('/api/import/file/invoices', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + window.token },
+        body: fd,
+      })
+      const result = await r.json()
+      if(!r.ok) throw new Error(result.error || 'Import failed')
+      showToast(`Import complete: ${result.created || 0} invoices imported`, 'success')
+      pageInvoices()
+    } catch(err) { showToast('Import failed: ' + err.message, 'error') }
+  }
+  input.click()
+}
+
+async function exportXlsx(type){
+  try {
+    showToast('Generating Excel file...', 'info')
+    const r = await fetch(`/api/export/${type}/xlsx`, {
+      headers: { 'Authorization': 'Bearer ' + window.token }
+    })
+    if(!r.ok) { const d=await r.json(); throw new Error(d.error||'Export failed') }
+    const blob = await r.blob()
+    const url  = URL.createObjectURL(blob)
+    const a    = document.createElement('a')
+    a.href = url; a.download = `valor-${type}-${new Date().toISOString().split('T')[0]}.xlsx`
+    a.click(); URL.revokeObjectURL(url)
+    showToast('Excel file downloaded', 'success')
+  } catch(e) { showToast(e.message, 'error') }
+}
+
+// ── Auto-initialize when user logs in ─────────────────────────────────────
+// buildChatWidget is called from renderApp via initChatSSE
+const _origInitChatSSE = window.initChatSSE
+window.initChatSSE = function(){
+  buildChatWidget()
+  if(_origInitChatSSE) _origInitChatSSE()
+  else {
+    // Inline SSE init if the outer function wasn't defined yet
+    if(!window.token || window._chatSSE) return
+    const connectSSE = () => {
+      const url = '/api/chat/stream?token=' + encodeURIComponent(window.token)
+      const es  = new EventSource(url)
+      window._chatSSE = es
+      es.addEventListener('presence', ev => {
+        try { const u=JSON.parse(ev.data); const el=document.getElementById('fw-presence-count'); if(el) el.textContent=u.length+' online'; const dot=document.getElementById('fw-sse-status'); if(dot) dot.classList.remove('disconnected') } catch(_){}
+      })
+      es.addEventListener('chat_message', ev => {
+        try { const {channel,msg}=JSON.parse(ev.data); if(window._chatWidgetOpen&&window._chatWidgetChannel===channel){if(msg.sender_id!==currentUser?.id)fwAppendMsg(msg)}else{fwIncrementChatBadge();fwFireNotification(msg.sender_name||'Team',msg.content,channel)} } catch(_){}
+      })
+      es.addEventListener('dm', ev => {
+        try { const msg=JSON.parse(ev.data); const dmCh='dm-'+msg.sender_id; if(window._chatWidgetOpen&&window._chatWidgetChannel===dmCh){if(!msg.is_mine)fwAppendMsg(msg)}else{fwIncrementChatBadge();fwFireNotification(msg.sender_name||'DM',msg.content,'DM')} } catch(_){}
+      })
+      es.onerror = () => { es.close(); window._chatSSE=null; setTimeout(connectSSE,5000) }
+    }
+    connectSSE()
+    setInterval(async()=>{ if(window.token){try{await api('/api/chat/heartbeat','POST',{})}catch(_){}} },25000)
+  }
+}
+
+// ── Wire up loadPage to rebuild widget if it gets destroyed ─────────────────
+const _origLoadPage = window.loadPage
+if(typeof _origLoadPage === 'function'){
+  window.loadPage = async function(page){
+    await _origLoadPage(page)
+    // Re-attach widget if needed (page resets innerHTML)
+    if(!document.getElementById('fw-chat-toggle') && currentUser) buildChatWidget()
+  }
+}
+
 </script>
 </body>
 </html>
