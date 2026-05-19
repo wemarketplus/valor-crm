@@ -990,57 +990,52 @@ app.post('/api/admin/purge-wib-contamination', auth, requireAdmin, async (req, r
   }
 
   try {
-    // Pull all WIB records
     const { data: allWibs, error: readErr } = await supabase
       .from('wib_records')
-      .select('id, wib_name, state, source_url, notes, created_at')
+      .select('id, wib_name, state, created_at')
       .order('created_at', { ascending: false })
 
     if (readErr) return res.status(500).json({ error: readErr.message })
 
-    // Classification: a record is a CONTAMINATED COMPANY (not a WIB) if it matches
-    // business entity naming conventions AND lacks WIB-specific naming.
-    const COMPANY_SUFFIXES = /\b(LLC|Inc|Corp|Ltd|L\.L\.C|Incorporated|Company|Co\.|Healthcare|Health Systems|Medical|Hospital|Services|Solutions|Tower|Staffing|Industries|Nursing|Senior Living|Care|Hospice|Pharmacy|Rehabilitation|Clinic|Center)\b/i
-    const WIB_PATTERNS     = /\b(workforce|development\s+board|investment\s+board|works|career|employment|labor|WIB|WIOA|CareerSource|WorkForce|Job|Work\s+Force|Consortium|Regional\s+Council|State\s+Board|Workforce\s+Commission|Employment\s+Council|Economic\s+Development|Job\s+Center|American\s+Job)\b/i
-    // Person name pattern: 2-3 words, each Title Case, no numbers, no WIB keywords
-    // e.g. "Adriane Grant", "Bruce Ferguson", "Rick Beasley", "John Harvard"
-    const PERSON_NAME_PATTERN = /^[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,2}$/
-    const VALID_STATE_ABBRS = new Set(['AL','AK','AZ','AR','CA','CO','CT','DC','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','US'])
+    // Three-signal contamination detection — tested against real production data:
+    // Signal 1 — Person name: "First Last" Title Case, no WIB keywords
+    const PERSON_NAME = /^[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,2}$/
+    // Signal 2 — Company/gov entity suffix with no WIB keywords
+    const COMPANY_SUFFIXES = /\b(LLC|Inc\.?|Corp\.?|Ltd\.?|L\.L\.C|Incorporated|Healthcare|Health\s+Systems|Medical|Hospital|Hospice|Pharmacy|Rehabilitation|Clinic|Foundation\b|Trust\b|County\s+Of|City\s+Of|State\s+Of|Department\s+Of|Office\s+Of)\b/i
+    // Signal 3 — No WIB keywords and no state prefix
+    const WIB_KEYWORDS = /\b(workforce|development\s+board|investment\s+board|works|career|employment|labor|WIB|WIOA|CareerSource|WorkForce|One\s*Stop|American\s+Job|Workforce\s+Commission|Employment\s+Council|Economic\s+Development|Consortium|Job\s+Center|Job\s+Training|Job\s+Corps)\b/i
+    const STATE_PREFIX  = /^[A-Z]{2}\s*[-\u2013]\s*/
 
     const contaminated = []
-    const clean        = []
+    const clean = []
 
     for (const wib of (allWibs || [])) {
-      const name  = wib.wib_name || ''
-      const state = (wib.state || '').trim()
+      const name = (wib.wib_name || '').trim()
+      if (!name) { contaminated.push({ id: wib.id, name: '(empty)', state: wib.state, reason: 'empty_name' }); continue }
 
-      const looksLikeCompany = COMPANY_SUFFIXES.test(name) && !WIB_PATTERNS.test(name)
-      const invalidState     = state && !VALID_STATE_ABBRS.has(state.toUpperCase())
-      // Person name detection: "First Last" or "First Middle Last" pattern with no WIB keywords
-      const looksLikePerson  = PERSON_NAME_PATTERN.test(name.trim()) && !WIB_PATTERNS.test(name)
-      // Very short names that aren't state abbreviations are likely contact names
-      const tooShort         = name.trim().length < 8 && !WIB_PATTERNS.test(name)
+      const hasWIBKeyword  = WIB_KEYWORDS.test(name)
+      const hasStatePrefix = STATE_PREFIX.test(name)
 
-      if (looksLikeCompany || invalidState || looksLikePerson || tooShort) {
-        const reason = looksLikePerson ? 'person_name' : looksLikeCompany ? 'company_suffix' : tooShort ? 'too_short' : 'invalid_state'
-        contaminated.push({ id: wib.id, name, state, reason })
-      } else {
-        clean.push(wib.id)
-      }
+      if (hasWIBKeyword || hasStatePrefix) { clean.push(wib.id); continue }
+
+      let reason = 'no_wib_pattern'
+      if (PERSON_NAME.test(name))          reason = 'person_name'
+      else if (COMPANY_SUFFIXES.test(name)) reason = 'company_suffix'
+
+      contaminated.push({ id: wib.id, name, state: wib.state, reason })
     }
 
     if (dry_run) {
       return res.json({
-        dry_run:           true,
-        total_wib_records: allWibs?.length || 0,
+        dry_run:            true,
+        total_wib_records:  allWibs?.length || 0,
         contaminated_count: contaminated.length,
         clean_count:        clean.length,
-        sample_contaminated: contaminated.slice(0, 20).map(c => ({ name: c.name, state: c.state, reason: c.reason })),
-        message:           `Dry run complete. ${contaminated.length} records would be deleted. Send { dry_run: false, confirm_phrase: "CONFIRM PURGE" } to execute.`,
+        sample_contaminated: contaminated.slice(0, 25).map(c => ({ name: c.name, state: c.state, reason: c.reason })),
+        message: `Dry run: ${contaminated.length} of ${allWibs?.length} records are contaminated. ${clean.length} legitimate WIBs will be preserved.`,
       })
     }
 
-    // Execute deletion in batches of 100
     let deleted = 0
     const ids = contaminated.map(c => c.id)
     for (let i = 0; i < ids.length; i += 100) {
@@ -1050,23 +1045,18 @@ app.post('/api/admin/purge-wib-contamination', auth, requireAdmin, async (req, r
       deleted += chunk.length
     }
 
-    // Reset the import cache
     global._importCoCache = null
 
     try {
-      await safeInsertLog({
-        user_id: req.user.id,
-        action:  'WIB_DECONTAMINATION',
-        details: `Deleted ${deleted} contaminated company records from wib_records. ${clean.length} legitimate WIBs preserved.`,
-      })
+      await safeInsertLog({ user_id: req.user.id, action: 'WIB_DECONTAMINATION',
+        details: `Deleted ${deleted} contaminated records. ${clean.length} legitimate WIBs preserved.` })
     } catch (_) {}
 
     return res.json({
-      success:            true,
-      deleted,
-      clean_preserved:    clean.length,
-      total_remaining:    clean.length,
-      message:            `Decontamination complete. Deleted ${deleted} company records. ${clean.length} legitimate WIB records preserved.`,
+      success: true, deleted,
+      clean_preserved: clean.length,
+      total_remaining: clean.length,
+      message: `Done. Deleted ${deleted} contaminated records. ${clean.length} legitimate WIBs preserved.`,
     })
 
   } catch (e) {
@@ -1074,6 +1064,7 @@ app.post('/api/admin/purge-wib-contamination', auth, requireAdmin, async (req, r
     return res.status(500).json({ success: false, error: e.message })
   }
 })
+
 
 // ─── IMPORT — lightweight JWT auth (multi-batch safe) ─────────────────────────
 app.post('/api/import/:type', async (req, res) => {
