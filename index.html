@@ -10085,12 +10085,12 @@ async function fwSendMsg(){
 
 // ── SSE connection for live updates ──────────────────────────────────────────
 function initChatSSE(){
-  if(!window.token || window._chatSSE) return
+  if(!token || window._chatSSE) return
 
   const connectSSE = () => {
     if(window._chatSSE) { try { window._chatSSE.close() } catch(_){} }
 
-    const url = '/api/chat/stream?token=' + encodeURIComponent(window.token)
+    const url = '/api/chat/stream?token=' + encodeURIComponent(token)
     const es  = new EventSource(url)
     window._chatSSE = es
 
@@ -10159,7 +10159,7 @@ function initChatSSE(){
 
   // Heartbeat to keep server presence alive
   setInterval(async () => {
-    if(window.token) {
+    if(token) {
       try { await api('/api/chat/heartbeat', 'POST', {}) } catch(_){}
     }
   }, 25000)
@@ -10204,7 +10204,7 @@ function importTrainingProviders(){
     try {
       const r = await fetch('/api/import/file/training_providers', {
         method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + window.token },
+        headers: { 'Authorization': 'Bearer ' + token },
         body: fd,
       })
       const result = await r.json()
@@ -10220,7 +10220,7 @@ async function exportTrainingProviders(){
   try {
     showToast('Exporting...', 'info')
     const r = await fetch('/api/training-providers/export/csv', {
-      headers: { 'Authorization': 'Bearer ' + window.token }
+      headers: { 'Authorization': 'Bearer ' + token }
     })
     if(!r.ok) throw new Error('Export failed')
     const blob = await r.blob()
@@ -10236,7 +10236,7 @@ async function exportTrainingProvidersXlsx(){
   try {
     showToast('Exporting Excel...', 'info')
     const r = await fetch('/api/training-providers/export/xlsx', {
-      headers: { 'Authorization': 'Bearer ' + window.token }
+      headers: { 'Authorization': 'Bearer ' + token }
     })
     if(!r.ok) throw new Error('Export failed')
     const blob = await r.blob()
@@ -10263,7 +10263,7 @@ function importInvoices(){
       // Map invoice imports through the companies-style import endpoint
       const r = await fetch('/api/import/file/invoices', {
         method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + window.token },
+        headers: { 'Authorization': 'Bearer ' + token },
         body: fd,
       })
       const result = await r.json()
@@ -10279,7 +10279,7 @@ async function exportXlsx(type){
   try {
     showToast('Generating Excel file...', 'info')
     const r = await fetch(`/api/export/${type}/xlsx`, {
-      headers: { 'Authorization': 'Bearer ' + window.token }
+      headers: { 'Authorization': 'Bearer ' + token }
     })
     if(!r.ok) { const d=await r.json(); throw new Error(d.error||'Export failed') }
     const blob = await r.blob()
@@ -10299,9 +10299,9 @@ window.initChatSSE = function(){
   if(_origInitChatSSE) _origInitChatSSE()
   else {
     // Inline SSE init if the outer function wasn't defined yet
-    if(!window.token || window._chatSSE) return
+    if(!token || window._chatSSE) return
     const connectSSE = () => {
-      const url = '/api/chat/stream?token=' + encodeURIComponent(window.token)
+      const url = '/api/chat/stream?token=' + encodeURIComponent(token)
       const es  = new EventSource(url)
       window._chatSSE = es
       es.addEventListener('presence', ev => {
@@ -10316,7 +10316,7 @@ window.initChatSSE = function(){
       es.onerror = () => { es.close(); window._chatSSE=null; setTimeout(connectSSE,5000) }
     }
     connectSSE()
-    setInterval(async()=>{ if(window.token){try{await api('/api/chat/heartbeat','POST',{})}catch(_){}} },25000)
+    setInterval(async()=>{ if(token){try{await api('/api/chat/heartbeat','POST',{})}catch(_){}} },25000)
   }
 }
 
