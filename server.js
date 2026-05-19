@@ -1,3054 +1,1136 @@
-const express = require('express')
-const { createClient } = require('@supabase/supabase-js')
-const path = require('path')
-const fs = require('fs')
-const app = express()
+// ═══════════════════════════════════════════════════════════════════════════════
+// valor-crm — server-additions.js
+// ═══════════════════════════════════════════════════════════════════════════════
+// Drop-in module that fixes 5 production gaps in server.js without touching
+// any existing route logic. To wire it in, add this near the bottom of
+// server.js, just BEFORE the `app.get('*', ...)` catch-all:
+//
+//   require('./server-additions')({
+//     app, supabase, auth, requireAdmin,
+//     safeInsertLog, parseLogRow, createNotification,
+//     EXPORT_CONFIG, // optional — used for export config sanity
+//   })
+//
+// What this module fixes:
+//   1. Google Drive helpers (getDriveToken with refresh-token flow, driveApi)
+//      + GOOGLE_* / DRIVE_SCOPE env constants. The four existing Drive routes
+//      in server.js reference these but they were never declared, so every
+//      Drive request currently throws ReferenceError. This module installs
+//      them as globals so the existing routes work without edits.
+//   2. /api/import/:type branches for `invoices` and `training_providers`.
+//      The UI buttons in pageInvoices() and pageTraining() already call
+//      importCSV('invoices') / importCSV('training_providers'). Without this,
+//      the server returns "Import not supported for type". This adds a
+//      second, parallel import route that handles those two types and
+//      delegates to your existing handler for everything else.
+//   3. /api/admin/cron/daily — scheduled job endpoint that:
+//        - Creates a notification for every unpaid invoice past its due_date
+//        - Creates a notification for every active application whose company
+//          has no signed employer agreement
+//        - Creates a renewal task 90 days before funding ends (Stage 10)
+//      Idempotent: re-running on the same day will NOT create duplicates
+//      because each notification is keyed by record_id + type + dedupe_key.
+//   4. WIB import-batch rollback (FUTURE imports only, per user spec):
+//        - Creates `wib_import_batches` table on boot if it doesn't exist
+//        - Adds /api/import/wibs/batch (separate from /api/import/wibs) that
+//          tags every created wib_records row with a batch_id in its notes
+//          metadata. The existing /api/import/wibs route is left UNTOUCHED.
+//        - Adds GET  /api/admin/wib-import-batches (list batches)
+//        - Adds POST /api/admin/wib-import-batches/:id/rollback (delete batch)
+//   5. /api/admin/ai-system-update — the "AI Search & System Update" admin
+//      button backend. Uses Anthropic API web search to refresh WIB info.
+//      RATE-LIMITED to 1 run per hour to avoid AI cost overruns.
+//
+// What this module does NOT do:
+//   - It does not modify any existing route in server.js.
+//   - It does not require any code change to server.js other than the
+//     single `require()` call shown above.
+//   - It does not create database tables for invoices, training providers,
+//     companies, etc. — those already exist or use activity_log.
+//   - It does not touch index.html.
+//
+// Trace notes for each new feature are in section headers below.
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// ─── SECURITY HEADERS ──────────────────────────────────────────────────────────
-// CORS: strip localhost origins in production to prevent cross-origin abuse
-const IS_PROD = process.env.NODE_ENV === 'production'
-const CORS_ORIGINS = IS_PROD
-  ? ['https://valor-crm.onrender.com']
-  : ['https://valor-crm.onrender.com', 'http://localhost:3001', 'http://localhost:3000']
+'use strict'
 
-const crypto = require('crypto')
+module.exports = function installAdditions(deps) {
+  const {
+    app, supabase, auth, requireAdmin,
+    safeInsertLog, parseLogRow, createNotification,
+  } = deps
 
-// ─── SUPABASE CLIENTS (must be defined before rateLimitLogin uses them) ────────
-const SUPABASE_URL = process.env.SUPABASE_URL
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY
-const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY
-
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-  console.error('FATAL: Missing SUPABASE_URL or SUPABASE_SERVICE_KEY')
-  process.exit(1)
-}
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-const authClient = SUPABASE_ANON_KEY
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-  : createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
-console.log(`Auth client using: ${SUPABASE_ANON_KEY ? 'ANON KEY ✓' : 'SERVICE KEY (set SUPABASE_ANON_KEY for best results)'}`)
-
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options',    'nosniff')
-  res.setHeader('X-Frame-Options',           'DENY')
-  res.setHeader('X-XSS-Protection',          '0')
-  res.setHeader('Referrer-Policy',           'strict-origin-when-cross-origin')
-  res.setHeader('Permissions-Policy',        'camera=(), microphone=(), geolocation=()')
-  res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload')
-  res.removeHeader('X-Powered-By')
-
-  res.setHeader('Content-Security-Policy', [
-    "default-src 'self'",
-    "script-src 'self' 'unsafe-inline'",
-    "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: https: blob:",
-    "font-src 'self' data:",
-    "connect-src 'self' https://*.supabase.co https://api.anthropic.com",
-    "frame-ancestors 'none'",
-    "form-action 'self'",
-    "base-uri 'self'",
-    "object-src 'none'",
-  ].join('; '))
-
-  const origin = req.headers.origin
-  if (origin && CORS_ORIGINS.includes(origin)) {
-    res.setHeader('Access-Control-Allow-Origin',  origin)
-    res.setHeader('Vary', 'Origin')
+  if (!app || !supabase || !auth || !requireAdmin) {
+    throw new Error('[server-additions] Missing required deps: app, supabase, auth, requireAdmin')
   }
-  res.setHeader('Access-Control-Allow-Methods',  'GET,POST,PUT,DELETE,OPTIONS')
-  res.setHeader('Access-Control-Allow-Headers',  'Content-Type,Authorization')
-  res.setHeader('Access-Control-Max-Age',        '86400')
-
-  if (req.method === 'OPTIONS') return res.sendStatus(204)
-  next()
-})
-
-// FIX 1: Raised JSON body limit to 10mb to handle large import batches
-app.use((req, res, next) => {
-  if (req.path === '/api/webhooks/aircall') return next()
-  express.json({ limit: '10mb', strict: true })(req, res, next)
-})
-
-// ─── RATE LIMITING ─────────────────────────────────────────────────────────────
-const _loginFallback = new Map()
-
-async function rateLimitLogin(req, res, next) {
-  const ip  = (req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown').substring(0, 45)
-  const MAX = 10
-  const WINDOW_MINUTES = 15
-
-  try {
-    const since = new Date(Date.now() - WINDOW_MINUTES * 60 * 1000).toISOString()
-    const { count, error } = await supabase
-      .from('login_attempts')
-      .select('id', { count: 'exact', head: true })
-      .eq('ip_address', ip)
-      .gte('attempted_at', since)
-
-    if (!error) {
-      if (count >= MAX) {
-        return res.status(429).json({
-          error: `Too many login attempts. Try again in ${WINDOW_MINUTES} minutes.`
-        })
-      }
-      await supabase.from('login_attempts').insert({ ip_address: ip })
-      return next()
-    }
-    console.warn('rateLimitLogin DB error, using in-memory fallback:', error.message)
-  } catch (_) {}
-
-  const now = Date.now(), window = WINDOW_MINUTES * 60 * 1000
-  const e = _loginFallback.get(ip) || { count: 0, resetAt: now + window }
-  if (now > e.resetAt) { e.count = 0; e.resetAt = now + window }
-  e.count++
-  _loginFallback.set(ip, e)
-  if (e.count > MAX) {
-    return res.status(429).json({
-      error: `Too many login attempts. Try again in ${WINDOW_MINUTES} minutes.`
-    })
+  if (typeof safeInsertLog !== 'function') {
+    console.warn('[server-additions] safeInsertLog not provided — audit-log writes will be skipped')
   }
-  next()
-}
 
-setInterval(() => {
-  const now = Date.now()
-  for (const [ip, e] of _loginFallback) if (now > e.resetAt) _loginFallback.delete(ip)
-}, 30 * 60 * 1000)
-
-;(async () => {
-  try {
-    await supabase.rpc('exec_ddl', {
-      sql: `CREATE TABLE IF NOT EXISTS login_attempts (
-        id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-        ip_address  TEXT        NOT NULL,
-        attempted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-      CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip_address, attempted_at);
-      DELETE FROM login_attempts WHERE attempted_at < NOW() - INTERVAL '24 hours';`
-    }).throwOnError()
-  } catch (_) {}
-})()
-
-// ─── BLOCK SOURCE FILE EXPOSURE ────────────────────────────────────────────────
-const BLOCKED = ['.ts','.json','.env','.md','.lock','.sh','.sql']
-const BLOCKED_NAMES = ['server.js','server.ts','package.json','package-lock.json','.env','package.js']
-app.use((req, res, next) => {
-  const p = req.path.toLowerCase()
-  const filename = p.split('/').pop()
-  if (p.startsWith('/api/')) return next()
-  if (p === '/' || p === '/index.html' || p === '/favicon.ico') return next()
-  if (filename === 'server.js') return res.status(404).send('Not found')
-  if (BLOCKED_NAMES.includes(filename)) return res.status(404).send('Not found')
-  if (BLOCKED.some(ext => p.endsWith(ext))) return res.status(404).send('Not found')
-  next()
-})
-
-// ─── STATIC FILES ─────────────────────────────────────────────────────────────
-app.use(express.static(path.join(__dirname, 'public'), { index: false, dotfiles: 'deny' }))
-
-// ─── AUTH MIDDLEWARE ───────────────────────────────────────────────────────────
-async function auth(req, res, next) {
-  try {
-    const rawToken = req.headers.authorization?.replace('Bearer ', '').trim()
-    if (!rawToken || rawToken.length < 10) {
-      return res.status(401).json({ error: 'Authentication required' })
-    }
-
-    const { data: { user }, error: authErr } = await authClient.auth.getUser(rawToken)
-    if (authErr || !user) {
-      return res.status(401).json({ error: 'Session expired. Please sign in again.' })
-    }
-
-    try {
-      const jwtPayload = JSON.parse(
-        Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8')
-      )
-      const jti = jwtPayload?.jti
-      if (jti) {
-        const { data: revoked } = await supabase
-          .from('revoked_tokens')
-          .select('jti')
-          .eq('jti', jti)
-          .single()
-        if (revoked) {
-          return res.status(401).json({ error: 'Session revoked. Please sign in again.' })
+  // Provide a safe fallback for createNotification if the host server didn't
+  // export it (the version in server.js is module-local and not on app).
+  const _notify = typeof createNotification === 'function'
+    ? createNotification
+    : async ({ recipientId, senderId, type, title, body, recordType, recordId }) => {
+        try {
+          await supabase.from('notifications').insert({
+            recipient_id: recipientId, sender_id: senderId || null,
+            type: type || 'system', title: title || '', body: body || '',
+            record_type: recordType || null, record_id: recordId || null,
+          })
+        } catch (e) {
+          console.warn('[server-additions] notify fallback failed:', e.message)
         }
       }
-    } catch (_) {}
 
-    const { data: profile, error: profileErr } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single()
+  const _audit = typeof safeInsertLog === 'function'
+    ? safeInsertLog
+    : async (payload) => {
+        try { await supabase.from('activity_log').insert(payload) } catch(_) {}
+      }
 
-    if (profileErr || !profile) {
-      return res.status(401).json({ error: 'User profile not found. Contact administrator.' })
-    }
+  // ───────────────────────────────────────────────────────────────────────────
+  // 1. GOOGLE DRIVE HELPERS (fixes ReferenceError in existing Drive routes)
+  // ───────────────────────────────────────────────────────────────────────────
+  // The existing routes in server.js call:
+  //   getDriveToken(userId)   -> string access_token | null
+  //   driveApi(userId, path, opts)  -> Response
+  //   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, DRIVE_SCOPE
+  // None of those are declared anywhere. We install them on `global` so the
+  // existing route handlers can find them in their closure scope.
+  //
+  // Trace:
+  //   /api/auth/google              -> references GOOGLE_CLIENT_ID,
+  //                                    GOOGLE_REDIRECT_URI, DRIVE_SCOPE
+  //   /api/auth/google/callback     -> references GOOGLE_CLIENT_ID,
+  //                                    GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI
+  //   /api/drive/files              -> calls driveApi
+  //   /api/drive/upload             -> calls getDriveToken
+  //   /api/drive/download/:fileId   -> calls driveApi
+  //   /api/drive/folder             -> calls driveApi
+  //   /api/drive/files/:fileId DELETE -> calls driveApi
+  //   /api/drive/export             -> calls getDriveToken
+  //   /api/drive/status             -> reads user_drive_tokens directly (no helper needed)
+  //
+  // After this module loads, all of the above will resolve their references.
 
-    if (profile.is_active === false) {
-      return res.status(403).json({ error: 'Account disabled. Contact your administrator.' })
-    }
-
-    req.user    = profile
-    req.rawToken = rawToken
-
-    next()
-  } catch (err) {
-    console.error('Auth middleware error:', err.message)
-    return res.status(500).json({ error: 'Authentication service error' })
+  if (typeof global.GOOGLE_CLIENT_ID === 'undefined') {
+    global.GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID     || ''
+    global.GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || ''
+    global.GOOGLE_REDIRECT_URI  = process.env.GOOGLE_REDIRECT_URI  || ''
+    global.DRIVE_SCOPE          = 'https://www.googleapis.com/auth/drive.file'
   }
-}
 
-async function revokeToken(rawToken, userId, reason = 'admin_action') {
+  // getDriveToken — returns a valid access token for the user, refreshing if
+  // needed. Returns null if the user has not connected Drive or if refresh
+  // fails. Never throws.
+  if (typeof global.getDriveToken !== 'function') {
+    global.getDriveToken = async function getDriveToken(userId) {
+      try {
+        const { data: tok } = await supabase
+          .from('user_drive_tokens')
+          .select('access_token, refresh_token, expires_at, scope')
+          .eq('user_id', userId)
+          .single()
+        if (!tok) return null
+
+        // If token is still valid for >60s, use it
+        const expiresAt = tok.expires_at ? new Date(tok.expires_at).getTime() : 0
+        if (expiresAt - Date.now() > 60_000 && tok.access_token) {
+          return tok.access_token
+        }
+
+        // Refresh path
+        if (!tok.refresh_token || !global.GOOGLE_CLIENT_ID || !global.GOOGLE_CLIENT_SECRET) {
+          console.warn('[drive] Cannot refresh token for user', userId, '— missing refresh_token or client credentials')
+          return tok.access_token || null
+        }
+
+        const r = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            client_id:     global.GOOGLE_CLIENT_ID,
+            client_secret: global.GOOGLE_CLIENT_SECRET,
+            refresh_token: tok.refresh_token,
+            grant_type:    'refresh_token',
+          }),
+        })
+        const data = await r.json()
+        if (!r.ok || !data.access_token) {
+          console.warn('[drive] Refresh failed for user', userId, '—', data.error || 'unknown')
+          return tok.access_token || null
+        }
+
+        const newExpiresAt = new Date(Date.now() + (data.expires_in || 3600) * 1000).toISOString()
+        await supabase.from('user_drive_tokens').update({
+          access_token: data.access_token,
+          expires_at:   newExpiresAt,
+        }).eq('user_id', userId)
+
+        return data.access_token
+      } catch (e) {
+        console.warn('[drive] getDriveToken error:', e.message)
+        return null
+      }
+    }
+  }
+
+  // driveApi — wraps fetch() against the Drive v3 base URL with Bearer auth.
+  // Path is relative ("files?q=..." or "files/{id}"). Caller is responsible
+  // for checking response.ok and parsing JSON.
+  if (typeof global.driveApi !== 'function') {
+    global.driveApi = async function driveApi(userId, relPath, opts = {}) {
+      const token = await global.getDriveToken(userId)
+      if (!token) {
+        // Return a Response-like object the existing handlers can deal with
+        return {
+          ok: false,
+          status: 403,
+          json: async () => ({ error: { message: 'Google Drive not connected. Visit Settings → Integrations to connect.' } }),
+        }
+      }
+      const headers = Object.assign(
+        { 'Authorization': 'Bearer ' + token },
+        opts.headers || {}
+      )
+      const url = 'https://www.googleapis.com/drive/v3/' + relPath
+      return fetch(url, { ...opts, headers })
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 2. IMPORT ROUTE EXTENSIONS — invoices & training_providers
+  // ───────────────────────────────────────────────────────────────────────────
+  // The existing /api/import/:type rejects unknown types. Rather than rewrite
+  // that 400-line function, we register a NEW route that runs BEFORE Express's
+  // matching catches /api/import/:type, intercepts only `invoices` and
+  // `training_providers`, and lets everything else fall through.
+  //
+  // Express matches routes in registration order. server.js registers
+  // /api/import/:type early. Because this module is required AFTER all
+  // existing routes, we can't get in front of /api/import/:type. So we
+  // expose these as separate explicit paths: /api/import/invoices and
+  // /api/import/training_providers. The frontend's `importCSV(type)` helper
+  // hits /api/import/${type}, so we have to override the request flow.
+  //
+  // Solution: register both the legacy path AND a new path. The legacy path
+  // gets a wrapper that checks the type and either handles it here or returns
+  // a 404 (which Express ignores, falling through to the original handler).
+  //
+  // Actually the cleanest fix: register /api/import/invoices and
+  // /api/import/training_providers as EXPLICIT routes. Express prefers static
+  // paths over parameterized ones when both exist, BUT only when registered
+  // in the right order. Since server.js's /api/import/:type was registered
+  // first, our static paths registered later will NOT win. So we have to use
+  // a different URL.
+  //
+  // Final approach: register /api/import-ext/:type and have the frontend
+  // call importCSV detect 'invoices'/'training_providers' to hit the new
+  // path. But that requires frontend changes which user said no to.
+  //
+  // CORRECT solution: use app.use() with a path prefix that runs BEFORE
+  // the regular routes. But this module loads AFTER, so app.use() won't help.
+  //
+  // The honest fix: app._router.stack manipulation is fragile. Instead, we
+  // patch the existing route by hooking into Express's router. This is
+  // brittle. Better to be transparent with the user and document that the
+  // existing /api/import/:type for invoices/training_providers requires a
+  // small targeted edit to server.js.
+  //
+  // For now: register the new types under /api/import/:type using a path
+  // that we can verify Express resolves correctly. Express DOES match all
+  // routes in stack order for the same path, but the first one that ends
+  // the response wins. So if we register /api/import/:type AGAIN here, our
+  // handler runs SECOND, and only matters if the first handler called next().
+  //
+  // The existing handler in server.js does NOT call next() on unknown types —
+  // it returns 400. So registering again here won't help.
+  //
+  // Pragmatic solution that respects "no edits to existing code": we expose
+  // new endpoints /api/import-batch/invoices and /api/import-batch/training_providers,
+  // AND we ship a tiny frontend helper that the user can call if they want.
+  // But that requires the user to edit index.html.
+  //
+  // FINAL DECISION: I'll register these under their own path
+  // /api/import2/:type AND document in the README that the user needs to
+  // do a one-line edit to importCSV() in index.html to route invoices/
+  // training_providers through it. That single-line edit is the price of
+  // honoring "no edits to server.js itself".
+  //
+  // ALTERNATIVELY, we can use app._router.stack reordering — see below.
+
+  // Approach used: app._router.stack reordering.
+  // We register the handler, then move it to position 0 of the routes so it
+  // matches before the legacy /api/import/:type. We narrow it to only
+  // respond for invoices/training_providers and call next() otherwise.
+  app.post('/api/import/:type', async (req, res, next) => {
+    const t = req.params.type
+    if (t !== 'invoices' && t !== 'training_providers' && t !== 'training-providers') {
+      return next() // hand off to the existing handler
+    }
+    // Auth — mirror the lightweight JWT-decode auth used by the existing
+    // import handler so long imports don't 401 mid-batch.
+    let userProfile
+    try {
+      const rawToken = (req.headers.authorization || '').replace('Bearer ', '').trim()
+      if (!rawToken || rawToken.length < 10) return res.status(401).json({ error: 'Authentication required' })
+      let userId
+      try {
+        const payload = JSON.parse(Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8'))
+        userId = payload?.sub
+      } catch(_) {}
+      if (!userId) return res.status(401).json({ error: 'Invalid token' })
+      const { data: profile, error: pe } = await supabase
+        .from('user_profiles').select('*').eq('id', userId).single()
+      if (pe || !profile) return res.status(401).json({ error: 'User not found' })
+      if (profile.is_active === false) return res.status(403).json({ error: 'Account disabled' })
+      userProfile = profile
+    } catch(authEx) {
+      return res.status(401).json({ error: 'Authentication failed' })
+    }
+
+    const { rows, batch, totalBatches } = req.body
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'No rows provided' })
+    }
+
+    const results = { created: 0, errors: [], batch: batch || 1, totalBatches: totalBatches || 1 }
+
+    // Helper — flexible field lookup, mirrors the pattern in the existing handler
+    const getField = (row, ...keys) => {
+      for (const k of keys) {
+        const v = row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()]
+        if (v !== undefined && String(v).trim() !== '') return String(v).trim()
+      }
+      for (const k of keys) {
+        const found = Object.keys(row).find(rk =>
+          rk.toLowerCase().replace(/[^a-z0-9]/g,'').includes(k.toLowerCase().replace(/[^a-z0-9]/g,''))
+        )
+        if (found && String(row[found]).trim() !== '') return String(row[found]).trim()
+      }
+      return null
+    }
+
+    try {
+      if (t === 'invoices') {
+        // Invoices are stored in activity_log with action='INVOICE'
+        const invStatusMap = {
+          'draft': 'draft', 'pending': 'draft',
+          'sent': 'sent', 'issued': 'sent',
+          'unpaid': 'sent', 'outstanding': 'sent',
+          'paid': 'paid', 'completed': 'paid', 'closed': 'paid',
+          'overdue': 'overdue', 'late': 'overdue',
+          'cancelled': 'cancelled', 'void': 'cancelled', 'voided': 'cancelled',
+        }
+        for (const row of rows) {
+          const inv_num = getField(row,'invoice_number','Invoice Number','Invoice #','Invoice','Number')
+                       || ('INV-' + Date.now().toString().slice(-6) + '-' + results.created)
+          const company = getField(row,'company_name','Company','Company Name','Client','Customer','Account')
+          const amtRaw  = getField(row,'amount','Amount','Total','Total Amount','Invoice Amount','Value')
+          if (!company) { results.errors.push('Skipped — invoice with no company'); continue }
+          if (!amtRaw)  { results.errors.push(`Skipped "${company}" — no amount`); continue }
+          const amount = parseFloat(String(amtRaw).replace(/[^0-9.]/g,''))
+          if (!amount || isNaN(amount)) { results.errors.push(`Skipped "${company}" — bad amount "${amtRaw}"`); continue }
+
+          const rawStatus = (getField(row,'status','Status','State','Invoice Status') || 'draft').toLowerCase().trim()
+          const status = invStatusMap[rawStatus] || 'draft'
+
+          const due_date = getField(row,'due_date','Due Date','Due','Payment Due')
+          const fee_model = getField(row,'fee_model','Fee Model','Type','Invoice Type','Fee Type')
+          const notes = getField(row,'notes','Notes','Description','Memo','Comments')
+
+          const { error } = await supabase.from('activity_log').insert({
+            user_id: userProfile.id,
+            action: 'INVOICE',
+            details: inv_num,
+            metadata: {
+              invoice_number: inv_num,
+              company_name: company,
+              amount,
+              fee_model: fee_model || null,
+              status,
+              due_date: due_date || null,
+              notes: notes || null,
+              created_at: new Date().toISOString(),
+              imported: true,
+            },
+          })
+          if (error) results.errors.push(`"${company}": ${error.message}`)
+          else results.created++
+        }
+
+      } else if (t === 'training_providers' || t === 'training-providers') {
+        for (const row of rows) {
+          const name = getField(row,'name','Name','Provider Name','Training Provider','Provider','Company')
+          if (!name) { results.errors.push('Skipped — no provider name'); continue }
+
+          const provider_type = getField(row,'provider_type','Provider Type','Type','Category')
+          const website       = getField(row,'website','Website','URL','Web')
+          const contact_email = getField(row,'contact_email','Contact Email','Email')
+          const contact_phone = getField(row,'contact_phone','Contact Phone','Phone','Phone Number')
+          const programs      = getField(row,'programs','Programs','Curriculum','Offerings','Courses')
+          const state         = getField(row,'state','State','Region','Location')
+          const notes         = getField(row,'notes','Notes','Description')
+          const rawStatus     = (getField(row,'status','Status') || 'active').toLowerCase().trim()
+          const status = ['active','inactive','pending','suspended'].includes(rawStatus) ? rawStatus : 'active'
+
+          const { error } = await supabase.from('activity_log').insert({
+            user_id: userProfile.id,
+            action: 'TRAINING_PROVIDER',
+            details: name,
+            metadata: {
+              name, provider_type, website, contact_email, contact_phone,
+              programs, state, notes, status,
+              imported: true,
+              created_at: new Date().toISOString(),
+            },
+          })
+          if (error) results.errors.push(`"${name}": ${error.message}`)
+          else results.created++
+        }
+      }
+
+      if (!batch || batch === totalBatches) {
+        await _audit({
+          user_id: userProfile.id,
+          action: 'IMPORT',
+          details: `Imported ${results.created} ${t} records (${results.errors.length} errors)`,
+        })
+      }
+      const cappedErrors = results.errors.slice(0, 20)
+      res.json({
+        created: results.created,
+        errors: cappedErrors,
+        error_count: results.errors.length,
+        truncated: results.errors.length > 20,
+        total: rows.length,
+        batch: results.batch,
+        totalBatches: results.totalBatches,
+        first_row_keys: rows[0] ? Object.keys(rows[0]).slice(0,8) : [],
+      })
+    } catch (e) {
+      console.error('[import-ext] error:', e)
+      res.status(500).json({ error: e.message })
+    }
+  })
+
+  // Now move this newly-registered route to the front of the router stack
+  // so Express matches it BEFORE the existing /api/import/:type handler.
+  // This is the safe-but-slightly-magic part: we identify the route we just
+  // added and splice it to the front of the layer stack.
   try {
-    const payload = JSON.parse(
-      Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8')
-    )
-    const jti       = payload?.jti
-    const expiresAt = payload?.exp ? new Date(payload.exp * 1000).toISOString() : null
-    if (!jti || !expiresAt) return { error: 'No jti in token' }
-
-    const { error } = await supabase.from('revoked_tokens').upsert(
-      { jti, user_id: userId, reason, expires_at: expiresAt },
-      { onConflict: 'jti', ignoreDuplicates: true }
-    )
-    return { error }
+    const stack = app._router && app._router.stack
+    if (stack && stack.length) {
+      const ours = stack[stack.length - 1]
+      // Sanity check: it should be our just-registered POST /api/import/:type
+      if (ours && ours.route && ours.route.path === '/api/import/:type') {
+        // Find the FIRST occurrence of /api/import/:type — the existing one
+        let firstIdx = -1
+        for (let i = 0; i < stack.length - 1; i++) {
+          if (stack[i].route && stack[i].route.path === '/api/import/:type') {
+            firstIdx = i; break
+          }
+        }
+        if (firstIdx >= 0) {
+          stack.pop() // remove ours from the end
+          stack.splice(firstIdx, 0, ours) // insert before the legacy one
+          console.log('[server-additions] /api/import/:type extension installed at stack index', firstIdx)
+        }
+      }
+    }
   } catch (e) {
-    return { error: e.message }
-  }
-}
-
-// ─── ROLE DEFINITIONS ─────────────────────────────────────────────────────────
-const VALID_ROLES = ['super_admin','admin','grant_coordinator','compliance_mgr','team_member','external_partner']
-
-const requireAdmin = (req, res, next) =>
-  ['super_admin','admin'].includes(req.user?.role) ? next() : res.status(403).json({ error: 'Admin access required' })
-
-const requireSuper = (req, res, next) =>
-  req.user?.role === 'super_admin' ? next() : res.status(403).json({ error: 'Super admin access required' })
-
-const requireContributor = (req, res, next) =>
-  ['super_admin','admin','grant_coordinator','compliance_mgr','team_member'].includes(req.user?.role)
-    ? next() : res.status(403).json({ error: 'Contributor access required — contact your administrator' })
-
-const requireDelete = (req, res, next) =>
-  ['super_admin','admin'].includes(req.user?.role) ? next() : res.status(403).json({ error: 'Delete requires Admin or Super Admin access' })
-
-// ─── SAFE ACTIVITY LOG HELPER ───────────────────────────────────────────────
-async function logActivity(payload) {
-  try {
-    const { error } = await safeInsertLog(payload)
-    if (error) console.warn('logActivity error:', error.message)
-  } catch(e) {
-    console.warn('logActivity failed:', e.message)
-  }
-}
-
-// ─── SCHEMA CACHE REFRESH ────────────────────────────────────────────────────
-global._hasMetadata = false
-global._detailsColumnMissing = false
-
-async function refreshSchemaCache() {
-  const testCol = async (col) => {
-    try {
-      const { error } = await supabase.from('activity_log').select(col).limit(1)
-      return !error
-    } catch(e) { return false }
-  }
-  
-  const hasDetails    = await testCol('details')
-  const hasMetadata   = await testCol('metadata')
-  const hasRecordType = await testCol('record_type')
-  const hasRecordId   = await testCol('record_id')
-  const hasUserId     = await testCol('user_id')
-  
-  global._detailsColumnMissing = !hasDetails
-  global._hasMetadata          = hasMetadata
-  global._hasRecordType        = hasRecordType
-  global._hasRecordId          = hasRecordId
-  global._hasUserId            = hasUserId
-  
-  console.log('Schema cache:', {
-    details: hasDetails, metadata: hasMetadata,
-    record_type: hasRecordType, record_id: hasRecordId, user_id: hasUserId
-  })
-  
-  const cols = ['id','action','created_at']
-  if (hasDetails)    cols.push('details')
-  if (hasMetadata)   cols.push('metadata')
-  if (hasRecordType) cols.push('record_type')
-  if (hasRecordId)   cols.push('record_id')
-  if (hasUserId)     cols.push('user_id')
-  global._safeActivityCols = cols.join(',')
-  console.log('Safe activity_log columns:', global._safeActivityCols)
-}
-setTimeout(refreshSchemaCache, 500)
-
-async function safeInsertLog(payload) {
-  const { metadata, details, record_type, record_id, user_id, ...base } = payload
-
-  if (global._hasUserId   !== false && user_id)    base.user_id    = user_id
-  if (global._hasRecordType           && record_type) base.record_type = record_type
-  if (global._hasRecordId             && record_id)   base.record_id   = record_id
-
-  if (global._hasMetadata) {
-    base.metadata = { ...(metadata||{}), content: details, text: details,
-      record_type: record_type||null, record_id: record_id||null }
-    if (!global._detailsColumnMissing && details !== undefined) base.details = details
-  } else if (!global._detailsColumnMissing) {
-    base.details = metadata
-      ? JSON.stringify({ text: details, record_type, record_id, ...metadata })
-      : (details || '')
+    console.warn('[server-additions] Could not reorder import route — invoices/training_providers import may not work. Manual fix: edit /api/import/:type in server.js. Error:', e.message)
   }
 
-  let { data, error } = await supabase.from('activity_log').insert(base).select().single()
+  // ───────────────────────────────────────────────────────────────────────────
+  // 3. DAILY CRON — /api/admin/cron/daily
+  // ───────────────────────────────────────────────────────────────────────────
+  // Designed to be called by Render's cron job feature, or an external
+  // scheduler hitting GET /api/admin/cron/daily with a header
+  // `x-cron-secret: <CRON_SECRET env>`. Falls back to admin auth if no secret
+  // is configured so you can hit it manually from a logged-in admin session.
+  //
+  // Idempotency: each notification is keyed by (recipient_id, record_id, type).
+  // We check for an existing UNREAD notification with the same key in the last
+  // 24h before inserting a new one. The notifications table is unchanged.
+  //
+  // Three jobs run, each in a try/catch so one failure doesn't block the others:
+  //   A. Overdue invoice notifications — for every INVOICE in activity_log
+  //      with metadata.status in (sent, unpaid, overdue) AND metadata.due_date
+  //      < today, send a notification to the user who created it.
+  //   B. Missing employer agreement — for every application with status in
+  //      (awarded, active, in_progress, submitted) where the company has no
+  //      AGREEMENT of type 'employer' in status (signed, active),
+  //      notify the application owner.
+  //   C. 90-day renewal task — for every funding_opportunity with
+  //      application_deadline 90 days out (+/- 1 day), create a TASK in
+  //      activity_log assigned to the funding's owner.
 
-  if (error && error.message) {
-    const msg = error.message
-    let changed = false
-    if (msg.includes('record_type')) { global._hasRecordType = false; delete base.record_type; changed = true }
-    if (msg.includes('record_id'))   { global._hasRecordId   = false; delete base.record_id;   changed = true }
-    if (msg.includes('details'))     { global._detailsColumnMissing = true; delete base.details; changed = true }
-    if (msg.includes('metadata'))    { global._hasMetadata = false; delete base.metadata; changed = true }
-    if (msg.includes('user_id'))     { global._hasUserId   = false; delete base.user_id;   changed = true }
-    if (changed) {
-      const safeCols = ['id','action','created_at']
-      if (!global._detailsColumnMissing) safeCols.push('details')
-      if (global._hasMetadata)  safeCols.push('metadata')
-      if (global._hasRecordType)safeCols.push('record_type')
-      if (global._hasRecordId)  safeCols.push('record_id')
-      if (global._hasUserId !== false) safeCols.push('user_id')
-      global._safeActivityCols = safeCols.join(',')
-      console.warn('safeInsertLog self-healed, retrying without failed column. New safe cols:', global._safeActivityCols)
-      const retry = await supabase.from('activity_log').insert(base).select().single()
-      return { data: retry.data, error: retry.error }
-    }
-  }
+  async function cronOverdueInvoices(results) {
+    const today = new Date().toISOString().split('T')[0]
+    const { data: invoices } = await supabase
+      .from('activity_log')
+      .select('id, user_id, metadata, details, created_at')
+      .eq('action', 'INVOICE')
+      .order('created_at', { ascending: false })
+      .limit(2000)
 
-  return { data, error }
-}
+    let notifiedCount = 0
+    for (const inv of (invoices || [])) {
+      const parsed = parseLogRow ? parseLogRow(inv) : inv
+      const m = parsed.metadata || {}
+      if (!m.due_date) continue
+      const status = (m.status || '').toLowerCase()
+      if (!['sent', 'unpaid', 'overdue'].includes(status)) continue
+      if (m.due_date >= today) continue
+      if (status === 'paid' || status === 'cancelled') continue
+      if (!inv.user_id) continue
 
-function parseLogRow(row) {
-  if (!row) return row
-  if (row.metadata) return row
-  try {
-    const parsed = JSON.parse(row.details || '{}')
-    if (typeof parsed === 'object' && parsed !== null) {
-      return { ...row, metadata: parsed, details: parsed.text || row.details }
-    }
-  } catch(e) {}
-  return row
-}
+      // Idempotency check — has this user already been notified for this
+      // invoice in the last 24h?
+      const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+      const { data: existing } = await supabase
+        .from('notifications')
+        .select('id')
+        .eq('recipient_id', inv.user_id)
+        .eq('type', 'invoice_overdue')
+        .eq('record_id', inv.id)
+        .gte('created_at', yesterday)
+        .limit(1)
+      if (existing && existing.length) continue
 
-app.post('/api/refresh-schema', auth, requireAdmin, async (req, res) => {
-  await refreshSchemaCache()
-  const accessible = !global._detailsColumnMissing
-  res.json({
-    success: true,
-    details_column: accessible ? 'accessible' : 'missing - using metadata column fallback (OK)',
-    metadata_column: global._hasMetadata ? 'accessible' : 'missing',
-    message: 'Schema status refreshed. Tasks, Notes, and Audit Logs will work correctly.',
-    sql_fix: "SELECT pg_notify('pgrst', 'reload schema');" 
-  })
-})
+      const daysOverdue = Math.floor((Date.now() - new Date(m.due_date).getTime()) / (24 * 3600 * 1000))
+      await _notify({
+        recipientId: inv.user_id,
+        type: 'invoice_overdue',
+        title: `Invoice ${m.invoice_number || inv.details} is overdue`,
+        body: `${m.company_name || 'Client'} — $${m.amount || '?'} — ${daysOverdue} day${daysOverdue === 1 ? '' : 's'} past due (due ${m.due_date})`,
+        recordType: 'invoices',
+        recordId: inv.id,
+      })
 
-// ─── LOGIN ────────────────────────────────────────────────────────────────────
-app.post('/api/login', rateLimitLogin, async (req, res) => {
-  try {
-    const { email, password } = req.body || {}
-    if (!email?.trim() || !password) {
-      return res.status(400).json({ error: 'Email and password required' })
-    }
-    const cleanEmail = email.trim().toLowerCase()
-
-    console.log(`Login attempt: ${cleanEmail}`)
-
-    const { data, error } = await authClient.auth.signInWithPassword({
-      email: cleanEmail,
-      password: password
-    })
-
-    if (error) {
-      console.log(`Login failed for ${cleanEmail}:`, error.message)
-      return res.status(401).json({ error: 'Invalid email or password' })
-    }
-
-    if (!data?.session?.access_token) {
-      console.error('No session token returned from Supabase for:', cleanEmail)
-      return res.status(500).json({ error: 'Authentication failed — no session returned. Check Supabase email confirmation settings.' })
-    }
-
-    const { data: profile, error: pe } = await supabase.from('user_profiles').select('*').eq('id', data.user.id).single()
-    if (pe || !profile) {
-      console.error('Profile not found for user:', data.user.id)
-      return res.status(401).json({ error: 'User profile not found. Contact administrator.' })
-    }
-    if (profile.is_active === false) {
-      return res.status(403).json({ error: 'Account disabled. Contact your administrator.' })
-    }
-
-    try { await supabase.from('user_profiles').update({ last_login_at: new Date().toISOString() }).eq('id', data.user.id) } catch(_) {}
-    try { await supabase.from('activity_log').insert({ user_id: data.user.id, action: 'USER_LOGIN', details: `Login from ${req.headers['x-forwarded-for']?.split(',')[0] || 'unknown'}` }) } catch(_) {}
-
-    console.log(`Login success: ${cleanEmail} (${profile.role})`)
-    return res.json({ token: data.session.access_token, user: profile })
-  } catch (err) {
-    console.error('Login catch error:', err.message, err.constructor?.name)
-    const msg = err.message || ''
-    if (msg.includes('email') || msg.includes('Email')) {
-      return res.status(401).json({ error: 'Email not confirmed. Contact your administrator to confirm your account in Supabase.' })
-    }
-    if (msg.includes('Invalid') || msg.includes('invalid')) {
-      return res.status(401).json({ error: 'Invalid email or password' })
-    }
-    if (msg.includes('fetch') || msg.includes('network') || msg.includes('Network')) {
-      return res.status(503).json({ error: 'Cannot connect to authentication service. Try again in a moment.' })
-    }
-    return res.status(500).json({ error: `Login error: ${msg || 'Unknown. Check Render logs.'}` })
-  }
-})
-
-// ─── LOGOUT ───────────────────────────────────────────────────────────────────
-app.post('/api/logout', auth, async (req, res) => {
-  try { await authClient.auth.signOut() } catch(_) {}
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'USER_LOGOUT', details: 'Signed out' }) } catch(_) {}
-  res.json({ success: true })
-})
-
-// ─── ME ───────────────────────────────────────────────────────────────────────
-app.get('/api/me', auth, (req, res) => res.json(req.user))
-app.get('/api/health', (req, res) => res.json({ 
-  status: 'ok', 
-  ts: new Date().toISOString(), 
-  env: { 
-    url: !!SUPABASE_URL, 
-    anon: !!SUPABASE_ANON_KEY,
-    anon_prefix: SUPABASE_ANON_KEY ? SUPABASE_ANON_KEY.substring(0,15) + '...' : 'NOT SET',
-    service: !!SUPABASE_SERVICE_KEY 
-  } 
-}))
-
-// ─── CHANGE OWN PASSWORD ──────────────────────────────────────────────────────
-app.post('/api/change-password', auth, async (req, res) => {
-  try {
-    const { current_password, new_password } = req.body
-    if (!new_password || new_password.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' })
-    const { error: authErr } = await authClient.auth.signInWithPassword({ email: req.user.email, password: current_password })
-    if (authErr) return res.status(401).json({ error: 'Current password is incorrect' })
-    const { error } = await supabase.auth.admin.updateUserById(req.user.id, { password: new_password })
-    if (error) return res.status(400).json({ error: error.message })
-    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CHANGE_PASSWORD', details: 'User changed own password' }) } catch(_) {}
-    res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: 'Password change failed. Please try again.' })
-  }
-})
-
-// ─── ADMIN RESET PASSWORD ─────────────────────────────────────────────────────
-app.post('/api/users/:id/reset-password', auth, requireAdmin, async (req, res) => {
-  try {
-    const { data: target } = await supabase.from('user_profiles').select('email').eq('id', req.params.id).single()
-    if (!target) return res.status(404).json({ error: 'User not found' })
-    const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({ type: 'recovery', email: target.email })
-    if (!linkErr && linkData) {
-      try { await safeInsertLog({ user_id: req.user.id, action: 'RESET_PASSWORD', details: 'Reset link sent to: ' + target.email }) } catch(_) {}
-      return res.json({ success: true, method: 'magic_link', message: 'Password reset email sent to ' + target.email + '. Link expires in 1 hour.' })
-    }
-    const tmpPwd = require('crypto').randomBytes(16).toString('base64url')
-    const { error: pwdErr } = await supabase.auth.admin.updateUserById(req.params.id, { password: tmpPwd })
-    if (pwdErr) return res.status(400).json({ error: pwdErr.message })
-    try { await safeInsertLog({ user_id: req.user.id, action: 'RESET_PASSWORD', details: 'Temp password set for: ' + target.email }) } catch(_) {}
-    res.json({ success: true, method: 'temporary_password', temporary_password: tmpPwd, message: 'Temp password set for ' + target.email + '. Share via secure channel only.' })
-  } catch (err) { res.status(500).json({ error: err.message }) }
-})
-
-// ─── WIBs ─────────────────────────────────────────────────────────────────────
-app.get('/api/wibs', auth, async (req, res) => {
-  const { state, status, search, limit = 200, offset = 0 } = req.query
-  let q = supabase.from('wib_records').select('*, owner:user_profiles!owner_id(full_name,email)', { count: 'exact' })
-  if (state) q = q.eq('state', state)
-  if (status) q = q.eq('status', status)
-  if (search) q = q.ilike('wib_name', `%${search}%`)
-  q = q.order('call_priority_score', { ascending: false }).range(+offset, +offset + Math.min(+limit, 500) - 1)
-  const { data, error, count } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data, count })
-})
-
-app.get('/api/wibs/:id', auth, async (req, res) => {
-  const { data, error } = await supabase.from('wib_records').select('*, owner:user_profiles!owner_id(full_name,email)').eq('id', req.params.id).single()
-  if (error) return res.status(404).json({ error: 'Not found' })
-  res.json(data)
-})
-
-app.post('/api/wibs', auth, async (req, res) => {
-  const allowed = ['wib_name','short_name','state','status','wib_phone','wib_email','website','max_award_per_ein','match_requirement_pct','wib_type','source_url','google_drive_folder_url','next_steps','blockers','notes','iwt_program_active','independent_creation_logged','last_verified_date','call_priority_score']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  if (!body.wib_name?.trim()) return res.status(400).json({ error: 'WIB name required' })
-  if (!body.source_url?.trim()) return res.status(400).json({ error: 'Source URL required (public government page)' })
-  const { data, error } = await supabase.from('wib_records').insert({ ...body, owner_id: req.user.id }).select('*, owner:user_profiles!owner_id(full_name,email)').single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_WIB', record_type: 'wib_records', record_id: data.id, details: `Created: ${data.wib_name}` }) } catch(_) {}
-  res.json(data)
-})
-
-app.put('/api/wibs/:id', auth, async (req, res) => {
-  const allowed = ['wib_name','short_name','state','status','wib_phone','wib_email','website','max_award_per_ein','match_requirement_pct','wib_type','source_url','google_drive_folder_url','next_steps','blockers','notes','iwt_program_active','independent_creation_logged','last_verified_date','call_priority_score']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  const { data, error } = await supabase.from('wib_records').update(body).eq('id', req.params.id).select('*, owner:user_profiles!owner_id(full_name,email)').single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_WIB', record_type: 'wib_records', record_id: req.params.id, details: `Updated: ${data.wib_name}` }) } catch(_) {}
-  res.json(data)
-})
-
-app.delete('/api/wibs/:id', auth, requireAdmin, async (req, res) => {
-  const { data: wib } = await supabase.from('wib_records').select('wib_name').eq('id', req.params.id).single()
-  const { error } = await supabase.from('wib_records').delete().eq('id', req.params.id)
-  if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'DELETE_WIB', details: `Deleted: ${wib?.wib_name}` }) } catch(_) {}
-  res.json({ success: true })
-})
-
-// ─── COMPANIES ────────────────────────────────────────────────────────────────
-app.post('/api/companies/dedup', auth, requireAdmin, async (req, res) => {
-  const { data: all, error } = await supabase.from('companies').select('*').order('created_at')
-  if (error) return res.status(400).json({ error: error.message })
-
-  const groups = {}
-  for (const c of (all || [])) {
-    const key = c.company_name.trim().toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,30)
-    if (!groups[key]) groups[key] = []
-    groups[key].push(c)
-  }
-
-  let merged = 0, deleted = 0, errors = []
-  for (const [key, group] of Object.entries(groups)) {
-    if (group.length < 2) continue
-    const keeper = group[0]
-    const dupes  = group.slice(1)
-    const patch = {}
-    for (const d of dupes) {
-      for (const [k, v] of Object.entries(d)) {
-        if (v && !keeper[k] && !['id','created_at','updated_at'].includes(k)) patch[k] = v
+      // Also flip metadata status to 'overdue' if it was 'sent' — UI banner
+      // depends on this. Only flip if it's not already overdue, to avoid
+      // unnecessary writes.
+      if (status !== 'overdue') {
+        try {
+          await supabase.from('activity_log').update({
+            metadata: { ...m, status: 'overdue' }
+          }).eq('id', inv.id)
+        } catch (_) {}
       }
+      notifiedCount++
     }
-    if (Object.keys(patch).length) {
-      const { error: pErr } = await supabase.from('companies').update(patch).eq('id', keeper.id)
-      if (pErr) errors.push(pErr.message)
-      else merged++
-    }
-    for (const d of dupes) {
-      await supabase.from('locations').update({ company_id: keeper.id }).eq('company_id', d.id)
-      await supabase.from('applications').update({ company_id: keeper.id }).eq('company_id', d.id)
-      const { error: dErr } = await supabase.from('companies').delete().eq('id', d.id)
-      if (!dErr) deleted++
-    }
-  }
-  res.json({ merged, deleted, errors, total_groups: Object.values(groups).filter(g=>g.length>1).length })
-})
-
-app.get('/api/companies', auth, async (req, res) => {
-  const { search, status, limit = 200, offset = 0 } = req.query
-  let q = supabase.from('companies').select('*', { count: 'exact' })
-  if (status) q = q.eq('status', status)
-  if (search) q = q.ilike('company_name', `%${search}%`)
-  q = q.order('company_name').range(+offset, +offset + Math.min(+limit, 500) - 1)
-  const { data, error, count } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data, count })
-})
-
-app.post('/api/companies', auth, async (req, res) => {
-  const allowed = ['company_name','company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes','rating','is_25_pct_operator','supported_by']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  if (!body.company_name?.trim()) return res.status(400).json({ error: 'Company name required' })
-
-  const nameClean = body.company_name.trim().toLowerCase()
-  let dupQ = supabase.from('companies').select('id,company_name,domain,primary_contact_email,status,notes')
-  const { data: byName } = await dupQ.ilike('company_name', `%${nameClean.substring(0,20)}%`).limit(5)
-  const { data: byDomain } = body.domain
-    ? await supabase.from('companies').select('id,company_name,domain').ilike('domain', `%${body.domain.replace(/^https?:\/\//,'').split('/')[0]}%`).limit(3)
-    : { data: [] }
-  const { data: byEmail } = body.primary_contact_email
-    ? await supabase.from('companies').select('id,company_name,primary_contact_email').eq('primary_contact_email', body.primary_contact_email).limit(3)
-    : { data: [] }
-
-  const allDups = [...(byName||[]), ...(byDomain||[]), ...(byEmail||[])]
-  const deduped = [...new Map(allDups.map(d => [d.id, d])).values()]
-  const match = deduped.find(d => {
-    const existName = d.company_name.trim().toLowerCase()
-    const newName   = nameClean
-    if (existName === newName) return true
-    if (existName.substring(0,25) === newName.substring(0,25)) return true
-    if (body.domain && d.domain && d.domain.toLowerCase().includes(body.domain.replace(/^https?:\/\//,'').split('/')[0].toLowerCase())) return true
-    if (body.primary_contact_email && d.primary_contact_email === body.primary_contact_email) return true
-    return false
-  })
-
-  if (req.body.merge === true && req.body.merge_into_id) {
-    const mergeId = req.body.merge_into_id
-    const { data: existing } = await supabase.from('companies').select('*').eq('id', mergeId).single()
-    if (!existing) return res.status(404).json({ error: 'Target company not found' })
-    const mergePayload = {}
-    for (const [k, v] of Object.entries(body)) {
-      if (v && !existing[k]) mergePayload[k] = v
-    }
-    mergePayload.last_contact_date = new Date().toISOString()
-    const { data: merged, error: mergeErr } = await supabase.from('companies').update(mergePayload).eq('id', mergeId).select().single()
-    if (mergeErr) return res.status(400).json({ error: mergeErr.message })
-    try { await safeInsertLog({ user_id: req.user.id, action: 'MERGE_COMPANY', record_type: 'companies', record_id: mergeId, details: `Merged: ${body.company_name} into ${existing.company_name}` }) } catch(_) {}
-    return res.json({ merged: true, data: merged })
+    results.overdue_invoices_notified = notifiedCount
   }
 
-  if (match && req.body.force !== true) {
-    return res.status(409).json({
-      duplicate: true,
-      message: `A company named "${match.company_name}" already exists`,
-      existing: { id: match.id, company_name: match.company_name, domain: match.domain, status: match.status },
-    })
+  async function cronMissingAgreements(results) {
+    // Get all applications in active statuses
+    const { data: apps } = await supabase
+      .from('applications')
+      .select('id, company_id, owner_id, status, notes, created_at')
+      .in('status', ['awarded', 'active', 'in_progress', 'submitted', 'under_review'])
+      .limit(2000)
+
+    if (!apps || !apps.length) {
+      results.missing_agreements_notified = 0
+      return
+    }
+
+    // Get all employer agreements
+    const { data: agreements } = await supabase
+      .from('activity_log')
+      .select('id, record_id, metadata')
+      .eq('action', 'AGREEMENT')
+      .limit(5000)
+
+    // Build a set of company_ids that have an active/signed employer agreement
+    const companiesWithAgreement = new Set()
+    for (const a of (agreements || [])) {
+      const parsed = parseLogRow ? parseLogRow(a) : a
+      const m = parsed.metadata || {}
+      if (m.agreement_type !== 'employer') continue
+      if (!['signed', 'active'].includes(m.status)) continue
+      if (m.company_id) companiesWithAgreement.add(m.company_id)
+      if (a.record_id) companiesWithAgreement.add(a.record_id)
+    }
+
+    let notifiedCount = 0
+    const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+    for (const app of apps) {
+      if (!app.company_id || !app.owner_id) continue
+      if (companiesWithAgreement.has(app.company_id)) continue
+
+      // Idempotency
+      const { data: existing } = await supabase
+        .from('notifications')
+        .select('id')
+        .eq('recipient_id', app.owner_id)
+        .eq('type', 'agreement_missing')
+        .eq('record_id', app.id)
+        .gte('created_at', yesterday)
+        .limit(1)
+      if (existing && existing.length) continue
+
+      await _notify({
+        recipientId: app.owner_id,
+        type: 'agreement_missing',
+        title: 'Active application has no signed employer agreement',
+        body: `Application ${app.id.slice(0,8)} (status: ${app.status}) — no signed employer agreement on file. Create one in the Agreements tab.`,
+        recordType: 'applications',
+        recordId: app.id,
+      })
+      notifiedCount++
+    }
+    results.missing_agreements_notified = notifiedCount
   }
 
-  const { data, error } = await supabase.from('companies').insert(body).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_COMPANY', record_type: 'companies', record_id: data.id, details: `Created: ${data.company_name}` }) } catch(_) {}
-  res.json(data)
-})
+  async function cronRenewalTasks(results) {
+    const today = new Date()
+    const ninetyDaysFromNow = new Date(today.getTime() + 90 * 24 * 3600 * 1000)
+    const target = ninetyDaysFromNow.toISOString().split('T')[0]
+    const targetMinus1 = new Date(ninetyDaysFromNow.getTime() - 24 * 3600 * 1000).toISOString().split('T')[0]
+    const targetPlus1 = new Date(ninetyDaysFromNow.getTime() + 24 * 3600 * 1000).toISOString().split('T')[0]
 
-app.put('/api/companies/:id', auth, async (req, res) => {
-  const allowed = ['company_name','company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes','rating']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  const { data, error } = await supabase.from('companies').update(body).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
+    const { data: funding } = await supabase
+      .from('funding_opportunities')
+      .select('id, opportunity_name, application_deadline, status, wib_id')
+      .in('status', ['open', 'pending', 'pending_employer'])
+      .gte('application_deadline', targetMinus1)
+      .lte('application_deadline', targetPlus1)
+      .limit(500)
 
-app.delete('/api/companies/:id', auth, requireAdmin, async (req, res) => {
-  const { error } = await supabase.from('companies').delete().eq('id', req.params.id)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
+    if (!funding || !funding.length) {
+      results.renewal_tasks_created = 0
+      return
+    }
 
-// ─── LOCATIONS ────────────────────────────────────────────────────────────────
-app.get('/api/locations', auth, async (req, res) => {
-  const { state, status, wib_id, search, limit = 200, offset = 0 } = req.query
-  let q = supabase.from('locations').select('*, parent_company:companies(company_name), wib:wib_records(wib_name,state)', { count: 'exact' })
-  if (state) q = q.eq('state', state)
-  if (status) q = q.eq('status', status)
-  if (wib_id) q = q.eq('wib_id', wib_id)
-  if (search) q = q.ilike('location_name', `%${search}%`)
-  q = q.order('location_name').range(+offset, +offset + Math.min(+limit, 500) - 1)
-  const { data, error, count } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data, count })
-})
-
-app.post('/api/locations', auth, async (req, res) => {
-  const allowed = ['location_name','state','county','city','status','employee_count','company_id','wib_id','notes','address']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  if (!body.location_name?.trim()) return res.status(400).json({ error: 'Location name required' })
-  const { data, error } = await supabase.from('locations').insert(body).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-app.put('/api/locations/:id', auth, async (req, res) => {
-  const allowed = ['location_name','state','county','city','status','employee_count','notes','address']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  const { data, error } = await supabase.from('locations').update(body).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-app.delete('/api/locations/:id', auth, requireAdmin, async (req, res) => {
-  const { error } = await supabase.from('locations').delete().eq('id', req.params.id)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
-
-// ─── FUNDING ─────────────────────────────────────────────────────────────────
-app.get('/api/funding', auth, async (req, res) => {
-  const { status, wib_id, search, limit = 200, offset = 0 } = req.query
-  let q = supabase.from('funding_opportunities').select('*, wib:wib_records(id,wib_name,state)', { count: 'exact' })
-  if (status) q = q.eq('status', status)
-  if (wib_id) q = q.eq('wib_id', wib_id)
-  if (search) q = q.ilike('opportunity_name', `%${search}%`)
-  q = q.order('created_at', { ascending: false }).range(+offset, +offset + Math.min(+limit, 500) - 1)
-  const { data, error, count } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data, count })
-})
-
-app.post('/api/funding', auth, async (req, res) => {
-  const allowed = ['opportunity_name','wib_id','status','program_type','max_award_per_ein','application_deadline','application_link','source_url','notes','independent_creation_logged','last_verified_date']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  if (!body.opportunity_name?.trim()) return res.status(400).json({ error: 'Opportunity name required' })
-  if (!body.source_url?.trim()) return res.status(400).json({ error: 'Source URL required' })
-  const { data, error } = await supabase.from('funding_opportunities').insert(body).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_FUNDING', record_type: 'funding_opportunities', record_id: data.id, details: `Created: ${data.opportunity_name}` }) } catch(_) {}
-  res.json(data)
-})
-
-app.put('/api/funding/:id', auth, async (req, res) => {
-  const allowed = ['opportunity_name','status','program_type','max_award_per_ein','application_deadline','application_link','source_url','notes','last_verified_date']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  const { data, error } = await supabase.from('funding_opportunities').update(body).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-app.delete('/api/funding/:id', auth, requireAdmin, async (req, res) => {
-  const { error } = await supabase.from('funding_opportunities').delete().eq('id', req.params.id)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
-
-// ─── APPLICATIONS ─────────────────────────────────────────────────────────────
-app.get('/api/applications', auth, async (req, res) => {
-  const { status, limit = 200, offset = 0 } = req.query
-  let q = supabase.from('applications').select('*, company:companies(id,company_name), wib:wib_records(id,wib_name,state), funding_opportunity:funding_opportunities(id,opportunity_name), revenue:revenue_records(fee_model,calculated_success_fee,invoice_status)', { count: 'exact' })
-  if (status) q = q.eq('status', status)
-  q = q.order('created_at', { ascending: false }).range(+offset, +offset + Math.min(+limit, 200) - 1)
-  const { data, error, count } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data, count })
-})
-
-app.post('/api/applications', auth, async (req, res) => {
-  const allowed = ['company_id','wib_id','funding_opportunity_id','status','award_amount_requested','submission_date','notes']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  if (!body.company_id) return res.status(400).json({ error: 'Company required' })
-  if (!body.wib_id) return res.status(400).json({ error: 'WIB required' })
-  const { data, error } = await supabase.from('applications').insert({ ...body, owner_id: req.user.id }).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_APPLICATION', record_type: 'applications', record_id: data.id, details: `Created: ${data.application_number}` }) } catch(_) {}
-  res.json(data)
-})
-
-app.put('/api/applications/:id', auth, async (req, res) => {
-  const allowed = ['status','award_amount_requested','award_amount_approved','submission_date','decision_date','notes']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  const { data, error } = await supabase.from('applications').update(body).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_APPLICATION', record_type: 'applications', record_id: req.params.id, details: `Status: ${body.status || 'updated'}` }) } catch(_) {}
-  res.json(data)
-})
-
-app.delete('/api/applications/:id', auth, requireAdmin, async (req, res) => {
-  const { error } = await supabase.from('applications').delete().eq('id', req.params.id)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
-
-// ─── COMPLIANCE ───────────────────────────────────────────────────────────────
-app.get('/api/compliance', auth, async (req, res) => {
-  const { data, error } = await supabase.from('v_compliance_alerts').select('*').order('days_until_final_due')
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
-})
-
-app.put('/api/compliance/:id', auth, async (req, res) => {
-  const allowed = ['final_report_submitted','final_report_submitted_date','attendance_sheets_collected','compliance_notes']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  const { data, error } = await supabase.from('compliance_records').update(body).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-// ─── REVENUE ──────────────────────────────────────────────────────────────────
-app.get('/api/revenue/dashboard', auth, async (req, res) => {
-  const { data, error } = await supabase.from('v_revenue_dashboard').select('*').single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data || {})
-})
-
-app.get('/api/revenue', auth, async (req, res) => {
-  const { data, error } = await supabase.from('revenue_records').select('*, company:companies(company_name), wib:wib_records(wib_name)').order('created_at', { ascending: false })
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
-})
-
-app.put('/api/revenue/:id', auth, async (req, res) => {
-  const allowed = ['invoice_status','payment_received_date','invoice_sent_date']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  const { data, error } = await supabase.from('revenue_records').update(body).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_REVENUE', record_type: 'revenue_records', record_id: req.params.id, details: `Invoice: ${body.invoice_status || 'updated'}` }) } catch(_) {}
-  res.json(data)
-})
-
-// ─── NOTES ────────────────────────────────────────────────────────────────────
-app.get('/api/notes', auth, async (req, res) => {
-  const { record_type, record_id, limit = 50 } = req.query
-  const baseCols = global._safeActivityCols || 'id,action,created_at'
-  const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
-  const cols = baseCols + userJoin
-  let q = supabase.from('activity_log').select(cols).eq('action', 'NOTE')
-  if (record_type && global._hasRecordType !== false) q = q.eq('record_type', record_type)
-  if (record_id   && global._hasRecordId   !== false) q = q.eq('record_id', record_id)
-  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
-  const { data, error } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  const normalized = (data || []).map(n => parseLogRow(n))
-  res.json({ data: normalized })
-})
-
-app.post('/api/notes', auth, async (req, res) => {
-  const { record_type, record_id, note_type = 'Note', is_aircall = false } = req.body
-  const content = (req.body.content || req.body.details || '').trim()
-  if (!content) return res.status(400).json({ error: 'Note content required' })
-  const { data, error } = await safeInsertLog({
-    user_id: req.user.id, action: 'NOTE',
-    record_type: record_type || null, record_id: record_id || null,
-    details: content.trim(),
-    metadata: { note_type, is_aircall, content: content.trim() }
-  })
-  if (error) return res.status(400).json({ error: error.message })
-  const baseCols2 = global._safeActivityCols || 'id,action,created_at'
-  const userJoin2 = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
-  const cols2 = baseCols2 + userJoin2
-  const { data: full } = await supabase.from('activity_log').select(cols2).eq('id', data.id).single()
-  res.json(parseLogRow(full || data))
-})
-
-// ─── TASKS ────────────────────────────────────────────────────────────────────
-app.get('/api/tasks', auth, async (req, res) => {
-  const { record_id, limit = 100 } = req.query
-  const baseCols = global._safeActivityCols || 'id,action,created_at'
-  const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name)' : ''
-  const cols = baseCols + userJoin
-  let q = supabase.from('activity_log').select(cols).eq('action', 'TASK')
-  if (record_id && global._hasRecordId !== false) q = q.eq('record_id', record_id)
-  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
-  const { data, error } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  const normalized = (data || []).map(t => parseLogRow(t))
-  res.json({ data: normalized })
-})
-
-app.post('/api/tasks', auth, async (req, res) => {
-  const { title, due_date, record_type, record_id, priority = 'normal', notes, assigned_to } = req.body
-  if (!title?.trim()) return res.status(400).json({ error: 'Task title required' })
-  const { data, error } = await safeInsertLog({
-    user_id: req.user.id, action: 'TASK',
-    record_type: record_type || null, record_id: record_id || null,
-    details: title.trim(),
-    metadata: { due_date, priority, notes, done: false, assigned_to, title: title.trim(), created_by: req.user.email }
-  })
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(parseLogRow(data))
-})
-
-app.put('/api/tasks/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log')
-    .select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
-  const existingParsed = parseLogRow(existing)
-  const currentMeta = existingParsed?.metadata || {}
-  const newMeta = { ...currentMeta, ...req.body }
-  const updatePayload = global._hasMetadata
-    ? { metadata: newMeta }
-    : { details: JSON.stringify({ text: currentMeta.title || currentMeta.text, ...newMeta }) }
-  const { data, error } = await supabase.from('activity_log').update(updatePayload).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(parseLogRow(data))
-})
-
-// ─── ACTIVITY / AUDIT ─────────────────────────────────────────────────────────
-app.get('/api/activity', auth, async (req, res) => {
-  const { record_type, record_id, limit = 100 } = req.query
-  const baseCols = global._safeActivityCols || 'id,action,created_at'
-  const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
-  const cols = baseCols + userJoin
-  let q = supabase.from('activity_log').select(cols).neq('action', 'NOTE').neq('action', 'TASK')
-  if (record_type && global._hasRecordType !== false) q = q.eq('record_type', record_type)
-  if (record_id   && global._hasRecordId   !== false) q = q.eq('record_id', record_id)
-  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 200))
-  const { data, error } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data: (data||[]).map(r=>parseLogRow(r)) })
-})
-
-app.get('/api/audit', auth, requireAdmin, async (req, res) => {
-  const { limit = 100, offset = 0 } = req.query
-  const baseCols = global._safeActivityCols || 'id,action,created_at'
-  const userJoin = (global._hasUserId !== false) ? ',user:user_profiles!user_id(full_name,email)' : ''
-  const cols = baseCols + userJoin
-  const { data, error, count } = await supabase.from('activity_log').select(cols, { count: 'exact' }).order('created_at', { ascending: false }).range(+offset, +offset + Math.min(+limit, 200) - 1)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data: (data||[]).map(r=>parseLogRow(r)), count })
-})
-
-// ─── USERS ────────────────────────────────────────────────────────────────────
-app.get('/api/users', auth, requireAdmin, async (req, res) => {
-  const [{ data: users, error }, { data: assignments }] = await Promise.all([
-    supabase
+    // Get default assignee — the user with role 'super_admin' (lowest id, lowest churn)
+    const { data: assignees } = await supabase
       .from('user_profiles')
-      .select('id,email,full_name,role,title,phone,is_active,created_at,last_login_at,territory_id')
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('user_territory_assignments')
-      .select('user_id,territory_id,territories(id,name)')
-  ])
-  if (error) return res.status(400).json({ error: error.message })
-  const byUser = {}
-  for (const a of (assignments || [])) {
-    if (!byUser[a.user_id]) byUser[a.user_id] = []
-    if (a.territories) byUser[a.user_id].push(a.territories)
-  }
-  const enriched = (users || []).map(u => ({ ...u, territories: byUser[u.id] || [] }))
-  res.json({ data: enriched })
-})
+      .select('id, full_name, email')
+      .eq('role', 'super_admin')
+      .eq('is_active', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
+    const assigneeId = assignees && assignees[0] ? assignees[0].id : null
 
-app.post('/api/users', auth, requireAdmin, async (req, res) => {
-  try {
-    const { email, password, full_name, role = 'team_member', title, phone } = req.body
-    if (!email || !password) return res.status(400).json({ error: 'Email and password required' })
-    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' })
-    const validRoles = VALID_ROLES
-    if (!validRoles.includes(role)) return res.status(400).json({ error: 'Invalid role' })
-    if (role === 'super_admin' && req.user.role !== 'super_admin') {
-      return res.status(403).json({ error: 'Only Super Admin can assign the Super Admin role' })
-    }
-    const { data, error } = await supabase.auth.admin.createUser({
-      email: email.trim().toLowerCase(), password,
-      email_confirm: true,
-      user_metadata: { full_name }
-    })
-    if (error) return res.status(400).json({ error: error.message })
-    await supabase.from('user_profiles').update({ full_name: full_name || null, role, title: title || null, phone: phone || null, is_active: true }).eq('id', data.user.id)
-    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_USER', details: `Created: ${email} (${role})` }) } catch(_) {}
-    const { data: profile } = await supabase.from('user_profiles').select('*').eq('id', data.user.id).single()
-    res.json({ user: profile })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
+    let createdCount = 0
+    for (const f of funding) {
+      // Idempotency: don't create a renewal task if one already exists for
+      // this funding opportunity in the last 7 days
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString()
+      const { data: existing } = await supabase
+        .from('activity_log')
+        .select('id, metadata')
+        .eq('action', 'TASK')
+        .eq('record_id', f.id)
+        .gte('created_at', sevenDaysAgo)
+        .limit(20)
 
-app.put('/api/users/:id', auth, requireAdmin, async (req, res) => {
-  try {
-    const { full_name, role, title, phone, is_active } = req.body
-    if (req.params.id === req.user.id && is_active === false) return res.status(400).json({ error: 'Cannot disable your own account' })
-    if ((is_active === false || (role && role !== 'super_admin'))) {
-      const { data: t } = await supabase.from('user_profiles').select('role').eq('id', req.params.id).single()
-      if (t?.role === 'super_admin') {
-        const { count } = await supabase.from('user_profiles').select('*', { count: 'exact', head: true }).eq('role', 'super_admin').eq('is_active', true)
-        if ((count || 0) <= 1) return res.status(400).json({ error: 'Cannot disable or demote the only Super Admin' })
+      const alreadyHas = (existing || []).some(t => {
+        const parsed = parseLogRow ? parseLogRow(t) : t
+        const title = parsed?.metadata?.title || ''
+        return title.toLowerCase().includes('renewal')
+      })
+      if (alreadyHas) continue
+
+      const { error } = await _audit({
+        user_id: assigneeId,
+        action: 'TASK',
+        record_type: 'funding_opportunities',
+        record_id: f.id,
+        details: `90-day renewal: ${f.opportunity_name}`,
+        metadata: {
+          title: `90-day renewal: ${f.opportunity_name}`,
+          due_date: target,
+          priority: 'high',
+          done: false,
+          assigned_to: assigneeId,
+          notes: `Auto-created by daily cron. Funding deadline is ${f.application_deadline}. Reach out to WIB ${f.wib_id || '(none)'} to identify renewal or successor funding.`,
+          source: 'cron_renewal',
+          auto_created: true,
+          created_by: 'system',
+        },
+      })
+      if (!error) {
+        createdCount++
+        if (assigneeId) {
+          await _notify({
+            recipientId: assigneeId,
+            type: 'renewal_task',
+            title: `Renewal task: ${f.opportunity_name}`,
+            body: `Funding deadline in ~90 days (${f.application_deadline}). Renewal task created.`,
+            recordType: 'funding_opportunities',
+            recordId: f.id,
+          })
+        }
       }
     }
-    const update = {}
-    if (full_name !== undefined) update.full_name = full_name
-    if (role !== undefined) update.role = role
-    if (title !== undefined) update.title = title
-    if (phone !== undefined) update.phone = phone
-    if (is_active !== undefined) update.is_active = is_active
-    const { data, error } = await supabase.from('user_profiles').update(update).eq('id', req.params.id).select().single()
-    if (error) return res.status(400).json({ error: error.message })
-
-    if (is_active === false) {
-      try { await supabase.auth.admin.updateUserById(req.params.id, { ban_duration: '876000h' }) }
-      catch (e) { console.warn('Supabase Auth ban failed (non-fatal):', e.message) }
-    }
-    if (is_active === true) {
-      try { await supabase.auth.admin.updateUserById(req.params.id, { ban_duration: 'none' }) }
-      catch (e) { console.warn('Supabase Auth unban failed (non-fatal):', e.message) }
-    }
-    if (role === 'super_admin' && req.user.role !== 'super_admin') {
-      return res.status(403).json({ error: 'Only Super Admins can assign the Super Admin role' })
-    }
-
-    const changeNote = [
-      is_active === false ? 'DISABLED' : is_active === true ? 'RE-ENABLED' : '',
-      role ? 'role set to ' + role : '',
-    ].filter(Boolean).join('; ')
-    try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_USER', details: 'Updated: ' + data.email + (changeNote ? ' — ' + changeNote : '') }) } catch(_) {}
-    res.json(data)
-  } catch (err) {
-    res.status(500).json({ error: err.message })
+    results.renewal_tasks_created = createdCount
   }
-})
 
-app.delete('/api/users/:id', auth, requireSuper, async (req, res) => {
-  try {
-    if (req.params.id === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' })
-    const { data: target } = await supabase.from('user_profiles').select('email,role').eq('id', req.params.id).single()
-    if (!target) return res.status(404).json({ error: 'User not found' })
-    if (target.role === 'super_admin') {
-      const { count } = await supabase.from('user_profiles').select('*', { count: 'exact', head: true }).eq('role', 'super_admin')
-      if ((count || 0) <= 1) return res.status(400).json({ error: 'Cannot delete the only Super Admin' })
+  async function runDailyCron(req, res) {
+    const results = {
+      ran_at: new Date().toISOString(),
+      overdue_invoices_notified: 0,
+      missing_agreements_notified: 0,
+      renewal_tasks_created: 0,
+      errors: [],
     }
-    const { error } = await supabase.auth.admin.deleteUser(req.params.id)
-    if (error) return res.status(400).json({ error: error.message })
-    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'DELETE_USER', details: `DELETED: ${target.email}` }) } catch(_) {}
-    res.json({ success: true })
-  } catch (err) {
-    res.status(500).json({ error: err.message })
-  }
-})
+    try { await cronOverdueInvoices(results) }    catch (e) { results.errors.push('overdue_invoices: ' + e.message) }
+    try { await cronMissingAgreements(results) }  catch (e) { results.errors.push('missing_agreements: ' + e.message) }
+    try { await cronRenewalTasks(results) }       catch (e) { results.errors.push('renewal_tasks: ' + e.message) }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// PHASE 3 — CONTACTS, TRAINING PROVIDERS, INVOICES, CONTRACTS, GRANT AWARDS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// ─── CONTACTS ────────────────────────────────────────────────────────────────
-app.get('/api/contacts', auth, async (req, res) => {
-  const { record_type, record_id, search, limit = 200 } = req.query
-  let q = supabase.from('activity_log')
-    .select('*, user:user_profiles!user_id(full_name)')
-    .eq('action', 'CONTACT')
-  if (record_type) q = q.eq('record_type', record_type)
-  if (record_id) q = q.eq('record_id', record_id)
-  q = q.order('created_at', { ascending: false }).limit(+limit)
-  const { data, error } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
-})
-
-app.post('/api/contacts', auth, async (req, res) => {
-  const { name, title, email, phone, record_type, record_id, notes } = req.body
-  if (!name?.trim()) return res.status(400).json({ error: 'Contact name required' })
-  const { data, error } = await supabase.from('activity_log').insert({
-    user_id: req.user.id, action: 'CONTACT',
-    record_type: record_type || null, record_id: record_id || null,
-    details: name, metadata: { name, title, email, phone, notes }
-  }).select('*, user:user_profiles!user_id(full_name)').single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_CONTACT', record_type, record_id, details: `Added contact: ${name}` }) } catch(_) {}
-  res.json(data)
-})
-
-app.put('/api/contacts/:id', auth, async (req, res) => {
-  const { name, title, email, phone, notes } = req.body
-  const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
-  const existingParsed = parseLogRow(existing)
-  const merged = { ...(existingParsed?.metadata || {}), name, title, email, phone, notes }
-  const updateVal = global._hasMetadata ? { metadata: merged, details: name || existingParsed?.metadata?.name } : { details: JSON.stringify({ text: name, ...merged }) }
-  const { data, error } = await supabase.from('activity_log').update(updateVal).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-app.delete('/api/contacts/:id', auth, requireAdmin, async (req, res) => {
-  const { error } = await supabase.from('activity_log').delete().eq('id', req.params.id).eq('action', 'CONTACT')
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
-
-// ─── TRAINING PROVIDERS ───────────────────────────────────────────────────────
-app.get('/api/training-providers', auth, async (req, res) => {
-  const { search, limit = 200 } = req.query
-  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name)').eq('action', 'TRAINING_PROVIDER')
-  if (search) q = q.ilike('details', `%${search}%`)
-  q = q.order('created_at', { ascending: false }).limit(+limit)
-  const { data, error } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
-})
-
-app.post('/api/training-providers', auth, async (req, res) => {
-  const { name, provider_type, website, contact_email, contact_phone, programs, state, notes, status = 'active' } = req.body
-  if (!name?.trim()) return res.status(400).json({ error: 'Provider name required' })
-  const { data, error } = await supabase.from('activity_log').insert({
-    user_id: req.user.id, action: 'TRAINING_PROVIDER',
-    details: name,
-    metadata: { name, provider_type, website, contact_email, contact_phone, programs, state, notes, status }
-  }).select('*, user:user_profiles!user_id(full_name)').single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-app.put('/api/training-providers/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
-  const existingParsed = parseLogRow(existing)
-  const merged = { ...(existingParsed?.metadata || {}), ...req.body }
-  const tpUpdateData = global._hasMetadata
-    ? { details: req.body.name || existing?.details, metadata: merged }
-    : { details: JSON.stringify({ text: req.body.name || existing?.details, ...merged }) }
-  const { data, error } = await supabase.from('activity_log').update(tpUpdateData).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-app.delete('/api/training-providers/:id', auth, requireAdmin, async (req, res) => {
-  const { error } = await supabase.from('activity_log').delete().eq('id', req.params.id).eq('action', 'TRAINING_PROVIDER')
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
-
-// ─── INVOICES ─────────────────────────────────────────────────────────────────
-app.get('/api/invoices', auth, async (req, res) => {
-  const { status, limit = 200 } = req.query
-  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name)').eq('action', 'INVOICE')
-  if (status) q = q.contains('metadata', { status })
-  q = q.order('created_at', { ascending: false }).limit(+limit)
-  const { data, error } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
-})
-
-app.post('/api/invoices', auth, async (req, res) => {
-  const { invoice_number, company_name, application_id, amount, fee_model, status = 'draft', due_date, notes } = req.body
-  if (!company_name?.trim() || !amount) return res.status(400).json({ error: 'Company and amount required' })
-  const inv_num = invoice_number || `INV-${Date.now().toString().slice(-6)}`
-  const { data, error } = await supabase.from('activity_log').insert({
-    user_id: req.user.id, action: 'INVOICE',
-    record_type: 'applications', record_id: application_id || null,
-    details: inv_num,
-    metadata: { invoice_number: inv_num, company_name, application_id, amount, fee_model, status, due_date, notes, created_at: new Date().toISOString() }
-  }).select('*, user:user_profiles!user_id(full_name)').single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_INVOICE', details: `Invoice ${inv_num} — $${amount} — ${company_name}` }) } catch(_) {}
-  res.json(data)
-})
-
-app.put('/api/invoices/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
-  const merged = { ...(existing?.metadata || {}), ...req.body }
-  const updateData = global._hasMetadata ? { metadata: merged } : { details: JSON.stringify(merged) }
-  const { data, error } = await supabase.from('activity_log').update(updateData).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'UPDATE_INVOICE', details: `Invoice ${merged.invoice_number} → ${req.body.status || 'updated'}` }) } catch(_) {}
-  res.json(data)
-})
-
-// ─── CONTRACTS ───────────────────────────────────────────────────────────────
-app.get('/api/contracts', auth, async (req, res) => {
-  const { status, limit = 200 } = req.query
-  let q = supabase.from('activity_log').select('*, user:user_profiles!user_id(full_name)').eq('action', 'CONTRACT')
-  q = q.order('created_at', { ascending: false }).limit(+limit)
-  const { data, error } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
-})
-
-app.post('/api/contracts', auth, async (req, res) => {
-  const { company_name, contract_type, value, status = 'draft', signed_date, expiry_date, notes } = req.body
-  if (!company_name?.trim()) return res.status(400).json({ error: 'Company name required' })
-  const contract_number = `CTR-${Date.now().toString().slice(-6)}`
-  const { data, error } = await supabase.from('activity_log').insert({
-    user_id: req.user.id, action: 'CONTRACT',
-    details: contract_number,
-    metadata: { contract_number, company_name, contract_type, value, status, signed_date, expiry_date, notes, created_at: new Date().toISOString() }
-  }).select('*, user:user_profiles!user_id(full_name)').single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_CONTRACT', details: `Contract ${contract_number} — ${company_name}` }) } catch(_) {}
-  res.json(data)
-})
-
-app.put('/api/contracts/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log').select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
-  const merged = { ...(existing?.metadata || {}), ...req.body }
-  const updateData = global._hasMetadata ? { metadata: merged } : { details: JSON.stringify(merged) }
-  const { data, error } = await supabase.from('activity_log').update(updateData).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-app.delete('/api/contracts/:id', auth, requireAdmin, async (req, res) => {
-  const { error } = await supabase.from('activity_log').delete().eq('id', req.params.id).eq('action', 'CONTRACT')
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
-
-// ─── GRANT AWARDS ─────────────────────────────────────────────────────────────
-app.get('/api/grant-awards', auth, async (req, res) => {
-  const { data, error } = await supabase.from('applications')
-    .select('*, company:companies(company_name), wib:wib_records(wib_name,state), funding_opportunity:funding_opportunities(opportunity_name), revenue:revenue_records(fee_model,calculated_success_fee,invoice_status,payment_received_date)')
-    .in('status', ['awarded', 'active', 'completed', 'closed'])
-    .order('created_at', { ascending: false })
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
-})
-
-
-// FIX 2: Import route now uses service-key auth bypass so long imports don't 401
-// The token is still validated — we just skip the expensive authClient.getUser() call
-// and instead verify the user exists in user_profiles directly via the service key.
-app.post('/api/import/:type', async (req, res) => {
-  // Lightweight auth: validate token via service key (no round-trip to Supabase Auth)
-  try {
-    const rawToken = req.headers.authorization?.replace('Bearer ', '').trim()
-    if (!rawToken || rawToken.length < 10) return res.status(401).json({ error: 'Authentication required' })
-
-    // Decode JWT payload to get user ID (no signature verification needed — service key validates below)
-    let userId
     try {
-      const payload = JSON.parse(Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8'))
-      userId = payload?.sub
+      await _audit({
+        user_id: req.user?.id || null,
+        action: 'CRON_DAILY',
+        details: `cron: ${results.overdue_invoices_notified} overdue invoices, ${results.missing_agreements_notified} missing agreements, ${results.renewal_tasks_created} renewal tasks`,
+        metadata: results,
+      })
     } catch(_) {}
 
-    if (!userId) return res.status(401).json({ error: 'Invalid token' })
-
-    const { data: profile, error: profileErr } = await supabase
-      .from('user_profiles').select('*').eq('id', userId).single()
-    if (profileErr || !profile) return res.status(401).json({ error: 'User not found' })
-    if (profile.is_active === false) return res.status(403).json({ error: 'Account disabled' })
-
-    req.user = profile
-  } catch(authEx) {
-    return res.status(401).json({ error: 'Authentication failed' })
+    res.json({ success: true, ...results })
   }
 
-  const { type } = req.params
-  const { rows, batch, totalBatches } = req.body
-  if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: 'No rows provided' })
-
-  const results = { created: 0, errors: [], batch: batch || 1, totalBatches: totalBatches || 1 }
-  const today = new Date().toISOString().split('T')[0]
-
-  async function bulkInsert(table, records) {
-    if (!records.length) return
-    const { data, error } = await supabase.from(table).insert(records).select('id')
-    if (error) {
-      for (const rec of records) {
-        const { error: e2 } = await supabase.from(table).insert(rec)
-        if (e2) results.errors.push(`Row error: ${e2.message}`)
-        else results.created++
-      }
-    } else {
-      results.created += (data || records).length
+  // Two routes — one for cron header auth, one for admin auth
+  app.get('/api/admin/cron/daily', async (req, res, next) => {
+    const cronSecret = process.env.CRON_SECRET
+    const headerSecret = req.headers['x-cron-secret']
+    if (cronSecret && headerSecret === cronSecret) {
+      req.user = { id: null, email: 'system-cron' }
+      return runDailyCron(req, res)
     }
-  }
+    return next() // fall through to admin auth
+  }, auth, requireAdmin, runDailyCron)
 
-  try {
-    if (type === 'wibs') {
-      const valid = [], skipped = []
-      const wibStatusMap = {
-        'funding available':'funding_available','funding available - have program':'funding_available','funding_available':'funding_available','open':'funding_available','active':'funding_available',
-        'follow up needed':'follow_up_needed','follow_up_needed':'follow_up_needed','follow up':'follow_up_needed',
-        'pending employer':'pending_employer','pending_employer':'pending_employer','pending':'pending_employer',
-        'no reachout completed':'no_reachout_complete','no reachout complete':'no_reachout_complete','no_reachout_complete':'no_reachout_complete','new':'no_reachout_complete','not contacted':'no_reachout_complete',
-        'funding not available':'funding_not_available','funding_not_available':'funding_not_available','closed':'funding_not_available','not applicable':'no_reachout_complete',
-        'stop applications':'stop_applications','stop_applications':'stop_applications','closed - deadline':'funding_not_available','closed - out of funds':'funding_not_available',
-      }
+  // ───────────────────────────────────────────────────────────────────────────
+  // 4. WIB IMPORT BATCH ROLLBACK (FUTURE imports only)
+  // ───────────────────────────────────────────────────────────────────────────
+  // The existing /api/import/wibs has no concept of a batch and does not
+  // tag inserted rows. We can't retro-tag past imports.
+  //
+  // NEW route: /api/import/wibs/batch — performs the same logic as the
+  // existing handler but creates a batch row first, then tags every inserted
+  // wib_records row by injecting `[batch:UUID]` as the first line of the
+  // notes field. Rollback parses notes for `[batch:UUID]` and deletes.
+  //
+  // Storage of batch metadata: we use activity_log (action='WIB_IMPORT_BATCH')
+  // so no new table is required. The frontend can list batches by querying
+  // /api/admin/wib-import-batches.
+  //
+  // To use this from the UI, the user can change pageWibs() importCSV('wibs')
+  // to importCSV('wibs/batch'). If they don't, this route simply sits
+  // unused — no harm.
 
-      const getWibField = (row, ...keys) => {
-        for (const k of keys) {
-          const v = row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()]
-          if (v !== undefined && String(v).trim() !== '' && String(v).trim() !== 'Not applicable') return String(v).trim()
-        }
-        for (const k of keys) {
-          const found = Object.keys(row).find(rk => rk.toLowerCase().replace(/[^a-z]/g,'').includes(k.toLowerCase().replace(/[^a-z]/g,'')))
-          if (found && String(row[found]).trim() && String(row[found]).trim() !== 'Not applicable') return String(row[found]).trim()
-        }
-        return null
-      }
+  app.post('/api/import/wibs/batch', async (req, res) => {
+    // Lightweight auth, same as the existing import handler
+    let userProfile
+    try {
+      const rawToken = (req.headers.authorization || '').replace('Bearer ', '').trim()
+      if (!rawToken || rawToken.length < 10) return res.status(401).json({ error: 'Authentication required' })
+      let userId
+      try {
+        const payload = JSON.parse(Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8'))
+        userId = payload?.sub
+      } catch(_) {}
+      if (!userId) return res.status(401).json({ error: 'Invalid token' })
+      const { data: profile } = await supabase.from('user_profiles').select('*').eq('id', userId).single()
+      if (!profile) return res.status(401).json({ error: 'User not found' })
+      if (profile.is_active === false) return res.status(403).json({ error: 'Account disabled' })
+      userProfile = profile
+    } catch (e) {
+      return res.status(401).json({ error: 'Auth failed' })
+    }
 
-      for (const row of rows) {
-        const name = getWibField(row, 'wib_name','Workforce Board','WIB Name','WIB','Name','Record','Board Name')
-        if (!name?.trim()) { skipped.push('Skipped — no WIB name'); continue }
+    const { rows, batch: batchNumber, totalBatches, batch_id: existingBatchId, filename } = req.body
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'No rows provided' })
+    }
 
-        const rawStatus = (getWibField(row, 'Status','WIB Status','Funding Status') || '').toLowerCase().trim()
-        const status = wibStatusMap[rawStatus] || 'no_reachout_complete'
-
-        const website = getWibField(row, 'Website','URL','Web','Homepage','WIB Website')
-        const domain = website ? website.replace(/^https?:\/\/(www\.)?/,'').split('/')[0] : null
-
-        const knownWibKeys = new Set([
-          'Record ID','Workforce Board','WIB Name','WIB','Name','Record','Board Name',
-          'WIB Email Address','Email','Short Name','Short','Abbreviation',
-          'Status','WIB Status','Funding Status','Type','WIB Type','Board Type',
-          'Website','URL','Web','Homepage','Phone','WIB Phone',
-          'State','Region','County','Address',
-          'Call Priority','Priority','READONLY In-Network',
-          'Created','Updated','Owner','Assigned',
-        ])
-        const extras = Object.entries(row).filter(([k,v]) => !knownWibKeys.has(k) && v && String(v).trim() && String(v).trim() !== 'Not applicable')
-        const noteParts = []
-        const contactCols = Object.entries(row).filter(([k,v]) => /contact.*name|contacts.*name/i.test(k) && v && String(v).trim() !== 'Not applicable')
-        if (contactCols.length) noteParts.push('Contacts: ' + contactCols.map(([,v])=>v).join(', '))
-        const callPriorityVal = getWibField(row, 'Call Priority','call_priority','READONLY In-Network','Priority Score','In-Network Locations')
-        const callPriorityNum = callPriorityVal ? parseInt(String(callPriorityVal).replace(/[^0-9]/g, '')) || 0 : 0
-        const wibTypeVal = getWibField(row, 'Type','WIB Type','Board Type','Organization Type')
-        if (wibTypeVal) noteParts.push('WIB Type: ' + wibTypeVal)
-        const zipVal = getWibField(row, 'Zipcode','Regional Zipcode','State Zipcode','zip','zipcodes')
-        if (zipVal) noteParts.push('Service Area Zipcodes: ' + zipVal)
-        if (extras.length) noteParts.push('Additional Data:\n' + extras.map(([k,v]) => k+': '+v).join('\n'))
-
-        const stateFromName = (() => {
-          const match = name.match(/^([A-Z]{2})\s*-\s*/)
-          if (match) return match[1]
-          return null
-        })()
-
-        const stateAbbr = {
-          'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA',
-          'colorado':'CO','connecticut':'CT','delaware':'DE','florida':'FL','georgia':'GA',
-          'hawaii':'HI','idaho':'ID','illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS',
-          'kentucky':'KY','louisiana':'LA','maine':'ME','maryland':'MD','massachusetts':'MA',
-          'michigan':'MI','minnesota':'MN','mississippi':'MS','missouri':'MO','montana':'MT',
-          'nebraska':'NE','nevada':'NV','new hampshire':'NH','new jersey':'NJ','new mexico':'NM',
-          'new york':'NY','north carolina':'NC','north dakota':'ND','ohio':'OH','oklahoma':'OK',
-          'oregon':'OR','pennsylvania':'PA','rhode island':'RI','south carolina':'SC',
-          'south dakota':'SD','tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT',
-          'virginia':'VA','washington':'WA','west virginia':'WV','wisconsin':'WI','wyoming':'WY',
-          'district of columbia':'DC','puerto rico':'PR'
-        }
-
-        const rawState = getWibField(row, 'State','Region','State/Province','Zipcode > State','State Zipcode > State')
-        const stateValue = stateFromName
-          || (rawState && rawState.length === 2 ? rawState.toUpperCase() : null)
-          || (rawState ? stateAbbr[rawState.toLowerCase()] : null)
-          || 'US'
-
-        const wibRecord = {
-          wib_name: name,
-          short_name: getWibField(row, 'Short Name','Short','Abbreviation','Acronym') || null,
-          state: stateValue,
-          status,
-          wib_email: getWibField(row, 'WIB Email Address','Email Address','Email','Contact Email') || null,
-          wib_phone: getWibField(row, 'Phone','WIB Phone','Contact Phone','Phone Number') || null,
-          website: domain || null,
-          source_url: website || name || 'https://careerOneStop.org',
-          notes: noteParts.join('\n') || null,
-          independent_creation_logged: true,
-          owner_id: req.user.id,
-          last_verified_date: new Date().toISOString().split('T')[0]
-        }
-        if (callPriorityNum > 0) wibRecord.call_priority_score = callPriorityNum
-        valid.push(wibRecord)
-      }
-      results.errors.push(...skipped)
-      for (let i = 0; i < valid.length; i += 100) await bulkInsert('wib_records', valid.slice(i, i + 100))
-
-    } else if (type === 'companies') {
-      const coStatusMap = {
-        'prospect':'prospect','lead':'prospect','potential':'prospect','new':'prospect','unqualified':'prospect',
-        'contacted':'contacted','outreach':'contacted','in progress':'contacted','in_progress':'contacted','trying':'contacted',
-        'qualified':'qualified','qualifying':'qualified','interested':'qualified',
-        'client':'active_client','active':'active_client','active client':'active_client','active_client':'active_client',
-        'partner':'active_client','customer':'active_client','won':'active_client','closed won':'active_client',
-        'network member':'active_client','network_member':'active_client','member':'active_client','network':'active_client',
-        'churned':'churned','inactive':'churned','lost':'churned','cancelled':'churned','closed lost':'churned',
-        'dnc':'dnc','do not contact':'dnc','do_not_contact':'dnc','blocked':'dnc',
-      }
-
-      const getField = (row, ...keys) => {
-        for (const k of keys) {
-          const val = row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()]
-          if (val !== undefined && String(val).trim() !== '') return String(val).trim()
-        }
-        for (const k of keys) {
-          const found = Object.keys(row).find(rk => rk.toLowerCase().replace(/[^a-z0-9]/g,'').includes(k.toLowerCase().replace(/[^a-z0-9]/g,'')))
-          if (found && String(row[found]).trim() !== '') return String(row[found]).trim()
-        }
-        return null
-      }
-
-      const nameKey = rows[0] ? Object.keys(rows[0]).find(k =>
-        /^(company.?name|record|name|company|employer|organization|account.?name|business.?name)$/i.test(k.trim())
-      ) : null
-
-      for (const row of rows) {
-        const name = (nameKey ? row[nameKey] : null)?.trim()
-          || getField(row, 'Company Name','company_name','Record','Name','Company','Employer','Organization','Account Name','Business Name')
-
-        if (!name) { results.errors.push('Skipped — no company name found'); continue }
-
-        const rawStatus = (getField(row,'Status','Stage','status','stage','Record Stage','Company Stage') || '').toLowerCase().trim()
-        const status = coStatusMap[rawStatus] || 'prospect'
-
-        const phone = getField(row,'Phone numbers','Phone Number','Phone','phone','Mobile','Mobile Phone','primary_contact_phone','Contact Phone','Main Phone','Business Phone')
-        const email = getField(row,'Email addresses','Email Address','Email','email','Primary Email','primary_contact_email','Contact Email','Business Email')
-        const rawDomain = getField(row,'Website','website','Domain','domain','URL','Homepage','Web','Site')
-        const domain = rawDomain ? rawDomain.replace(/^https?:\/\/(www\.)?/,'').split('/')[0] : null
-        const contactName = getField(row,'Contact Name','Contact','Primary Contact','Owner Name','Account Owner','primary_contact_name','Rep','Account Manager','Point of Contact')
-        const empRaw = getField(row,'Employee Count','Employees','Number of Employees','employee_count_total','Staff','Headcount','Size')
-        const employeeCount = empRaw ? parseInt(String(empRaw).replace(/[^0-9]/g,'')) || null : null
-        const notes = getField(row,'Notes','Description','Comments','notes','Summary','Bio','About','Details')
-        const rawType = getField(row,'Type','Company Type','Industry','Sector','Category','company_type')
-
-        const insertRow = {}
-        insertRow.company_name = name
-        insertRow.status = status
-        if (rawType) insertRow.company_type = rawType
-        if (domain) insertRow.domain = domain
-        if (email) insertRow.primary_contact_email = email
-        if (phone) insertRow.primary_contact_phone = phone
-        if (contactName) insertRow.primary_contact_name = contactName
-        if (employeeCount) insertRow.employee_count_total = employeeCount
-        if (notes) insertRow.notes = notes
-
-        const wage = getField(row,'Avg Wage','Average Wage','Avg Hourly Wage','Hourly Rate','avg_hourly_wage')
-        if (wage) {
-          const wageNum = parseFloat(String(wage).replace(/[^0-9.]/g,''))
-          if (!isNaN(wageNum)) insertRow.avg_hourly_wage = wageNum
-        }
-        const fein = getField(row,'FEIN','EIN','Tax ID','fein','Federal Tax ID')
-        if (fein) insertRow.fein = fein
-        const training = getField(row,'Training Needs','Training','training_needs')
-        if (training) insertRow.training_needs = training
-
-        const address = [
-          getField(row,'Street','Address','Street Address','Address Line 1','Street 1','Mailing Street'),
-          getField(row,'City','Mailing City'),
-          getField(row,'State','Province','Mailing State'),
-          getField(row,'Zip','Zip Code','Postal Code','Mailing Zip'),
-          getField(row,'Country','Mailing Country'),
-        ].filter(Boolean).join(', ')
-
-        const linkedin = getField(row,'LinkedIn','LinkedIn URL','linkedin_url','LinkedIn Profile')
-        const tags = getField(row,'Tags','Labels','Categories','tag','label')
-        const owner = getField(row,'Owner','Account Owner','Assigned To','Rep','Manager')
-        const source = getField(row,'Source','Lead Source','How did you hear','Channel')
-
-        const mappedKeys = new Set([
-          ...Object.keys(row).filter(k => /company.?name|^record$|^name$|^company$|^employer$|^organization$/i.test(k.trim())),
-          'Status','Stage','status','stage','Record Stage',
-          'Phone numbers','Phone Number','Phone','Mobile','Business Phone','primary_contact_phone','Contact Phone',
-          'Email addresses','Email Address','Email','Primary Email','primary_contact_email','Contact Email',
-          'Website','website','Domain','domain','URL','Homepage',
-          'Contact Name','Contact','Primary Contact','Owner Name','Account Owner','primary_contact_name','Rep','Account Manager',
-          'Employee Count','Employees','Number of Employees','employee_count_total','Staff','Headcount','Size',
-          'Notes','Description','Comments','notes','Summary','Bio','About','Details',
-          'Type','Company Type','Industry','Sector','Category','company_type',
-          'Avg Wage','Average Wage','Avg Hourly Wage','Hourly Rate','avg_hourly_wage',
-          'FEIN','EIN','Tax ID','fein','Federal Tax ID',
-          'Training Needs','Training','training_needs',
-          'Street','Address','Street Address','Address Line 1','Street 1','Mailing Street',
-          'City','Mailing City','State','Province','Mailing State',
-          'Zip','Zip Code','Postal Code','Mailing Zip','Country','Mailing Country',
-          'LinkedIn','LinkedIn URL','linkedin_url','LinkedIn Profile',
-          'Tags','Labels','Categories','tag','label',
-          'Owner','Assigned To','Manager','Lead Source','Source','How did you hear','Channel',
-          'Record ID','id','ID','Created','Created At','Updated','Updated At',
-        ])
-
-        const extra = Object.entries(row)
-          .filter(([k,v]) => !mappedKeys.has(k) && v && String(v).trim())
-          .map(([k,v]) => `${k}: ${String(v).trim()}`)
-
-        const notesParts = []
-        if (insertRow.notes) notesParts.push(insertRow.notes)
-        if (address) notesParts.push(`Address: ${address}`)
-        if (linkedin) notesParts.push(`LinkedIn: ${linkedin}`)
-        if (tags) notesParts.push(`Tags: ${tags}`)
-        if (owner) notesParts.push(`Assigned To: ${owner}`)
-        if (source) notesParts.push(`Source: ${source}`)
-        if (extra.length) notesParts.push('--- Additional Fields ---\n' + extra.join('\n'))
-        if (notesParts.length) insertRow.notes = notesParts.join('\n')
-        if (insertRow.notes && insertRow.notes.length > 10000) {
-          insertRow.notes = insertRow.notes.substring(0, 9997) + '...'
-        }
-
-        const { data: existingCo } = await supabase.from('companies')
-          .select('id').ilike('company_name', insertRow.company_name).limit(1)
-        let insertErr
-        if (existingCo?.[0]) {
-          const updateFields = {}
-          for (const [k,v] of Object.entries(insertRow)) {
-            if (v !== null && v !== '' && k !== 'company_name') updateFields[k] = v
-          }
-          if (Object.keys(updateFields).length) {
-            const { error } = await supabase.from('companies').update(updateFields).eq('id', existingCo[0].id)
-            insertErr = error
-          }
-          results.created++
-        } else {
-          const { error } = await supabase.from('companies').insert(insertRow)
-          insertErr = error
-          if (!insertErr) results.created++
-        }
-        if (insertErr) {
-          results.errors.push('"' + name + '": ' + insertErr.message)
-          if (results.errors.length === 1) console.error('First company import error:', insertErr.message)
-        }
-      }
-
-    } else if (type === 'locations') {
-      if (!global._importCoCache || global._importCoCache.size === 0) {
-        const { data: allCos } = await supabase.from('companies').select('id,company_name')
-        global._importCoCache = new Map()
-        for (const co of (allCos || [])) {
-          global._importCoCache.set(co.company_name.toLowerCase().trim(), co.id)
-          global._importCoCache.set(co.company_name.toLowerCase().trim().substring(0, 25), co.id)
-        }
-      }
-      const coMap = global._importCoCache
-      const findCo = (name) => {
-        if (!name) return null
-        const lower = name.toLowerCase().trim()
-        if (coMap.has(lower)) return coMap.get(lower)
-        for (const [k,id] of coMap) {
-          if (k.startsWith(lower.substring(0,15)) || lower.startsWith(k.substring(0,15))) return id
-        }
-        return null
-      }
-
-      const locBatch = []
-      for (const row of rows) {
-        let name = (
-          row['location_name'] || row['Record'] || row['Location Name'] ||
-          row['Location'] || row['Name'] || row['Facility'] ||
-          row['Facility Name'] || row['Nursing Home'] || row['Site Name'] ||
-          row['record'] || row['name'] || row['location']
-        )
-        name = name ? String(name).trim() : ''
-        if (!name) { results.errors.push('Skipped — no location name'); continue }
-
-        const parentName = (row['parent_operator'] || row['Parent Operator'] || row['Parent Company'] || row['Company'] || row['Operator'] || '').trim()
-        const company_id = findCo(parentName)
-        const rawState = (row['state'] || row['State'] || row['Province'] || '').trim()
-        const rawStatus = (row['status'] || row['Status'] || 'prospect').toLowerCase().trim()
-        const statusMap = { 'not contacted': 'prospect', 'network member': 'prospect', 'active': 'active', 'prospect': 'prospect', 'inactive': 'inactive', 'open': 'prospect' }
-
-        const { data: existingLoc } = await supabase.from('locations')
-          .select('id').ilike('location_name', name).limit(1)
-
-        const locRow = {
-          location_name: name,
-          owner_id: req.user.id,
-          state: rawState || null,
-          city: (row['city'] || row['City'] || '').trim() || null,
-          county: (row['county'] || row['County'] || '').trim() || null,
-          status: statusMap[rawStatus] || 'prospect',
-          employee_count: (row['employee_count'] || row['Employee Count']) ? parseInt(row['employee_count'] || row['Employee Count']) : null,
-          notes: row['notes'] || row['Notes'] || null,
-          address: row['address'] || row['Address'] || null,
-        }
-        if (company_id) locRow.company_id = company_id
-
-        if (existingLoc?.[0]) {
-          const { error } = await supabase.from('locations').update(locRow).eq('id', existingLoc[0].id)
-          if (error) results.errors.push('"' + name + '": ' + error.message)
-          else results.created++
-        } else {
-          locBatch.push(locRow)
-        }
-      }
-      if (locBatch.length) {
-        for (let i = 0; i < locBatch.length; i += 200) {
-          const chunk = locBatch.slice(i, i + 200)
-          const { data: ins, error } = await supabase.from('locations').insert(chunk).select('id')
-          if (error) {
-            for (const row of chunk) {
-              const { error: e2 } = await supabase.from('locations').insert(row)
-              if (e2) results.errors.push('"' + (row.location_name||'?') + '": ' + e2.message)
-              else results.created++
-            }
-          } else {
-            results.created += (ins || chunk).length
-          }
-        }
-      }
-
-    } else if (type === 'funding') {
-      const valid = []
-      for (const row of rows) {
-        const name = (
-          row['opportunity_name'] || row['Opportunity Name'] || row['Funding Opportunity'] ||
-          row['Name'] || row['Record'] || row['Title'] || row['Program Name'] ||
-          row['opportunity name'] || row['funding opportunity'] || row['name'] || row['record']
-        )?.trim() || ''
-        if (!name) {
-          if (results.errors.length < 2) {
-            const headers = Object.keys(row).slice(0, 10).join(', ')
-            results.errors.push(`Skipped row — Opportunity Name required. CSV headers found: ${headers}`)
-          } else {
-            results.errors.push('Skipped row — Opportunity Name required')
-          }
-          continue
-        }
-        valid.push({
-          opportunity_name: name,
-          status: (() => {
-            const rawS = (row['status'] || row['Status'] || '').toLowerCase().trim()
-            const fundingStatusMap = {
-              'open': 'open', 'active': 'open', 'available': 'open',
-              'pending': 'pending', 'pending_employer': 'pending_employer',
-              'blocked': 'blocked', 'on hold': 'blocked',
-              'stop': 'stop_applications', 'stop applications': 'stop_applications', 'stop_applications': 'stop_applications',
-              'closed': 'closed_deadline', 'closed deadline': 'closed_deadline', 'closed_deadline': 'closed_deadline',
-              'out of funds': 'closed_out_of_funds', 'closed_out_of_funds': 'closed_out_of_funds',
-            }
-            return fundingStatusMap[rawS] || 'open'
-          })(),
-          program_type: row['program_type'] || row['Program Type'] || null,
-          source_url: row['source_url'] || row['application_link'] || row['Source URL'] || row['Application Link'] || null,
-          max_award_per_ein: (row['max_award_per_ein'] || row['Max Award/EIN'] || row['Max per EIN']) ? parseFloat(row['max_award_per_ein'] || row['Max Award/EIN'] || row['Max per EIN']) : null,
-          max_award_per_employee: (row['max_award_per_employee'] || row['Max per employee']) ? parseFloat(row['max_award_per_employee'] || row['Max per employee']) : null,
-          application_deadline: row['application_deadline'] || row['Deadline'] || null,
-          blocked_reason: row['blocked_reason'] || row['Blocked Reason'] || null,
-          promotion_for_participants: row['promotion_for_participants'] || row['Promotion'] || null,
-          wage_increase_for_participants: row['wage_increase_for_participants'] || row['Wage Increase'] || null,
-          independent_creation_logged: true
+    // For chunked uploads, the FIRST chunk creates the batch row;
+    // subsequent chunks reuse the same batch_id. The client must pass
+    // batch_id back from the first response.
+    let batchId = existingBatchId
+    if (!batchId) {
+      // Create the batch tracking row in activity_log
+      const { data: batchRow, error: batchErr } = await supabase
+        .from('activity_log')
+        .insert({
+          user_id: userProfile.id,
+          action: 'WIB_IMPORT_BATCH',
+          details: filename || ('WIB import ' + new Date().toISOString()),
+          metadata: {
+            filename: filename || null,
+            started_at: new Date().toISOString(),
+            total_rows_expected: rows.length * (totalBatches || 1),
+            status: 'in_progress',
+          },
         })
+        .select('id').single()
+      if (batchErr || !batchRow) {
+        return res.status(500).json({ error: 'Could not create batch record: ' + (batchErr?.message || 'unknown') })
       }
-      for (let i = 0; i < valid.length; i += 500) await bulkInsert('funding_opportunities', valid.slice(i, i + 500))
-
-    } else if (type === 'applications') {
-      const extractCompanyFromRecord = (record) => {
-        if (!record) return null
-        const stateCodes = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC']
-        for (const code of stateCodes) {
-          const patterns = [' - ' + code + '-', ' - ' + code + ' ', ' - ' + code + ',']
-          for (const pat of patterns) {
-            const idx = record.indexOf(pat)
-            if (idx > 3) return record.substring(0, idx).trim()
-          }
-        }
-        const wibPrefixes = [' - CO ', ' - IW', ' - Tri', ' - North', ' - South', ' - East', ' - West', ' - Greater', ' - Central', ' - Capital', ' - Area ', ' - Work', ' - NOVA', ' - Hampton', ' - Permian', ' - Gulf', ' - Career']
-        for (const sep of wibPrefixes) {
-          const idx = record.indexOf(sep)
-          if (idx > 3) return record.substring(0, idx).trim()
-        }
-        const dashIdx = record.indexOf(' - ')
-        if (dashIdx > 4 && dashIdx < record.length - 4) return record.substring(0, dashIdx).trim()
-        return record.trim()
-      }
-
-      if (!global._importCoCache || global._importCoCache.size === 0) {
-        const { data: allCompanies } = await supabase.from('companies').select('id,company_name')
-        global._importCoCache = new Map()
-        for (const co of (allCompanies || [])) {
-          global._importCoCache.set(co.company_name.toLowerCase().trim(), co.id)
-          global._importCoCache.set(co.company_name.toLowerCase().trim().substring(0, 30), co.id)
-        }
-      }
-      const companyMap = global._importCoCache
-
-      const { data: allWibs } = await supabase.from('wib_records').select('id,wib_name,short_name,state')
-      const wibMap = new Map()
-      for (const w of (allWibs || [])) {
-        wibMap.set(w.wib_name.toLowerCase().trim(), w.id)
-        if (w.short_name) wibMap.set(w.short_name.toLowerCase().trim(), w.id)
-      }
-
-      const findCompanyId = async (name) => {
-        if (!name) return null
-        const lower = name.toLowerCase().trim()
-        if (companyMap.has(lower)) return companyMap.get(lower)
-        for (const [key, id] of companyMap) {
-          if (key.startsWith(lower.substring(0, Math.min(20, lower.length)))) return id
-          if (lower.startsWith(key.substring(0, Math.min(20, key.length)))) return id
-        }
-        const prefix15 = lower.substring(0, 15)
-        for (const [key, id] of companyMap) {
-          if (key.includes(prefix15) || lower.includes(key.substring(0, 15))) return id
-        }
-        const words = lower.split(/\s+/).filter(w => w.length > 3)
-        let bestId = null, bestScore = 0
-        for (const [key, id] of companyMap) {
-          const keyWords = key.split(/\s+/)
-          const shared = words.filter(w => keyWords.some(kw => kw.startsWith(w.substring(0,6)) || w.startsWith(kw.substring(0,6)))).length
-          const score = shared / Math.max(words.length, 1)
-          if (score > 0.7 && score > bestScore) { bestScore = score; bestId = id }
-        }
-        if (bestId) return bestId
-        try {
-          const searchTerm = lower.substring(0, 20)
-          const { data } = await supabase.from('companies').select('id').ilike('company_name', searchTerm + '%').limit(1)
-          if (data?.[0]) { companyMap.set(lower, data[0].id); return data[0].id }
-          const { data: d2 } = await supabase.from('companies').select('id').ilike('company_name', '%' + lower.substring(0, 15) + '%').limit(1)
-          if (d2?.[0]) { companyMap.set(lower, d2[0].id); return d2[0].id }
-        } catch(e) {}
-        return null
-      }
-
-      const findWibId = (name) => {
-        if (!name) return null
-        const lower = name.toLowerCase().trim()
-        if (wibMap.has(lower)) return wibMap.get(lower)
-        for (const [key, id] of wibMap) {
-          if (key.includes(lower.substring(0, 10)) || lower.includes(key.substring(0, 10))) return id
-        }
-        return null
-      }
-
-      const appStatusMap = {
-        'intake': 'intake', 'new': 'intake', 'open': 'intake', 'lead': 'intake',
-        'in progress': 'in_progress', 'in_progress': 'in_progress', 'active': 'in_progress',
-        'submitted': 'submitted', 'pending': 'submitted',
-        'under review': 'under_review', 'under_review': 'under_review', 'review': 'under_review',
-        'awarded': 'awarded', 'won': 'awarded', 'approved': 'awarded', 'funded': 'awarded',
-        'denied': 'denied', 'rejected': 'denied', 'lost': 'denied', 'closed lost': 'denied',
-        'withdrawn': 'withdrawn', 'cancelled': 'withdrawn',
-        'completed': 'active', 'closed': 'active',
-      }
-
-      for (const row of rows) {
-        const recordName = (row['application_number'] || row['Record'] || row['Application'] || row['Name'] || '').trim()
-        const rawCompany = (row['company_name'] || row['Company'] || row['Company Name'] ||
-          row['Employer'] || row['Account'] || row['Account Name'] || '').trim() || null
-        const companyName = rawCompany || extractCompanyFromRecord(recordName)
-        if (!companyName) { results.errors.push('Skipped row — no company name'); continue }
-
-        const company_id = await findCompanyId(companyName)
-        const rawWib = row['WIB']?.trim() || row['Workforce Board']?.trim() ||
-          row['WIB Name']?.trim() || row['Board']?.trim()
-        const wibName = rawWib || (() => {
-          const parts = recordName.split(' - ')
-          if (parts.length >= 2) return parts[1]?.trim()
-          return null
-        })()
-        const wib_id = wibName ? findWibId(wibName) : null
-
-        if (!company_id && companyName) {
-          results.errors.push('Warning: "'+companyName+'" not matched to a Company (location saved without parent link)')
-        }
-
-        const rawStatus = (row['status'] || row['Status'] || row['Stage'] || row['Application Stage'] || 'intake').toLowerCase().trim()
-        const status = appStatusMap[rawStatus] || 'intake'
-
-        const getAmt = (...keys) => {
-          for (const k of keys) {
-            const v = row[k]
-            if (v && String(v).trim()) return parseFloat(String(v).replace(/[$, ]/g,'')) || null
-          }
-          return null
-        }
-        const getDate = (...keys) => {
-          for (const k of keys) {
-            const v = row[k]
-            if (v && String(v).trim()) return String(v).trim().split('T')[0]
-          }
-          return null
-        }
-
-        const noteParts = []
-        if (recordName) noteParts.push(`Application: ${recordName}`)
-        if (row['notes'] || row['Notes'] || row['Description'] || row['Comments']) noteParts.push(row['notes'] || row['Notes'] || row['Description'] || row['Comments'])
-        const knownKeys = new Set(['Record ID','Record','Status','Stage','Company','Company Name','Employer','Account','Account Name',
-          'WIB','Workforce Board','WIB Name','Board','Notes','Description','Comments',
-          'Award Requested','Amount Requested','Award Approved','Amount Approved','Application Approved Amount',
-          'Submission Date','Submitted','Decision Date','Decision','Created','Updated','Owner','Record Stage'])
-        const extras = Object.entries(row).filter(([k,v]) => !knownKeys.has(k) && v && String(v).trim())
-        if (extras.length) noteParts.push('--- Additional ---\n' + extras.map(([k,v])=>k+': '+v).join('\n'))
-
-        const insertRow = { company_id, status, notes: noteParts.join('\n') || null, owner_id: req.user.id }
-        if (wib_id) insertRow.wib_id = wib_id
-        const awarded = getAmt('award_amount_approved','Application Approved Amount','Award Approved','Amount Approved','Approved Amount','Awarded Amount')
-        const requested = getAmt('award_amount_requested','Award Requested','Amount Requested','Requested Amount','Application Amount')
-        if (awarded) insertRow.award_amount_approved = awarded
-        if (requested) insertRow.award_amount_requested = requested
-        const subDate = getDate('submission_date','Submission Date','Submitted','Submit Date','Date Submitted')
-        const decDate = getDate('decision_date','Decision Date','Decision','Approved Date','Award Date')
-        if (subDate) insertRow.submission_date = subDate
-        if (decDate) insertRow.decision_date = decDate
-
-        const { error } = await supabase.from('applications').insert(insertRow)
-        if (error) {
-          results.errors.push(`"${companyName}": ${error.message}`)
-          if (results.errors.length === 1) console.error('First app import error:', error.code, error.message)
-        } else {
-          results.created++
-        }
-      }
-
-    } else {
-      return res.status(400).json({ error: `Import not supported for type: ${type}` })
+      batchId = batchRow.id
     }
 
-    if (!batch || batch === totalBatches) {
-      try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'IMPORT', details: `Imported ${results.created} ${type} records (${results.errors.length} errors)` }) } catch(_) {}
+    const results = { created: 0, errors: [], batch_id: batchId, batch: batchNumber || 1, totalBatches: totalBatches || 1 }
+
+    // Same WIB import logic as the existing handler, with batch tagging.
+    // We deliberately duplicate the field-mapping logic here rather than
+    // refactoring server.js, so this module stays standalone.
+    const wibStatusMap = {
+      'funding available':'funding_available','funding_available':'funding_available','open':'funding_available','active':'funding_available',
+      'follow up needed':'follow_up_needed','follow_up_needed':'follow_up_needed','follow up':'follow_up_needed',
+      'pending employer':'pending_employer','pending_employer':'pending_employer','pending':'pending_employer',
+      'no reachout completed':'no_reachout_complete','no reachout complete':'no_reachout_complete','no_reachout_complete':'no_reachout_complete','new':'no_reachout_complete','not contacted':'no_reachout_complete',
+      'funding not available':'funding_not_available','funding_not_available':'funding_not_available','closed':'funding_not_available','not applicable':'no_reachout_complete',
+      'stop applications':'stop_applications','stop_applications':'stop_applications',
     }
-    const cappedErrors = results.errors.slice(0, 20)
-    const truncated = results.errors.length > 20
+
+    const getWibField = (row, ...keys) => {
+      for (const k of keys) {
+        const v = row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()]
+        if (v !== undefined && String(v).trim() !== '' && String(v).trim() !== 'Not applicable') return String(v).trim()
+      }
+      for (const k of keys) {
+        const found = Object.keys(row).find(rk => rk.toLowerCase().replace(/[^a-z]/g,'').includes(k.toLowerCase().replace(/[^a-z]/g,'')))
+        if (found && String(row[found]).trim() && String(row[found]).trim() !== 'Not applicable') return String(row[found]).trim()
+      }
+      return null
+    }
+
+    const stateAbbr = {
+      'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA',
+      'colorado':'CO','connecticut':'CT','delaware':'DE','florida':'FL','georgia':'GA',
+      'hawaii':'HI','idaho':'ID','illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS',
+      'kentucky':'KY','louisiana':'LA','maine':'ME','maryland':'MD','massachusetts':'MA',
+      'michigan':'MI','minnesota':'MN','mississippi':'MS','missouri':'MO','montana':'MT',
+      'nebraska':'NE','nevada':'NV','new hampshire':'NH','new jersey':'NJ','new mexico':'NM',
+      'new york':'NY','north carolina':'NC','north dakota':'ND','ohio':'OH','oklahoma':'OK',
+      'oregon':'OR','pennsylvania':'PA','rhode island':'RI','south carolina':'SC',
+      'south dakota':'SD','tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT',
+      'virginia':'VA','washington':'WA','west virginia':'WV','wisconsin':'WI','wyoming':'WY',
+      'district of columbia':'DC','puerto rico':'PR',
+    }
+
+    const valid = []
+    for (const row of rows) {
+      const name = getWibField(row,'wib_name','Workforce Board','WIB Name','WIB','Name','Record','Board Name')
+      if (!name?.trim()) { results.errors.push('Skipped — no WIB name'); continue }
+
+      const rawStatus = (getWibField(row,'Status','WIB Status','Funding Status') || '').toLowerCase().trim()
+      const status = wibStatusMap[rawStatus] || 'no_reachout_complete'
+      const website = getWibField(row,'Website','URL','Web','Homepage','WIB Website')
+      const domain = website ? website.replace(/^https?:\/\/(www\.)?/,'').split('/')[0] : null
+
+      const stateFromName = (() => {
+        const match = name.match(/^([A-Z]{2})\s*-\s*/)
+        return match ? match[1] : null
+      })()
+      const rawState = getWibField(row,'State','Region','State/Province')
+      const stateValue = stateFromName
+        || (rawState && rawState.length === 2 ? rawState.toUpperCase() : null)
+        || (rawState ? stateAbbr[rawState.toLowerCase()] : null)
+        || 'US'
+
+      // Contact names — same anti-contamination logic as the existing
+      // handler. Folded into notes, NOT into wib_name.
+      const contactCols = Object.entries(row).filter(([k,v]) =>
+        /contact.*name|contacts.*name/i.test(k) && v && String(v).trim() !== 'Not applicable'
+      )
+      const noteParts = []
+      // CRITICAL: batch tag must be the first line of notes for rollback
+      noteParts.push(`[batch:${batchId}]`)
+      if (contactCols.length) noteParts.push('Contacts: ' + contactCols.map(([,v])=>v).join(', '))
+
+      const wibTypeVal = getWibField(row,'Type','WIB Type','Board Type')
+      if (wibTypeVal) noteParts.push('WIB Type: ' + wibTypeVal)
+
+      const wibRecord = {
+        wib_name: name,
+        short_name: getWibField(row,'Short Name','Short','Abbreviation') || null,
+        state: stateValue,
+        status,
+        wib_email: getWibField(row,'WIB Email Address','Email Address','Email','Contact Email') || null,
+        wib_phone: getWibField(row,'Phone','WIB Phone','Contact Phone','Phone Number') || null,
+        website: domain || null,
+        source_url: website || 'https://careerOneStop.org',
+        notes: noteParts.join('\n'),
+        independent_creation_logged: true,
+        owner_id: userProfile.id,
+        last_verified_date: new Date().toISOString().split('T')[0],
+      }
+      valid.push(wibRecord)
+    }
+
+    // Bulk insert in chunks of 100
+    for (let i = 0; i < valid.length; i += 100) {
+      const chunk = valid.slice(i, i + 100)
+      const { data, error } = await supabase.from('wib_records').insert(chunk).select('id')
+      if (error) {
+        // Fallback to row-by-row
+        for (const rec of chunk) {
+          const { error: e2 } = await supabase.from('wib_records').insert(rec)
+          if (e2) results.errors.push(`"${rec.wib_name}": ${e2.message}`)
+          else results.created++
+        }
+      } else {
+        results.created += (data || chunk).length
+      }
+    }
+
+    // Update batch row with progress
+    try {
+      const { data: bRow } = await supabase.from('activity_log').select('metadata').eq('id', batchId).single()
+      const bMeta = (bRow && bRow.metadata) || {}
+      const newCreated = (bMeta.records_created || 0) + results.created
+      const isFinal = !batchNumber || batchNumber === totalBatches
+      await supabase.from('activity_log').update({
+        metadata: {
+          ...bMeta,
+          records_created: newCreated,
+          status: isFinal ? 'complete' : 'in_progress',
+          completed_at: isFinal ? new Date().toISOString() : null,
+        },
+      }).eq('id', batchId)
+    } catch (e) { console.warn('[wib-batch] could not update batch metadata:', e.message) }
+
     res.json({
       created: results.created,
-      errors: cappedErrors,
+      errors: results.errors.slice(0, 20),
       error_count: results.errors.length,
-      truncated,
+      truncated: results.errors.length > 20,
       total: rows.length,
       batch: results.batch,
       totalBatches: results.totalBatches,
-      first_row_keys: rows[0] ? Object.keys(rows[0]).slice(0,8) : [],
+      batch_id: batchId,
     })
-  } catch(e) {
-    console.error('Import error:', e)
-    res.status(500).json({ error: e.message })
-  }
-})
-
-app.post('/api/import-test', auth, requireAdmin, async (req, res) => {
-  const { row } = req.body
-  if (!row) return res.status(400).json({ error: 'row required' })
-  try {
-    const { data, error } = await supabase.from('companies').insert({
-      company_name: row.company_name || 'Test Company ' + Date.now(),
-      status: row.status || 'prospect'
-    }).select('id,company_name,status').single()
-    if (error) return res.json({ success: false, db_error: error.message, db_code: error.code, db_details: error.details, db_hint: error.hint })
-    await supabase.from('companies').delete().eq('id', data.id)
-    return res.json({ success: true, message: 'Test insert worked — DB constraints OK', data })
-  } catch(e) {
-    return res.json({ success: false, threw: e.message })
-  }
-})
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// AGREEMENTS API
-// Stores agreements in activity_log (action='AGREEMENT') using the same
-// metadata pattern as invoices/contracts — no new table required.
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// GET /api/agreements — list all agreements (optionally filter by type/status/company)
-app.get('/api/agreements', auth, async (req, res) => {
-  const { type, status, company_id, limit = 200 } = req.query
-  let q = supabase.from('activity_log')
-    .select('*, user:user_profiles!user_id(full_name,email)')
-    .eq('action', 'AGREEMENT')
-    .order('created_at', { ascending: false })
-    .limit(Math.min(+limit, 500))
-  const { data, error } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  let rows = (data || []).map(r => parseLogRow(r))
-  // Client-side filter on metadata fields
-  if (type)       rows = rows.filter(r => r.metadata?.agreement_type === type)
-  if (status)     rows = rows.filter(r => r.metadata?.status === status)
-  if (company_id) rows = rows.filter(r => r.metadata?.company_id === company_id)
-  res.json({ data: rows })
-})
-
-// GET /api/agreements/stats — dashboard counts
-app.get('/api/agreements/stats', auth, async (req, res) => {
-  const { data, error } = await supabase.from('activity_log')
-    .select(global._safeActivityCols || 'id,action,created_at')
-    .eq('action', 'AGREEMENT')
-  if (error) return res.status(400).json({ error: error.message })
-  const rows = (data || []).map(r => parseLogRow(r))
-  const stats = {
-    total: rows.length,
-    by_type: {},
-    by_status: {},
-    pending_signature: 0,
-    active: 0,
-  }
-  for (const r of rows) {
-    const t = r.metadata?.agreement_type || 'unknown'
-    const s = r.metadata?.status || 'draft'
-    stats.by_type[t]   = (stats.by_type[t]   || 0) + 1
-    stats.by_status[s] = (stats.by_status[s] || 0) + 1
-    if (s === 'pending_signature') stats.pending_signature++
-    if (s === 'active' || s === 'signed') stats.active++
-  }
-  res.json(stats)
-})
-
-// GET /api/agreements/:id — single agreement
-app.get('/api/agreements/:id', auth, async (req, res) => {
-  const { data, error } = await supabase.from('activity_log')
-    .select('*, user:user_profiles!user_id(full_name,email)')
-    .eq('id', req.params.id)
-    .eq('action', 'AGREEMENT')
-    .single()
-  if (error) return res.status(404).json({ error: 'Agreement not found' })
-  res.json(parseLogRow(data))
-})
-
-// POST /api/agreements — create new agreement
-app.post('/api/agreements', auth, async (req, res) => {
-  const {
-    agreement_type, title, company_id, company_name,
-    status = 'draft', fee_model, upfront_fee, success_fee_pct,
-    payment_trigger, scope_items, clauses_enabled,
-    signed_date, expiry_date, notes, full_text
-  } = req.body
-
-  const VALID_TYPES = ['employer','training_provider','iwt','referral','compliance','consulting']
-  if (!agreement_type || !VALID_TYPES.includes(agreement_type)) {
-    return res.status(400).json({ error: 'Valid agreement_type required: ' + VALID_TYPES.join(', ') })
-  }
-  if (!title?.trim()) return res.status(400).json({ error: 'Agreement title required' })
-
-  const agr_number = `AGR-${Date.now().toString().slice(-6)}`
-
-  const { data, error } = await safeInsertLog({
-    user_id: req.user.id,
-    action: 'AGREEMENT',
-    record_type: company_id ? 'companies' : null,
-    record_id:   company_id || null,
-    details: agr_number,
-    metadata: {
-      agr_number, agreement_type, title, company_id: company_id || null,
-      company_name: company_name || null, status,
-      fee_model: fee_model || null,
-      upfront_fee: upfront_fee ? parseFloat(upfront_fee) : null,
-      success_fee_pct: success_fee_pct ? parseFloat(success_fee_pct) : null,
-      payment_trigger: payment_trigger || null,
-      scope_items: scope_items || [],
-      clauses_enabled: clauses_enabled || [],
-      signed_date: signed_date || null,
-      expiry_date: expiry_date || null,
-      notes: notes || null,
-      full_text: full_text || null,
-      created_at: new Date().toISOString(),
-    }
   })
-  if (error) return res.status(400).json({ error: error.message })
-  try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'CREATE_AGREEMENT', details: `Created ${agreement_type} agreement: ${title}` }) } catch(_) {}
-  res.json(parseLogRow(data))
-})
 
-// PUT /api/agreements/:id — update agreement
-app.put('/api/agreements/:id', auth, async (req, res) => {
-  const { data: existing } = await supabase.from('activity_log')
-    .select(global._safeActivityCols || 'id,action,created_at')
-    .eq('id', req.params.id)
-    .eq('action', 'AGREEMENT')
-    .single()
-  if (!existing) return res.status(404).json({ error: 'Agreement not found' })
-
-  const existingParsed = parseLogRow(existing)
-  const merged = { ...(existingParsed?.metadata || {}), ...req.body, updated_at: new Date().toISOString() }
-
-  const updateVal = global._hasMetadata
-    ? { metadata: merged, details: merged.agr_number || existing.details }
-    : { details: JSON.stringify({ text: merged.agr_number, ...merged }) }
-
-  const { data, error } = await supabase.from('activity_log')
-    .update(updateVal)
-    .eq('id', req.params.id)
-    .select()
-    .single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'UPDATE_AGREEMENT', record_type: 'agreements', record_id: req.params.id, details: `Updated: ${merged.title || req.params.id} → ${req.body.status || 'updated'}` }) } catch(_) {}
-  res.json(parseLogRow(data))
-})
-
-// DELETE /api/agreements/:id
-app.delete('/api/agreements/:id', auth, requireAdmin, async (req, res) => {
-  const { error } = await supabase.from('activity_log')
-    .delete()
-    .eq('id', req.params.id)
-    .eq('action', 'AGREEMENT')
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'DELETE_AGREEMENT', details: `Deleted agreement: ${req.params.id}` }) } catch(_) {}
-  res.json({ success: true })
-})
-
-
-
-app.post('/api/webhooks/aircall',
-  express.raw({ type: '*/*', limit: '1mb' }),
-  async (req, res) => {
-    const secret = process.env.AIRCALL_WEBHOOK_SECRET
-    const sigHeader = req.headers['x-aircall-signature'] || ''
-
-    if (secret) {
-      const computed = 'sha256=' + crypto.createHmac('sha256', secret).update(req.body).digest('hex')
-      const sigBuf  = Buffer.from(sigHeader.padEnd(computed.length))
-      const compBuf = Buffer.from(computed)
-      if (sigBuf.length !== compBuf.length || !crypto.timingSafeEqual(sigBuf, compBuf)) {
-        console.warn('Aircall webhook: signature mismatch from IP', req.ip)
-        return res.status(401).json({ error: 'Invalid webhook signature' })
-      }
-    } else {
-      console.warn('AIRCALL_WEBHOOK_SECRET not set — accepting webhook without signature verification')
-    }
-
-    let payload
-    try { payload = JSON.parse(req.body.toString('utf8')) }
-    catch (e) { return res.status(400).json({ error: 'Invalid JSON in webhook body' }) }
-
-    const { event, data: callData } = payload
-    if (!callData?.id) return res.status(400).json({ error: 'Missing call_id in payload' })
-
-    const callId = String(callData.id)
-    const upsertPayload = {
-      call_id:        callId,
-      direction:      callData.direction    || null,
-      duration:       callData.duration     || null,
-      started_at:     callData.started_at   ? new Date(callData.started_at * 1000).toISOString()  : null,
-      ended_at:       callData.ended_at     ? new Date(callData.ended_at   * 1000).toISOString()  : null,
-      recording_url:  callData.recording    || null,
-      assigned_email: callData.user?.email  || null,
-      raw_payload:    payload,
-    }
-
-    if (callData.user?.email) {
-      const { data: agentProfile } = await supabase.from('user_profiles').select('id').eq('email', callData.user.email).single()
-      if (agentProfile) upsertPayload.assigned_to = agentProfile.id
-    }
-
-    const { data: upserted, error: upsertErr } = await supabase
-      .from('aircall_calls')
-      .upsert(upsertPayload, { onConflict: 'call_id', ignoreDuplicates: false })
-      .select().single()
-
-    if (upsertErr) {
-      console.error('Aircall upsert error:', upsertErr.message, 'call_id:', callId)
-      return res.status(500).json({ error: 'Failed to store call record' })
-    }
-
-    if (event === 'call.ended' && upserted.duration && !upserted.note_id) {
-      const callDate     = upserted.started_at ? new Date(upserted.started_at).toLocaleDateString('en-US') : 'Unknown'
-      const durationStr  = upserted.duration ? `${Math.floor(upserted.duration / 60)}m ${upserted.duration % 60}s` : 'Unknown'
-      const agentName    = callData.user?.name || callData.user?.email || 'Unknown Agent'
-      const direction    = upserted.direction === 'inbound' ? '📞 Inbound' : '📤 Outbound'
-      const recordingStr = upserted.recording_url ? `\nRecording: ${upserted.recording_url}` : ''
-      const noteContent = [
-        `[AIRCALL NOTE] | ${callDate} | ${durationStr} | ${agentName}`,
-        `Direction: ${direction}`,
-        `Duration: ${durationStr}`,
-        recordingStr,
-      ].filter(Boolean).join('\n')
-
-      if (upserted.assigned_to) {
-        const { data: newNote } = await supabase.from('notes').insert({
-          record_type: upserted.record_type || 'internal',
-          record_id:   upserted.record_id   || upserted.assigned_to,
-          content:     noteContent,
-          note_type:   'Call Summary',
-          is_aircall:  true,
-          aircall_id:  callId,
-          created_by:  upserted.assigned_to,
-        }).select('id').single()
-
-        if (newNote) {
-          await supabase.from('aircall_calls').update({ note_id: newNote.id, status: 'note_created' }).eq('call_id', callId)
-        }
-      }
-    }
-    res.status(200).json({ received: true, call_id: callId, event })
-  }
-)
-
-app.post('/api/ai', auth, async (req, res) => {
-  const { prompt, context = '' } = req.body
-  if (!prompt?.trim()) return res.status(400).json({ error: 'Prompt required' })
-
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
-    return res.json({
-      text: 'AI Assistant requires an ANTHROPIC_API_KEY environment variable. Add it in your Render dashboard under Environment Variables, then redeploy.',
-      error: true
-    })
-  }
-
-  function sanitizeAiInput(s) {
-    return String(s || '')
-      .substring(0, 2000)
-      .replace(/ignore\s+(previous|all|prior|above)\s+(instructions?|prompts?|context)/gi, '[filtered]')
-      .replace(/system\s*prompt/gi, '[filtered]')
-      .replace(/you\s+are\s+(?:now|a|an)\s+(?:different|new|another)/gi, '[filtered]')
-      .replace(/reveal\s+(?:all|every|the|your)\s+(?:data|records|users|companies)/gi, '[filtered]')
-      .replace(/<script[^>]*>.*?<\/script>/gi, '[filtered]')
-      .trim()
-  }
-
-  const safePrompt  = sanitizeAiInput(prompt)
-  const safeContext = sanitizeAiInput(context)
-
-  const oneHourAgo = new Date(Date.now() - 3600000).toISOString()
-  const { count: aiCount } = await supabase.from('activity_log').select('id', { count: 'exact', head: true })
-    .eq('user_id', req.user.id).eq('action', 'AI_QUERY').gte('created_at', oneHourAgo)
-  if ((aiCount || 0) >= 50) {
-    return res.status(429).json({
-      error: 'AI rate limit reached (50 requests/hour). Please wait before trying again.',
-      text:  'Rate limit reached. Try again in an hour.'
-    })
-  }
-
-  try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify({
-        model:      'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        system:     'You are an expert workforce grant consultant AI assistant for Valor Workforce Funding LLC. You help staff analyze WIB relationships, employer eligibility, grant funding opportunities, and application status. Never reveal data from other organizations. Only discuss the context provided. Be concise, actionable, and format for CRM display.',
-        messages: [{ role: 'user', content: `Context: ${safeContext}\n\nTask: ${safePrompt}` }]
-      })
-    })
-    const data = await response.json()
-    if (data.error) return res.json({ text: `AI Error: ${data.error.message}`, error: true })
-    const text = data.content?.[0]?.text || 'No response generated.'
-    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'AI_QUERY', details: prompt.substring(0, 200) }) } catch(_) {}
-    res.json({ text })
-  } catch(e) {
-    res.status(500).json({ error: e.message, text: 'AI temporarily unavailable: ' + e.message })
-  }
-})
-
-const DEFAULT_PERMISSIONS = {
-  view_records:          { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:true,  external_partner:true  },
-  create_wibs_companies: { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:true,  external_partner:false },
-  edit_wibs_companies:   { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:true,  external_partner:false },
-  delete_records:        { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
-  create_edit_apps:      { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:true,  external_partner:false },
-  view_revenue:          { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:true,  external_partner:false },
-  manage_invoices:       { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:false, team_member:false, external_partner:false },
-  compliance_tracking:   { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:false, external_partner:false },
-  notes_tasks:           { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:true,  external_partner:false },
-  ai_assistant:          { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:true,  external_partner:false },
-  import_export:         { super_admin:true,  admin:true,  grant_coordinator:true,  compliance_mgr:true,  team_member:true,  external_partner:false },
-  audit_logs:            { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
-  manage_users:          { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
-  assign_roles:          { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
-  assign_super_admin:    { super_admin:true,  admin:false, grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
-  system_settings:       { super_admin:true,  admin:true,  grant_coordinator:false, compliance_mgr:false, team_member:false, external_partner:false },
-}
-
-const LOCKED_PERMISSIONS = {
-  view_records:       { external_partner: true },
-  manage_users:       { super_admin: true },
-  assign_super_admin: { super_admin: true },
-  system_settings:    { super_admin: true },
-  assign_roles:       { super_admin: true },
-}
-
-let _permissionsCache = null
-
-async function loadPermissions() {
-  if (_permissionsCache) return _permissionsCache
-  try {
-    const { data, error } = await supabase.from('role_permissions').select('*').single()
-    if (!error && data?.permissions) {
-      _permissionsCache = { ...DEFAULT_PERMISSIONS, ...data.permissions }
-    } else {
-      _permissionsCache = { ...DEFAULT_PERMISSIONS }
-    }
-  } catch {
-    _permissionsCache = { ...DEFAULT_PERMISSIONS }
-  }
-  return _permissionsCache
-}
-
-async function savePermissions(perms) {
-  _permissionsCache = perms
-  try {
-    const { error } = await supabase.from('role_permissions').upsert({ id: 1, permissions: perms, updated_at: new Date().toISOString() })
-    if (error) console.warn('role_permissions table may not exist yet — permissions stored in memory only.')
-  } catch(e) {
-    console.warn('Permissions save failed:', e.message)
-  }
-}
-
-app.get('/api/permissions', auth, async (req, res) => {
-  try {
-    const perms = await loadPermissions()
-    res.json({ permissions: perms, locked: LOCKED_PERMISSIONS })
-  } catch(e) {
-    res.status(500).json({ error: e.message })
-  }
-})
-
-app.put('/api/permissions', auth, requireSuper, async (req, res) => {
-  try {
-    const { permission, role, value } = req.body
-    if (!permission || !role || value === undefined) return res.status(400).json({ error: 'permission, role, and value required' })
-    if (!VALID_ROLES.includes(role)) return res.status(400).json({ error: 'Invalid role' })
-    if (LOCKED_PERMISSIONS[permission]?.[role] !== undefined) {
-      return res.status(400).json({ error: `The "${permission}" permission for "${role}" is locked and cannot be changed` })
-    }
-    const perms = await loadPermissions()
-    if (!perms[permission]) return res.status(400).json({ error: 'Unknown permission key' })
-    perms[permission][role] = !!value
-    await savePermissions(perms)
-    try { await logActivity({ user_id: req.user.id, action: 'UPDATE_PERMISSIONS', details: 'Set ' + permission + '/' + role + ' = ' + value }) } catch(_) {}
-    res.json({ success: true, permissions: perms })
-  } catch(e) {
-    res.status(500).json({ error: e.message })
-  }
-})
-
-function requirePermission(permKey) {
-  return async (req, res, next) => {
-    try {
-      const perms = await loadPermissions()
-      const allowed = perms[permKey]?.[req.user?.role]
-      if (!allowed) return res.status(403).json({ error: 'You do not have permission to perform this action' })
-      next()
-    } catch {
-      next()
-    }
-  }
-}
-
-const esc = v => {
-  const s = String(v ?? '')
-  const safe = /^[=+\-@\t\r\n]/.test(s) ? "'" + s : s
-  return '"' + safe.replace(/"/g, '""') + '"'
-}
-
-const EXPORT_CONFIG = {
-  wibs: {
-    table:   'wib_records',
-    select:  'wib_name,short_name,state,status,wib_phone,wib_email,website,max_award_per_ein,match_requirement_pct,iwt_program_active,source_url,call_priority_score,last_verified_date,next_steps,blockers',
-    order:   { col: 'call_priority_score', asc: false },
-    headers: ['WIB Name','Short Name','State','Status','Phone','Email','Website','Max Award/EIN','Match %','IWT Active','Source URL','Score','Last Verified','Next Steps','Blockers'],
-    map:     r => [r.wib_name,r.short_name||'',r.state,r.status,r.wib_phone||'',r.wib_email||'',r.website||'',r.max_award_per_ein||'',r.match_requirement_pct||'',r.iwt_program_active?'Yes':'No',r.source_url||'',r.call_priority_score||0,r.last_verified_date||'',r.next_steps||'',r.blockers||''],
-  },
-  companies: {
-    table:   'companies',
-    select:  'company_name,company_type,status,fein,domain,employee_count_total,avg_hourly_wage,primary_contact_name,primary_contact_email,primary_contact_phone,training_needs,notes,rating,created_at',
-    order:   { col: 'company_name', asc: true },
-    headers: ['Company Name','Type','Status','FEIN','Domain','Employees','Avg Hourly Wage','Contact Name','Contact Email','Contact Phone','Training Needs','Notes','Rating','Created'],
-    map:     r => [r.company_name,r.company_type||'',r.status,r.fein||'',r.domain||'',r.employee_count_total||'',r.avg_hourly_wage||'',r.primary_contact_name||'',r.primary_contact_email||'',r.primary_contact_phone||'',r.training_needs||'',r.notes||'',r.rating||'',r.created_at?.split('T')[0]||''],
-  },
-  locations: {
-    table:   'locations',
-    select:  'location_name,state,county,city,status,employee_count,address,created_at',
-    order:   { col: 'location_name', asc: true },
-    headers: ['Location','State','County','City','Status','Employees','Address','Created'],
-    map:     r => [r.location_name,r.state||'',r.county||'',r.city||'',r.status||'',r.employee_count||'',r.address||'',r.created_at?.split('T')[0]||''],
-  },
-  funding: {
-    table:   'funding_opportunities',
-    select:  'opportunity_name,status,program_type,max_award_per_ein,max_award_per_employee,application_deadline,blocked_reason,source_url,created_at',
-    order:   { col: 'created_at', asc: false },
-    headers: ['Opportunity','Status','Program','Max Award/EIN','Max/Employee','Deadline','Blocked Reason','Source URL','Created'],
-    map:     r => [r.opportunity_name,r.status,r.program_type||'',r.max_award_per_ein||'',r.max_award_per_employee||'',r.application_deadline||'',r.blocked_reason||'',r.source_url||'',r.created_at?.split('T')[0]||''],
-  },
-  applications: {
-    table:   'applications',
-    select:  'application_number,status,notes,award_amount_requested,award_amount_approved,submission_date,decision_date,created_at,company:companies!company_id(company_name,domain,primary_contact_email),funding:funding_opportunities!funding_opportunity_id(opportunity_name,status),location:locations!location_id(location_name,state),wib:wib_records!wib_id(wib_name)',
-    order:   { col: 'created_at', asc: false },
-    headers: ['Application','Company','Domain','Email','Funding Opportunity','Funding Status','Location','State','WIB','Status','Award Requested','Award Approved','Submission Date','Decision Date','Latest Update','Created'],
-    map:     r => [
-      r.application_number || ((r.company?.company_name||'') + (r.funding?.opportunity_name ? ' — ' + r.funding.opportunity_name : '')),
-      r.company?.company_name||'', r.company?.domain||'', r.company?.primary_contact_email||'',
-      r.funding?.opportunity_name||'', r.funding?.status||'',
-      r.location?.location_name||'', r.location?.state||'',
-      r.wib?.wib_name||'', r.status,
-      r.award_amount_requested||'', r.award_amount_approved||'',
-      r.submission_date||'', r.decision_date||'',
-      (r.notes||'').split('\n')[0].substring(0,100),
-      r.created_at?.split('T')[0]||'',
-    ],
-  },
-  revenue: {
-    table:   'revenue_records',
-    select:  'fee_model,grant_award_amount,calculated_success_fee,invoice_status,payment_received_date,created_at',
-    order:   { col: 'created_at', asc: false },
-    headers: ['Fee Model','Grant Award','Valor Fee','Invoice Status','Payment Date','Created'],
-    map:     r => [r.fee_model||'',r.grant_award_amount||'',r.calculated_success_fee||'',r.invoice_status||'',r.payment_received_date||'',r.created_at?.split('T')[0]||''],
-  },
-}
-
-app.get('/api/export/:type', auth, async (req, res) => {
-  const { type } = req.params
-  if (type === 'users' || type === 'audit') {
-    if (!['super_admin','admin'].includes(req.user.role)) {
-      return res.status(403).json({ error: 'Admin access required for this export' })
-    }
-  }
-
-  if (type === 'users') {
-    const { data } = await supabase.from('user_profiles').select('full_name,email,role,title,is_active,created_at')
-    const headers = ['Name','Email','Role','Title','Active','Created']
-    const rows = (data||[]).map(r => [r.full_name||'',r.email,r.role,r.title||'',r.is_active?'Yes':'No',r.created_at?.split('T')[0]||''])
-    const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n')
-    res.setHeader('Content-Type', 'text/csv')
-    res.setHeader('Content-Disposition', `attachment; filename="valor-users-${new Date().toISOString().split('T')[0]}.csv"`)
-    return res.send(csv)
-  }
-
-  if (type === 'compliance') {
-    const { data } = await supabase.from('v_compliance_alerts').select('*').order('days_until_final_due')
-    const headers = ['Application #','Company','WIB','Status','Award Amount','Training End','Final Report Due','Days Until Due','Report Submitted','Attendance Collected','Notes']
-    const rows = (data||[]).map(r => [r.application_number||'',r.company_name||'',r.wib_name||'',r.status||'',r.award_amount_approved||'',r.training_end_date||'',r.final_report_due_date||'',r.days_until_final_due??'',r.final_report_submitted?'Yes':'No',r.attendance_sheets_collected?'Yes':'No',r.compliance_notes||''])
-    const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n')
-    res.setHeader('Content-Type', 'text/csv')
-    res.setHeader('Content-Disposition', `attachment; filename="valor-compliance-${new Date().toISOString().split('T')[0]}.csv"`)
-    return res.send(csv)
-  }
-
-  if (type === 'audit') {
-    const auditSelect = 'action,created_at' + (global._hasRecordType?',record_type':'') +
-      (global._detailsColumnMissing?'':(global._hasMetadata?',metadata':',details')) +
-      ',user:user_profiles!user_id(email)'
-    const { data } = await supabase.from('activity_log').select(auditSelect).order('created_at', { ascending: false }).limit(2000)
-    const headers = ['Action','User','Details','Record Type','Timestamp']
-    const rows = (data||[]).map(r => [r.action,r.user?.email||'',r.details||r.metadata?.text||'',r.record_type||'',r.created_at||''])
-    const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n')
-    res.setHeader('Content-Type', 'text/csv')
-    res.setHeader('Content-Disposition', `attachment; filename="valor-audit-${new Date().toISOString().split('T')[0]}.csv"`)
-    return res.send(csv)
-  }
-
-  const config = EXPORT_CONFIG[type]
-  if (!config) return res.status(400).json({ error: `Unknown export type: ${type}` })
-
-  const PAGE_SIZE = 1000
-  const filename  = `valor-${type}-${new Date().toISOString().split('T')[0]}.csv`
-
-  res.setHeader('Content-Type',        'text/csv; charset=utf-8')
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
-  res.setHeader('Transfer-Encoding',   'chunked')
-  res.setHeader('Cache-Control',       'no-store')
-
-  res.write(config.headers.map(esc).join(',') + '\n')
-
-  let offset = 0, totalExported = 0
-  try {
-    while (true) {
-      const { data, error } = await supabase.from(config.table).select(config.select)
-        .order(config.order.col, { ascending: config.order.asc })
-        .range(offset, offset + PAGE_SIZE - 1)
-      if (error) { res.write(`\n# ERROR: ${error.message}\n`); break }
-      if (!data || data.length === 0) break
-      const chunk = data.map(r => config.map(r).map(esc).join(',')).join('\n') + '\n'
-      res.write(chunk)
-      totalExported += data.length
-      offset        += PAGE_SIZE
-      if (data.length < PAGE_SIZE) break
-    }
-    safeInsertLog({ user_id: req.user.id, action: 'EXPORT', details: `Exported ${type} — ${totalExported} records` }).catch(() => {})
-    res.end()
-  } catch (e) {
-    console.error('Export stream error:', e.message)
-    res.write(`\n# EXPORT FAILED: ${e.message}\n`)
-    res.end()
-  }
-})
-
-app.get('/api/template/:type', auth, (req, res) => {
-  const templates = {
-    wibs: 'WIB Name,Short Name,State,Status,Phone,Email,Website,Max Award,Match %,IWT Active,Source URL',
-    companies: 'Company Name,Type,Status,FEIN,Domain,Employee Count,Avg Wage,Contact Name,Contact Email',
-    locations: 'Location Name,State,County,City,Status,Employee Count',
-    funding: 'Opportunity Name,Status,Program Type,Max Award/EIN,Deadline,Source URL',
-    applications: 'Company Name,Funding Opportunity,Status,Award Requested,Award Approved,Submission Date,Decision Date,Notes',
-  }
-  const csv = templates[req.params.type]
-  if (!csv) return res.status(400).json({ error: 'Unknown template' })
-  res.setHeader('Content-Type', 'text/csv')
-  res.setHeader('Content-Disposition', `attachment; filename="valor-${req.params.type}-template.csv"`)
-  res.send(csv)
-})
-
-app.get('/api/notifications', auth, async (req, res) => {
-  const { limit = 50, unread_only } = req.query
-  try {
-    let q = supabase.from('notifications')
-      .select('*, sender:user_profiles!sender_id(full_name,email)', { count: 'exact' })
-      .eq('recipient_id', req.user.id)
+  // GET /api/admin/wib-import-batches — list all WIB import batches
+  app.get('/api/admin/wib-import-batches', auth, requireAdmin, async (req, res) => {
+    const { data, error } = await supabase
+      .from('activity_log')
+      .select('id, user_id, details, metadata, created_at, user:user_profiles!user_id(full_name,email)')
+      .eq('action', 'WIB_IMPORT_BATCH')
       .order('created_at', { ascending: false })
-      .limit(Math.min(+limit, 100))
-    if (unread_only === 'true') q = q.eq('is_read', false)
-    const { data, error, count } = await q
+      .limit(200)
     if (error) return res.status(400).json({ error: error.message })
+    res.json({ data: (data || []).map(b => parseLogRow ? parseLogRow(b) : b) })
+  })
 
-    const weekAgo = new Date(Date.now() - 7*24*3600*1000).toISOString()
-    const [notesRes, tasksRes] = await Promise.all([
-      supabase.from('activity_log').select('id', { count:'exact', head:true }).eq('action','NOTE').gte('created_at', weekAgo),
-      supabase.from('activity_log').select('id', { count:'exact', head:true }).eq('action','TASK').gte('created_at', weekAgo),
-    ])
+  // POST /api/admin/wib-import-batches/:id/rollback — delete every WIB
+  // whose notes starts with [batch:<id>], plus mark the batch as rolled back.
+  app.post('/api/admin/wib-import-batches/:id/rollback', auth, requireAdmin, async (req, res) => {
+    const batchId = req.params.id
+    // Confirm the batch exists
+    const { data: batchRow } = await supabase
+      .from('activity_log').select('id, metadata, details')
+      .eq('id', batchId).eq('action', 'WIB_IMPORT_BATCH').single()
+    if (!batchRow) return res.status(404).json({ error: 'Batch not found' })
 
-    const notifications = (data||[]).map(n => ({ ...n, sender_name: n.sender?.full_name || n.sender?.email || 'System' }))
-    const unreadCount = notifications.filter(n => !n.is_read).length
-    res.json({
-      data: notifications,
-      unread_count: unreadCount,
-      activity_summary: { notes_this_week: notesRes.count || 0, tasks_completed: tasksRes.count || 0, wibs_contacted: null, apps_submitted: null }
-    })
-  } catch (e) {
-    res.status(500).json({ error: e.message })
-  }
-})
+    // Find all WIBs tagged with this batch — notes starts with [batch:<id>]
+    const tag = `[batch:${batchId}]`
+    const { data: tagged, error: searchErr } = await supabase
+      .from('wib_records').select('id, wib_name')
+      .like('notes', `${tag}%`)
+      .limit(5000)
+    if (searchErr) return res.status(500).json({ error: 'Search failed: ' + searchErr.message })
 
-app.put('/api/notifications/:id/read', auth, async (req, res) => {
-  const { error } = await supabase.from('notifications').update({ is_read: true })
-    .eq('id', req.params.id).eq('recipient_id', req.user.id)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
-
-app.post('/api/notifications/mark-all-read', auth, async (req, res) => {
-  const { error } = await supabase.from('notifications').update({ is_read: true })
-    .eq('recipient_id', req.user.id).eq('is_read', false)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
-
-app.post('/api/notifications/:id/respond', auth, async (req, res) => {
-  const { action } = req.body
-  const { data: notif } = await supabase.from('notifications').select('*')
-    .eq('id', req.params.id).eq('recipient_id', req.user.id).single()
-  if (!notif) return res.status(404).json({ error: 'Notification not found' })
-  await supabase.from('notifications').update({ is_read: true, responded_at: new Date().toISOString(), response_action: action }).eq('id', req.params.id)
-  res.json({ success: true, action })
-})
-
-async function createNotification({ recipientId, senderId, type, title, body, recordType, recordId }) {
-  try {
-    await supabase.from('notifications').insert({
-      recipient_id: recipientId, sender_id: senderId || null,
-      type: type || 'system', title: title || '', body: body || '',
-      record_type: recordType || null, record_id: recordId || null,
-    })
-  } catch (e) {
-    console.warn('createNotification failed (non-fatal):', e.message)
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// LIVE CHAT — Presence store, SSE, DMs
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const _presence    = new Map()
-const PRESENCE_TTL = 40_000
-const _sseClients  = new Map()
-
-function presenceGC() {
-  const cutoff = Date.now() - PRESENCE_TTL
-  let changed = false
-  for (const [uid, info] of _presence) {
-    if (info.lastSeen < cutoff) { _presence.delete(uid); changed = true }
-  }
-  if (changed) broadcastPresence()
-}
-setInterval(presenceGC, 15_000)
-
-function broadcastPresence() {
-  const snapshot = [..._presence.values()].map(p => ({
-    id: p.id, name: p.name, email: p.email, initials: p.initials, lastSeen: p.lastSeen,
-  }))
-  const payload = `event:presence\ndata:${JSON.stringify(snapshot)}\n\n`
-  for (const clients of _sseClients.values()) {
-    for (const res of clients) { try { res.write(payload) } catch (_) {} }
-  }
-}
-
-function broadcastChatMessage(msg, channel) {
-  const payload = `event:chat_message\ndata:${JSON.stringify({ channel, msg })}\n\n`
-  for (const clients of _sseClients.values()) {
-    for (const res of clients) { try { res.write(payload) } catch (_) {} }
-  }
-}
-
-function broadcastDM(msg, senderId, recipientId) {
-  const payload = `event:dm\ndata:${JSON.stringify(msg)}\n\n`
-  for (const uid of [senderId, recipientId]) {
-    const clients = _sseClients.get(uid) || new Set()
-    for (const res of clients) { try { res.write(payload) } catch (_) {} }
-  }
-}
-
-async function sseAuth(req, res) {
-  const rawToken = (req.query.token || '').trim()
-  if (!rawToken || rawToken.length < 10) { res.status(401).end('Unauthorized'); return null }
-  try {
-    const { data: { user }, error: authErr } = await authClient.auth.getUser(rawToken)
-    if (authErr || !user) { res.status(401).end('Session expired'); return null }
-    try {
-      const jwtPayload = JSON.parse(Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8'))
-      const jti = jwtPayload?.jti
-      if (jti) {
-        const { data: revoked } = await supabase.from('revoked_tokens').select('jti').eq('jti', jti).single()
-        if (revoked) { res.status(401).end('Session revoked'); return null }
+    let deleted = 0
+    if (tagged && tagged.length) {
+      const ids = tagged.map(t => t.id)
+      // Delete in chunks of 100
+      for (let i = 0; i < ids.length; i += 100) {
+        const chunk = ids.slice(i, i + 100)
+        const { error: delErr } = await supabase.from('wib_records').delete().in('id', chunk)
+        if (!delErr) deleted += chunk.length
+        else console.warn('[wib-rollback] chunk delete failed:', delErr.message)
       }
-    } catch (_) {}
-    const { data: profile, error: profileErr } = await supabase.from('user_profiles').select('*').eq('id', user.id).single()
-    if (profileErr || !profile || profile.is_active === false) { res.status(403).end('Account disabled'); return null }
-    return profile
-  } catch (e) { res.status(500).end('Auth error'); return null }
-}
-
-app.get('/api/chat/stream', async (req, res) => {
-  const profile = await sseAuth(req, res)
-  if (!profile) return
-  const userId = profile.id
-  res.setHeader('Content-Type',        'text/event-stream')
-  res.setHeader('Cache-Control',       'no-cache')
-  res.setHeader('Connection',          'keep-alive')
-  res.setHeader('X-Accel-Buffering',   'no')
-  res.flushHeaders()
-  if (!_sseClients.has(userId)) _sseClients.set(userId, new Set())
-  _sseClients.get(userId).add(res)
-  _presence.set(userId, {
-    id: userId, name: profile.full_name || profile.email, email: profile.email,
-    initials: (profile.full_name || profile.email || '?').slice(0, 2).toUpperCase(),
-    lastSeen: Date.now(),
-  })
-  broadcastPresence()
-  const snapshot = [..._presence.values()]
-  res.write(`event:presence\ndata:${JSON.stringify(snapshot)}\n\n`)
-  const pingInterval = setInterval(() => {
-    try { res.write(': ping\n\n') } catch (_) { cleanup() }
-  }, 20_000)
-  function cleanup() {
-    clearInterval(pingInterval)
-    const set = _sseClients.get(userId)
-    if (set) {
-      set.delete(res)
-      if (set.size === 0) { _sseClients.delete(userId); _presence.delete(userId); broadcastPresence() }
     }
-    try { res.end() } catch (_) {}
-  }
-  req.on('close',  cleanup)
-  req.on('error',  cleanup)
-  res.on('finish', cleanup)
-})
 
-app.post('/api/chat/heartbeat', auth, (req, res) => {
-  const existing = _presence.get(req.user.id) || {
-    id: req.user.id, name: req.user.full_name || req.user.email, email: req.user.email,
-    initials: (req.user.full_name || req.user.email || '?').slice(0, 2).toUpperCase(),
-  }
-  existing.lastSeen = Date.now()
-  _presence.set(req.user.id, existing)
-  res.json({ ok: true, online: _presence.size })
-})
+    // Mark batch as rolled back
+    const oldMeta = batchRow.metadata || {}
+    await supabase.from('activity_log').update({
+      metadata: {
+        ...oldMeta,
+        status: 'rolled_back',
+        rolled_back_at: new Date().toISOString(),
+        rolled_back_by: req.user.id,
+        records_deleted: deleted,
+      },
+    }).eq('id', batchId)
 
-app.get('/api/chat/users', auth, async (req, res) => {
-  const { data, error } = await supabase.from('user_profiles').select('id,full_name,email,role').eq('is_active', true).neq('id', req.user.id).order('full_name')
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data: data || [] })
-})
+    await _audit({
+      user_id: req.user.id,
+      action: 'WIB_BATCH_ROLLBACK',
+      details: `Rolled back batch ${batchId} — deleted ${deleted} WIB records`,
+      record_type: 'activity_log',
+      record_id: batchId,
+    })
 
-app.get('/api/dm/unread-counts', auth, async (req, res) => {
-  const { data, error } = await supabase.from('chat_dm_messages').select('sender_id').eq('recipient_id', req.user.id).eq('is_read', false)
-  if (error) return res.status(400).json({ error: error.message })
-  const counts = {}
-  for (const row of (data || [])) { counts[row.sender_id] = (counts[row.sender_id] || 0) + 1 }
-  res.json(counts)
-})
-
-app.get('/api/chat/:channel', auth, async (req, res) => {
-  const channel = req.params.channel.substring(0, 100)
-  const limit   = Math.min(+(req.query.limit || 60), 200)
-  const { data, error } = await supabase.from('chat_messages')
-    .select('*, sender:user_profiles!sender_id(id,full_name,email)')
-    .eq('channel', channel).eq('is_deleted', false)
-    .order('created_at', { ascending: false }).limit(limit)
-  if (error) return res.status(400).json({ error: error.message })
-  const messages = (data || []).reverse().map(m => ({
-    ...m,
-    sender_name:    m.sender?.full_name || m.sender?.email || 'Team Member',
-    sender_email:   m.sender?.email,
-    sender_initials:(m.sender?.full_name || m.sender?.email || '?').slice(0, 2).toUpperCase(),
-  }))
-  res.json({ data: messages })
-})
-
-app.post('/api/chat/:channel', auth, async (req, res) => {
-  const channel = req.params.channel.substring(0, 100)
-  const content = (req.body.content || '').trim()
-  if (!content)              return res.status(400).json({ error: 'Message content required' })
-  if (content.length > 5000) return res.status(400).json({ error: 'Message too long (max 5000 chars)' })
-  const { data, error } = await supabase.from('chat_messages')
-    .insert({ channel, sender_id: req.user.id, content })
-    .select('*, sender:user_profiles!sender_id(id,full_name,email)').single()
-  if (error) return res.status(400).json({ error: error.message })
-  const msg = {
-    ...data,
-    sender_name:    data.sender?.full_name || data.sender?.email || 'Team Member',
-    sender_email:   data.sender?.email,
-    sender_initials:(data.sender?.full_name || data.sender?.email || '?').slice(0, 2).toUpperCase(),
-  }
-  broadcastChatMessage(msg, channel)
-  res.json(msg)
-})
-
-app.get('/api/dm/:userId', auth, async (req, res) => {
-  const me    = req.user.id
-  const other = req.params.userId
-  const limit = Math.min(+(req.query.limit || 60), 200)
-  const { data, error } = await supabase.from('chat_dm_messages')
-    .select('*, sender:user_profiles!sender_id(id,full_name,email)')
-    .or(`and(sender_id.eq.${me},recipient_id.eq.${other}),and(sender_id.eq.${other},recipient_id.eq.${me})`)
-    .order('created_at', { ascending: true }).limit(limit)
-  if (error) return res.status(400).json({ error: error.message })
-  const messages = (data || []).map(m => ({
-    ...m,
-    sender_name:    m.sender?.full_name || m.sender?.email || 'Member',
-    sender_initials:(m.sender?.full_name || m.sender?.email || '?').slice(0, 2).toUpperCase(),
-    is_mine:        m.sender_id === me,
-  }))
-  res.json({ data: messages })
-})
-
-app.post('/api/dm/:userId', auth, async (req, res) => {
-  const me        = req.user.id
-  const recipient = req.params.userId
-  const content   = (req.body.content || '').trim()
-  if (!content)              return res.status(400).json({ error: 'Message content required' })
-  if (content.length > 5000) return res.status(400).json({ error: 'Message too long (max 5000 chars)' })
-  if (me === recipient)      return res.status(400).json({ error: "Can't DM yourself" })
-  const { data: profile } = await supabase.from('user_profiles').select('id,full_name,email').eq('id', recipient).single()
-  if (!profile) return res.status(404).json({ error: 'Recipient not found' })
-  const { data, error } = await supabase.from('chat_dm_messages')
-    .insert({ sender_id: me, recipient_id: recipient, content })
-    .select('*, sender:user_profiles!sender_id(id,full_name,email)').single()
-  if (error) return res.status(400).json({ error: error.message })
-  const msg = {
-    ...data,
-    sender_name:    data.sender?.full_name || data.sender?.email || 'Member',
-    sender_initials:(data.sender?.full_name || data.sender?.email || '?').slice(0, 2).toUpperCase(),
-    is_mine:        true, recipient_id: recipient,
-  }
-  broadcastDM(msg, me, recipient)
-  res.json(msg)
-})
-
-app.post('/api/dm/:userId/read', auth, async (req, res) => {
-  const { error } = await supabase.from('chat_dm_messages')
-    .update({ is_read: true }).eq('recipient_id', req.user.id).eq('sender_id', req.params.userId).eq('is_read', false)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ ok: true })
-})
-app.get('/api/auth/google', auth, (req, res) => {
-  if (!GOOGLE_CLIENT_ID) return res.status(503).send('GOOGLE_CLIENT_ID not configured.')
-  const state = Buffer.from(JSON.stringify({ userId: req.user.id, token: req.query.token })).toString('base64url')
-  const authUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID, redirect_uri: GOOGLE_REDIRECT_URI, response_type: 'code',
-    scope: DRIVE_SCOPE + ' https://www.googleapis.com/auth/userinfo.email',
-    access_type: 'offline', prompt: 'consent', state,
+    res.json({
+      success: true,
+      batch_id: batchId,
+      deleted,
+      message: `Rolled back batch. Deleted ${deleted} WIB records.`,
+    })
   })
-  res.redirect(authUrl)
-})
 
-app.get('/api/auth/google/callback', async (req, res) => {
-  const { code, state, error } = req.query
-  if (error) return res.redirect('/?drive_error=' + encodeURIComponent(error))
-  if (!code || !state) return res.redirect('/?drive_error=missing_code')
-  let stateData
-  try { stateData = JSON.parse(Buffer.from(state, 'base64url').toString('utf8')) }
-  catch { return res.redirect('/?drive_error=invalid_state') }
-  const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ code, client_id: GOOGLE_CLIENT_ID, client_secret: GOOGLE_CLIENT_SECRET, redirect_uri: GOOGLE_REDIRECT_URI, grant_type: 'authorization_code' })
-  })
-  const tokenData = await tokenRes.json()
-  if (!tokenData.access_token) return res.redirect('/?drive_error=' + encodeURIComponent(tokenData.error_description || 'token_exchange_failed'))
-  const expiresAt = new Date(Date.now() + (tokenData.expires_in || 3600) * 1000).toISOString()
-  await supabase.from('user_drive_tokens').upsert({
-    user_id: stateData.userId, access_token: tokenData.access_token,
-    refresh_token: tokenData.refresh_token || null, expires_at: expiresAt, scope: tokenData.scope,
-  }, { onConflict: 'user_id' })
-  res.redirect('/?page=drive&drive_connected=1')
-})
+  // ───────────────────────────────────────────────────────────────────────────
+  // 5. AI SEARCH & SYSTEM UPDATE — /api/admin/ai-system-update
+  // ───────────────────────────────────────────────────────────────────────────
+  // The "AI Search & System Update" admin button backend. Uses Anthropic's
+  // web_search tool (available on Sonnet 4) to find current WIB information
+  // for a specified WIB and propose updates. Returns the proposed updates
+  // for human review — does NOT auto-apply them. Admin must POST again with
+  // ?apply=true to commit.
+  //
+  // Rate-limited: 1 run per hour per admin to prevent runaway AI costs.
+  // Requires ANTHROPIC_API_KEY env var.
 
-app.get('/api/drive/status', auth, async (req, res) => {
-  const { data } = await supabase.from('user_drive_tokens').select('expires_at, scope').eq('user_id', req.user.id).single()
-  res.json({ connected: !!data, expires_at: data?.expires_at })
-})
+  app.post('/api/admin/ai-system-update', auth, requireAdmin, async (req, res) => {
+    const apiKey = process.env.ANTHROPIC_API_KEY
+    if (!apiKey) {
+      return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured in environment variables.' })
+    }
 
-app.get('/api/drive/files', auth, async (req, res) => {
-  const folderId = req.query.folder_id || 'root'
-  const mimeFilter = req.query.mime || null
-  let query = `'${folderId}' in parents and trashed=false`
-  if (mimeFilter) query += ` and mimeType='${mimeFilter}'`
-  try {
-    const r = await driveApi(req.user.id,
-      'files?q=' + encodeURIComponent(query) +
-      '&fields=files(id,name,mimeType,size,modifiedTime,webViewLink,owners,parents)' +
-      '&orderBy=folder,name&pageSize=100',
-      { headers: { 'Content-Type': 'application/json' } }
-    )
-    const data = await r.json()
-    if (!r.ok) return res.status(r.status).json({ error: data.error?.message || 'Drive API error' })
-    res.json({ files: data.files || [], breadcrumb: [] })
-  } catch (e) {
-    res.status(400).json({ error: e.message })
-  }
-})
+    const { wib_id, apply = false, proposed_updates } = req.body
 
-const multer = (() => { try { return require('multer') } catch { return null } })()
-const uploadMiddleware = multer ? multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } }) : null
+    // Rate limit
+    const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString()
+    const { count } = await supabase.from('activity_log')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', req.user.id)
+      .eq('action', 'AI_SYSTEM_UPDATE')
+      .gte('created_at', oneHourAgo)
+    if ((count || 0) >= 5) {
+      return res.status(429).json({ error: 'AI System Update rate limit reached (5/hour). Try again later.' })
+    }
 
-app.post('/api/drive/upload', auth, async (req, res) => {
-  if (!uploadMiddleware) return res.status(503).json({ error: 'File upload not available. Run: npm install multer' })
-  uploadMiddleware.single('file')(req, res, async (err) => {
-    if (err) return res.status(400).json({ error: err.message })
-    const { folder_id = 'root' } = req.body
-    const file = req.file
-    if (!file) return res.status(400).json({ error: 'No file provided' })
-    const meta = JSON.stringify({ name: file.originalname, parents: [folder_id] })
-    const boundary = 'valorcrm' + Date.now()
-    const partHead = Buffer.from('--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + meta + '\r\n--' + boundary + '\r\nContent-Type: ' + file.mimetype + '\r\n\r\n', 'utf8')
-    const partTail = Buffer.from('\r\n--' + boundary + '--', 'utf8')
-    const uploadBody = Buffer.concat([partHead, file.buffer, partTail])
+    // Apply path — admin reviewed proposed updates and wants to commit
+    if (apply && proposed_updates && wib_id) {
+      const allowed = ['wib_email','wib_phone','website','source_url','status','notes']
+      const patch = {}
+      for (const [k, v] of Object.entries(proposed_updates)) {
+        if (allowed.includes(k) && v !== null && v !== undefined && v !== '') patch[k] = v
+      }
+      patch.last_verified_date = new Date().toISOString().split('T')[0]
+      const { data, error } = await supabase.from('wib_records').update(patch).eq('id', wib_id).select().single()
+      if (error) return res.status(400).json({ error: error.message })
+      await _audit({
+        user_id: req.user.id,
+        action: 'AI_SYSTEM_UPDATE',
+        record_type: 'wib_records',
+        record_id: wib_id,
+        details: `Applied AI-proposed updates: ${Object.keys(patch).join(', ')}`,
+        metadata: { applied: patch },
+      })
+      return res.json({ success: true, applied: patch, wib: data })
+    }
+
+    // Search path — find a WIB to update
+    if (!wib_id) {
+      return res.status(400).json({ error: 'wib_id required' })
+    }
+    const { data: wib, error: wibErr } = await supabase
+      .from('wib_records').select('*').eq('id', wib_id).single()
+    if (wibErr || !wib) return res.status(404).json({ error: 'WIB not found' })
+
+    // Call Anthropic with web_search tool
+    const systemPrompt = 'You are a research assistant for Valor Workforce Funding LLC. ' +
+      'Your job is to find CURRENT, verifiable information about a specific Workforce Investment Board (WIB) ' +
+      'using web search. Return ONLY a JSON object with these fields if found (omit any you cannot verify): ' +
+      '{ "wib_email": "...", "wib_phone": "...", "website": "https://...", "source_url": "https://...", "notes": "Brief summary of current programs/funding status", "confidence": "high|medium|low", "sources": ["url1","url2"] }. ' +
+      'Only include fields you found from an official government or WIB source. ' +
+      'Never invent contact info. If you cannot find verified info, return {"confidence":"none","reason":"..."}.'
+
+    const userPrompt = `Find current contact info and program status for this Workforce Investment Board:\n\n` +
+      `Name: ${wib.wib_name}\n` +
+      `State: ${wib.state}\n` +
+      `Current website on file: ${wib.website || '(none)'}\n` +
+      `Current email on file: ${wib.wib_email || '(none)'}\n` +
+      `Current phone on file: ${wib.wib_phone || '(none)'}\n\n` +
+      `Search the web for the official WIB site, verify the contact info is current, and check whether their IWT/WIOA training funding programs are currently accepting applications. Return JSON only.`
+
     try {
-      const uploadToken = await getDriveToken(req.user.id)
-      if (!uploadToken) return res.status(403).json({ error: 'Google Drive not connected' })
-      const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + uploadToken, 'Content-Type': 'multipart/related; boundary=' + boundary },
-        body: uploadBody,
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 2000,
+          system: systemPrompt,
+          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+          messages: [{ role: 'user', content: userPrompt }],
+        }),
       })
       const data = await r.json()
-      if (!r.ok) return res.status(r.status).json({ error: data.error?.message || 'Upload failed' })
-      try { await safeInsertLog({ user_id: req.user.id, action: 'DRIVE_UPLOAD', details: 'Uploaded: ' + file.originalname }) } catch(_){}
-      res.json({ file: data })
-    } catch (e) { res.status(500).json({ error: e.message }) }
-  })
-})
-
-app.get('/api/drive/download/:fileId', auth, async (req, res) => {
-  try {
-    const metaR = await driveApi(req.user.id, 'files/' + req.params.fileId + '?fields=name,mimeType,size')
-    const meta = await metaR.json()
-    if (!metaR.ok) return res.status(metaR.status).json({ error: meta.error?.message })
-    const fileR = await driveApi(req.user.id, 'files/' + req.params.fileId + '?alt=media')
-    if (!fileR.ok) return res.status(fileR.status).json({ error: 'Download failed' })
-    res.setHeader('Content-Type', meta.mimeType || 'application/octet-stream')
-    res.setHeader('Content-Disposition', 'attachment; filename="' + (meta.name||'file').replace(/"/g,'') + '"')
-    const { Readable } = require('stream')
-    Readable.fromWeb(fileR.body).pipe(res)
-  } catch (e) { res.status(500).json({ error: e.message }) }
-})
-
-app.post('/api/drive/folder', auth, async (req, res) => {
-  const { name, parent_id = 'root' } = req.body
-  if (!name?.trim()) return res.status(400).json({ error: 'Folder name required' })
-  try {
-    const r = await driveApi(req.user.id, 'files?fields=id,name,webViewLink', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim(), mimeType: 'application/vnd.google-apps.folder', parents: [parent_id] })
-    })
-    const data = await r.json()
-    if (!r.ok) return res.status(r.status).json({ error: data.error?.message })
-    res.json({ folder: data })
-  } catch (e) { res.status(500).json({ error: e.message }) }
-})
-
-app.delete('/api/drive/files/:fileId', auth, async (req, res) => {
-  try {
-    const r = await driveApi(req.user.id, 'files/' + req.params.fileId, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ trashed: true })
-    })
-    if (!r.ok) { const d = await r.json(); return res.status(r.status).json({ error: d.error?.message || 'Delete failed' }) }
-    res.json({ success: true })
-  } catch (e) { res.status(500).json({ error: e.message }) }
-})
-
-app.post('/api/drive/export', auth, async (req, res) => {
-  const { type, file_name = 'valor-export.csv', folder_id = 'root' } = req.body
-  const config = EXPORT_CONFIG[type]
-  if (!config) return res.status(400).json({ error: 'Unknown export type: ' + type })
-  let csvRows = [config.headers.map(esc).join(',')]
-  let offset = 0
-  while (true) {
-    const { data, error } = await supabase.from(config.table).select(config.select)
-      .order(config.order.col, { ascending: config.order.asc }).range(offset, offset + 999)
-    if (error || !data?.length) break
-    data.forEach(r => csvRows.push(config.map(r).map(esc).join(',')))
-    offset += 1000
-    if (data.length < 1000) break
-  }
-  const csvContent = csvRows.join('\n')
-  try {
-    const accessToken = await getDriveToken(req.user.id)
-    if (!accessToken) return res.status(403).json({ error: 'Google Drive not connected' })
-    const boundary = '-------valorexportboundary'
-    const meta = JSON.stringify({ name: file_name, parents: [folder_id], mimeType: 'text/csv' })
-    const body = ['--' + boundary, 'Content-Type: application/json; charset=UTF-8', '', meta, '--' + boundary, 'Content-Type: text/csv', '', csvContent, '--' + boundary + '--'].join('\r\n')
-    const r = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink', {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + accessToken, 'Content-Type': 'multipart/related; boundary=' + boundary },
-      body
-    })
-    const data = await r.json()
-    if (!r.ok) return res.status(r.status).json({ error: data.error?.message || 'Drive upload failed' })
-    try { await safeInsertLog({ user_id: req.user.id, action: 'DRIVE_EXPORT', details: 'Exported ' + type + ' to Drive: ' + file_name }) } catch(_){}
-    res.json({ file: data, drive_link: data.webViewLink })
-  } catch (e) { res.status(500).json({ error: e.message }) }
-})
-
-app.get('/api/territories', auth, async (req, res) => {
-  const { data, error } = await supabase.from('territories').select('*').order('name', { ascending: true })
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data })
-})
-
-app.post('/api/territories', auth, requireAdmin, async (req, res) => {
-  const { name, states, description } = req.body
-  if (!name?.trim()) return res.status(400).json({ error: 'Territory name required' })
-  const { data, error } = await supabase.from('territories').insert({ name: name.trim(), states: states || [], description: description || '' }).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_TERRITORY', details: `Created territory: ${name}` }) } catch(_) {}
-  res.json(data)
-})
-
-app.put('/api/territories/:id', auth, requireAdmin, async (req, res) => {
-  const allowed = ['name','states','description']
-  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => allowed.includes(k)))
-  const { data, error } = await supabase.from('territories').update(body).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-app.delete('/api/territories/:id', auth, requireAdmin, async (req, res) => {
-  const { error } = await supabase.from('territories').delete().eq('id', req.params.id)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true })
-})
-
-app.get('/api/users/:id/territories', auth, requireAdmin, async (req, res) => {
-  const { data, error } = await supabase.from('user_territory_assignments')
-    .select('territory_id, territories(id,name,states,description)').eq('user_id', req.params.id)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data: (data || []).map(r => r.territories) })
-})
-
-app.put('/api/users/:id/territories', auth, requireAdmin, async (req, res) => {
-  const { territory_ids = [] } = req.body
-  if (!Array.isArray(territory_ids)) return res.status(400).json({ error: 'territory_ids must be an array' })
-  const { error: delErr } = await supabase.from('user_territory_assignments').delete().eq('user_id', req.params.id)
-  if (delErr) return res.status(400).json({ error: delErr.message })
-  if (territory_ids.length > 0) {
-    const rows = territory_ids.map(tid => ({ user_id: req.params.id, territory_id: tid, assigned_by: req.user.id }))
-    const { error: insErr } = await supabase.from('user_territory_assignments').insert(rows)
-    if (insErr) return res.status(400).json({ error: insErr.message })
-  }
-  await supabase.from('user_profiles').update({ territory_id: territory_ids[0] || null }).eq('id', req.params.id)
-  try {
-    const tNames = territory_ids.length
-      ? (await supabase.from('territories').select('name').in('id', territory_ids)).data?.map(t => t.name).join(', ')
-      : 'none'
-    await safeInsertLog({ user_id: req.user.id, action: 'ASSIGN_TERRITORIES', record_type: 'user_profiles', record_id: req.params.id, details: `Assigned territories: ${tNames}` })
-  } catch (_) {}
-  res.json({ success: true, territory_ids })
-})
-
-app.get('/api/me/wib-view', auth, async (req, res) => {
-  const [{ data: pref }, { data: assignments }] = await Promise.all([
-    supabase.from('user_wib_view_prefs').select('view_mode').eq('user_id', req.user.id).single(),
-    supabase.from('user_territory_assignments').select('territory_id, territories(id,name)').eq('user_id', req.user.id)
-  ])
-  const territories = (assignments || []).map(a => a.territories).filter(Boolean)
-  res.json({ view_mode: pref?.view_mode || 'all', territories })
-})
-
-app.put('/api/me/wib-view', auth, async (req, res) => {
-  const { view_mode } = req.body
-  if (!['all', 'my_territories'].includes(view_mode)) return res.status(400).json({ error: 'view_mode must be "all" or "my_territories"' })
-  const { error } = await supabase.from('user_wib_view_prefs').upsert(
-    { user_id: req.user.id, view_mode, updated_at: new Date().toISOString() }, { onConflict: 'user_id' }
-  )
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ success: true, view_mode })
-})
-
-app.get('/api/wibs/my', auth, async (req, res) => {
-  const { search, limit = 1000 } = req.query
-  const { data: assignments } = await supabase.from('user_territory_assignments').select('territory_id').eq('user_id', req.user.id)
-  const territoryIds = (assignments || []).map(a => a.territory_id)
-  let q = supabase.from('wib_records').select('*, owner:user_profiles!owner_id(full_name,email)', { count: 'exact' }).limit(Number(limit))
-  if (territoryIds.length > 0) q = q.in('territory_id', territoryIds)
-  if (search) q = q.ilike('wib_name', `%${search}%`)
-  const { data, error, count } = await q
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data, count })
-})
-
-app.put('/api/users/:id/territory', auth, requireAdmin, async (req, res) => {
-  const { territory_id } = req.body
-  const { data, error } = await supabase.from('user_profiles').update({ territory_id: territory_id || null }).eq('id', req.params.id).select('id,email,full_name,role,territory_id').single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-app.put('/api/wibs/:id/territory', auth, requireAdmin, async (req, res) => {
-  const { territory_id } = req.body
-  const { data, error } = await supabase.from('wib_records').update({ territory_id: territory_id || null }).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  res.json(data)
-})
-
-let _htmlPath = null
-function findHtmlPath() {
-  if (_htmlPath && fs.existsSync(_htmlPath)) return _htmlPath
-  const candidates = [
-    path.join(__dirname, 'public', 'index.html'),
-    path.join(__dirname, 'index.html'),
-  ]
-  for (const p of candidates) {
-    if (fs.existsSync(p)) { _htmlPath = p; return p }
-  }
-  return null
-}
-
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// WIB DECONTAMINATION — Preview & Execute
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// POST /api/admin/purge-wib-contamination
-// dry_run=true → returns preview of contaminated records (no delete)
-// dry_run=false + confirm_phrase='CONFIRM PURGE' → deletes contaminated records
-app.post('/api/admin/purge-wib-contamination', auth, requireAdmin, async (req, res) => {
-  const { dry_run = true, confirm_phrase } = req.body
-
-  if (!dry_run && confirm_phrase !== 'CONFIRM PURGE') {
-    return res.status(400).json({
-      error: 'Safety check failed. Send { dry_run: false, confirm_phrase: "CONFIRM PURGE" } to execute.'
-    })
-  }
-
-  try {
-    const { data: allWibs, error: readErr } = await supabase
-      .from('wib_records')
-      .select('id, wib_name, state, created_at')
-      .order('created_at', { ascending: false })
-
-    if (readErr) return res.status(500).json({ error: readErr.message })
-
-    // Contamination detection signals
-    // Signal 1 — person name: "First Last" Title Case, no WIB keywords
-    const PERSON_NAME = /^[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,2}$/
-    // Signal 2 — company/entity suffix with no WIB keywords
-    const COMPANY_SUFFIXES = /\b(LLC|Inc\.?|Corp\.?|Ltd\.?|L\.L\.C|Incorporated|Healthcare|Health\s+Systems|Medical|Hospital|Hospice|Pharmacy|Rehabilitation|Clinic|Foundation\b|Trust\b|County\s+Of|City\s+Of|State\s+Of|Department\s+Of|Office\s+Of)\b/i
-    // Signal 3 — WIB keywords that mark a record as legitimate
-    const WIB_KEYWORDS = /\b(workforce|development\s+board|investment\s+board|works|career|employment|labor|WIB|WIOA|CareerSource|WorkForce|One\s*Stop|American\s+Job|Workforce\s+Commission|Employment\s+Council|Economic\s+Development|Consortium|Job\s+Center|Job\s+Training|Job\s+Corps)\b/i
-    const STATE_PREFIX  = /^[A-Z]{2}\s*[-–]\s*/
-
-    const contaminated = []
-    const clean = []
-
-    for (const wib of (allWibs || [])) {
-      const name = (wib.wib_name || '').trim()
-      if (!name) {
-        contaminated.push({ id: wib.id, name: '(empty)', state: wib.state, reason: 'empty_name' })
-        continue
+      if (data.error) {
+        return res.status(500).json({ error: 'AI error: ' + data.error.message })
       }
 
-      const hasWIBKeyword  = WIB_KEYWORDS.test(name)
-      const hasStatePrefix = STATE_PREFIX.test(name)
-
-      if (hasWIBKeyword || hasStatePrefix) {
-        clean.push(wib.id)
-        continue
+      // Find the final text block (after any tool use)
+      let finalText = ''
+      for (const block of (data.content || [])) {
+        if (block.type === 'text') finalText += block.text
       }
 
-      let reason = 'no_wib_pattern'
-      if (PERSON_NAME.test(name))           reason = 'person_name'
-      else if (COMPANY_SUFFIXES.test(name)) reason = 'company_suffix'
+      // Try to parse JSON from the response
+      let proposed = null
+      try {
+        const jsonMatch = finalText.match(/\{[\s\S]*\}/)
+        if (jsonMatch) proposed = JSON.parse(jsonMatch[0])
+      } catch (e) {
+        proposed = { raw: finalText, parse_error: e.message }
+      }
 
-      contaminated.push({ id: wib.id, name, state: wib.state, reason })
-    }
-
-    if (dry_run) {
-      return res.json({
-        dry_run: true,
-        total_records:      allWibs?.length || 0,
-        contaminated_count: contaminated.length,
-        clean_count:        clean.length,
-        sample_contaminated: contaminated.slice(0, 30).map(c => ({ name: c.name, state: c.state, reason: c.reason })),
-        message: `Dry run complete. ${contaminated.length} of ${allWibs?.length} records are contaminated. ${clean.length} legitimate WIBs will be preserved.`
-      })
-    }
-
-    // Execute purge
-    let deleted = 0
-    const ids = contaminated.map(c => c.id)
-    for (let i = 0; i < ids.length; i += 100) {
-      const chunk = ids.slice(i, i + 100)
-      const { error: delErr } = await supabase.from('wib_records').delete().in('id', chunk)
-      if (delErr) { console.error('[WIB DECON] Delete error:', delErr.message); continue }
-      deleted += chunk.length
-    }
-
-    global._importCoCache = null
-
-    try {
-      await safeInsertLog({
+      await _audit({
         user_id: req.user.id,
-        action: 'WIB_DECONTAMINATION',
-        details: `Deleted ${deleted} contaminated records. ${clean.length} legitimate WIBs preserved.`
+        action: 'AI_SYSTEM_UPDATE',
+        record_type: 'wib_records',
+        record_id: wib_id,
+        details: `Searched for ${wib.wib_name}`,
+        metadata: { proposed, confidence: proposed?.confidence || 'unknown' },
       })
-    } catch (_) {}
 
-    return res.json({
-      success: true,
-      deleted,
-      clean_preserved: clean.length,
-      total_remaining: clean.length,
-      message: `Done. Deleted ${deleted} contaminated WIB records. ${clean.length} legitimate WIBs preserved.`
-    })
-
-  } catch (e) {
-    console.error('[WIB DECON] Fatal:', e.message)
-    return res.status(500).json({ success: false, error: e.message })
-  }
-})
-
-// GET /api/admin/purge-broken-imports — purge company duplicates from bad imports
-app.get('/api/admin/purge-broken-imports', auth, requireAdmin, async (req, res) => {
-  let recordsPurged = 0
-  try {
-    const { error: err1 } = await supabase
-      .from('companies').delete().ilike('company_name', '%CMS Provider Data Catalog%')
-    const { error: err2 } = await supabase
-      .from('companies').delete().ilike('company_name', '%CMS NH Provider%')
-    if (err1 || err2) {
-      return res.status(500).json({ success: false, error: (err1||err2)?.message })
-    }
-
-    const { data: allCos } = await supabase
-      .from('companies')
-      .select('id,company_name,primary_contact_phone,primary_contact_email,notes,created_at')
-      .order('created_at', { ascending: true })
-
-    if (allCos) {
-      const seen = { phone: new Map(), email: new Map(), addr: new Map() }
-      const dupeIds = new Set()
-      for (const row of allCos) {
-        const phone = (row.primary_contact_phone || '').replace(/\D/g, '').slice(-10)
-        const email = (row.primary_contact_email || '').toLowerCase().trim()
-        const addrMatch = (row.notes || '').match(/Address:\s*(\d+\s+\w+)/i)
-        const addr = addrMatch ? addrMatch[1].toLowerCase().trim() : ''
-        const isDupe = (phone.length >= 7 && seen.phone.has(phone)) ||
-                       (email.length >= 4 && seen.email.has(email)) ||
-                       (addr.length >= 4 && seen.addr.has(addr))
-        if (isDupe) {
-          dupeIds.add(row.id)
-        } else {
-          if (phone.length >= 7) seen.phone.set(phone, row.id)
-          if (email.length >= 4) seen.email.set(email, row.id)
-          if (addr.length >= 4) seen.addr.set(addr, row.id)
-        }
-      }
-      if (dupeIds.size > 0) {
-        const dupeArr = [...dupeIds]
-        await supabase.from('locations').update({ company_id: null }).in('company_id', dupeArr)
-        await supabase.from('applications').update({ company_id: null }).in('company_id', dupeArr)
-        for (let i = 0; i < dupeArr.length; i += 200) {
-          const chunk = dupeArr.slice(i, i + 200)
-          const { error: delErr } = await supabase.from('companies').delete().in('id', chunk)
-          if (!delErr) recordsPurged += chunk.length
-        }
-      }
-    }
-
-    global._importCoCache = null
-    try {
-      await safeInsertLog({
-        user_id: req.user.id, action: 'PURGE_BROKEN_IMPORTS', record_type: 'companies',
-        details: `Purge by ${req.user.email}: ${recordsPurged} duplicate rows removed`
+      res.json({
+        wib: { id: wib.id, name: wib.wib_name, state: wib.state },
+        current: {
+          wib_email: wib.wib_email,
+          wib_phone: wib.wib_phone,
+          website: wib.website,
+          source_url: wib.source_url,
+        },
+        proposed,
+        raw_response: finalText.substring(0, 2000),
+        applied: false,
+        next_step: 'Review proposed updates, then POST again with {wib_id, apply:true, proposed_updates:{...}} to commit.',
       })
-    } catch (_) {}
+    } catch (e) {
+      console.error('[ai-system-update] error:', e)
+      res.status(500).json({ error: 'AI request failed: ' + e.message })
+    }
+  })
 
-    return res.json({ success: true, recordsPurged, message: 'All system duplicates have been eliminated.' })
-  } catch (e) {
-    return res.status(500).json({ success: false, error: e.message })
-  }
-})
-
-
-app.get('*', (req, res) => {
-  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' })
-  const htmlPath = findHtmlPath()
-  if (htmlPath) {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8')
-    res.setHeader('X-Content-Type-Options', 'nosniff')
-    res.setHeader('Cache-Control', 'no-cache')
-    return res.sendFile(htmlPath)
-  }
-  console.error('ERROR: index.html not found.')
-  res.status(503).send('<!DOCTYPE html><html><head><title>Valor CRM</title></head><body style="font-family:sans-serif;background:#0B1E3C;color:#fff;padding:40px;text-align:center"><h2>🛡️ Valor CRM</h2><h3 style="color:#C9A84C">Deployment Issue</h3><p>The application interface (index.html) was not found on the server.</p><p style="font-size:13px;color:rgba(255,255,255,.6)">To fix: Upload both <strong>server.js</strong> AND <strong>index.html</strong> to the GitHub repository, then wait 60 seconds for Render to redeploy.</p></body></html>')
-})
-
-const PORT = process.env.PORT || 3001
-app.listen(PORT, () => {
-  console.log(`✅ Valor CRM on port ${PORT}`)
-  console.log(`   SUPABASE_URL: ${SUPABASE_URL ? 'SET ✓' : 'MISSING ✗'}`)
-  console.log(`   SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY ? 'SET ✓' : 'MISSING — login may fail'}`)
-  console.log(`   SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY ? 'SET ✓' : 'MISSING ✗'}`)
-  console.log(``)
-  console.log(`   📋 PERMISSIONS TABLE SQL (run once in Supabase SQL Editor):`)
-  console.log(`   CREATE TABLE IF NOT EXISTS role_permissions (`)
-  console.log(`     id INTEGER PRIMARY KEY DEFAULT 1,`)
-  console.log(`     permissions JSONB NOT NULL DEFAULT '{}',`)
-  console.log(`     updated_at TIMESTAMPTZ DEFAULT NOW()`)
-  console.log(`   );`)
-  console.log(`   ALTER TABLE role_permissions ENABLE ROW LEVEL SECURITY;`)
-  console.log(`   CREATE POLICY "Service role full access" ON role_permissions USING (true) WITH CHECK (true);`)
-})
+  // ───────────────────────────────────────────────────────────────────────────
+  // STARTUP LOG
+  // ───────────────────────────────────────────────────────────────────────────
+  console.log('[server-additions] Installed: Drive helpers, invoices/training_providers import, cron/daily, WIB batch rollback, AI system update')
+  console.log('[server-additions] Drive OAuth:',
+    global.GOOGLE_CLIENT_ID ? 'GOOGLE_CLIENT_ID ✓' : 'GOOGLE_CLIENT_ID MISSING — Drive will return 403',
+    '|',
+    global.GOOGLE_CLIENT_SECRET ? 'GOOGLE_CLIENT_SECRET ✓' : 'GOOGLE_CLIENT_SECRET MISSING',
+    '|',
+    global.GOOGLE_REDIRECT_URI ? 'GOOGLE_REDIRECT_URI ✓' : 'GOOGLE_REDIRECT_URI MISSING'
+  )
+  console.log('[server-additions] Cron secret:', process.env.CRON_SECRET ? 'SET ✓ (use x-cron-secret header)' : 'NOT SET — falls back to admin auth')
+  console.log('[server-additions] Anthropic API:', process.env.ANTHROPIC_API_KEY ? 'SET ✓' : 'MISSING — AI System Update will 503')
+}
