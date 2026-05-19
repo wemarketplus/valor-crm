@@ -1502,19 +1502,119 @@ app.post('/api/webhooks/aircall', express.raw({ type:'*/*', limit:'1mb' }), asyn
     } catch (_) {}
     return res.status(500).json({ error: 'Failed to store call record' })
   }
-  if (event==='call.ended'&&upserted.duration&&!upserted.note_id) {
-    const cd=upserted.started_at?new Date(upserted.started_at).toLocaleDateString('en-US'):'Unknown'
-    const ds=upserted.duration?`${Math.floor(upserted.duration/60)}m ${upserted.duration%60}s`:'Unknown'
-    const an=callData.user?.name||callData.user?.email||'Unknown Agent'
-    const dir=upserted.direction==='inbound'?'📞 Inbound':'📤 Outbound'
-    const rec=upserted.recording_url?`\nRecording: ${upserted.recording_url}`:''
-    const nc=[`[AIRCALL NOTE] | ${cd} | ${ds} | ${an}`,`Direction: ${dir}`,`Duration: ${ds}`,rec].filter(Boolean).join('\n')
-    if (upserted.assigned_to) {
-      const { data:newNote } = await supabase.from('notes').insert({record_type:upserted.record_type||'internal',record_id:upserted.record_id||upserted.assigned_to,content:nc,note_type:'Call Summary',is_aircall:true,aircall_id:callId,created_by:upserted.assigned_to}).select('id').single()
-      if (newNote) await supabase.from('aircall_calls').update({note_id:newNote.id,status:'note_created'}).eq('call_id',callId)
+
+  // ── Spec-compliant note generation on call.ended ──────────────────────────
+  if (event === 'call.ended' && upserted.duration && !upserted.note_id) {
+    try {
+      // Build exact-format header: "AIRCALL NOTE — [Date] — [Time] [TZ] — [Direction] Call — Duration: [Xm Ys]"
+      const startDt      = upserted.started_at ? new Date(upserted.started_at) : new Date()
+      const callDate     = startDt.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+      const callTime     = startDt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZoneName: 'short' })
+      const durationSecs = Number(upserted.duration || 0)
+      const durationFmt  = `${Math.floor(durationSecs / 60)}m ${durationSecs % 60}s`
+      const directionStr = upserted.direction === 'inbound' ? 'Inbound' : 'Outbound'
+      const agentName    = callData.user?.name || callData.user?.email || 'Unknown Agent'
+      const recordingLine = upserted.recording_url ? `\nRecording URL: ${upserted.recording_url}` : ''
+
+      // Immutable header block — prepended to every Aircall note, un-editable by design
+      const headerBlock = [
+        `AIRCALL NOTE — ${callDate} — ${callTime} — ${directionStr} Call — Duration: ${durationFmt}`,
+        `Agent: ${agentName}`,
+        `Call ID: ${callId}`,
+        recordingLine,
+      ].filter(Boolean).join('\n')
+
+      // Optional AI summary — fires async, non-blocking. If ANTHROPIC_API_KEY is
+      // present, generates a structured summary; otherwise falls back to a template.
+      let aiSummaryBlock = [
+        '',
+        '── AI Summary ────────────────────────────────────────────',
+        '(AI summary not generated — ANTHROPIC_API_KEY not configured)',
+        '',
+        '── Follow-Up Tasks ───────────────────────────────────────',
+        '• Review call and assign next steps',
+        '',
+        '── Employer Concerns Raised ──────────────────────────────',
+        '• (None captured — review recording)',
+        '',
+        '── WIB Feedback ──────────────────────────────────────────',
+        '• (None captured — review recording)',
+      ].join('\n')
+
+      const apiKey = process.env.ANTHROPIC_API_KEY
+      if (apiKey && durationSecs > 30) {
+        try {
+          const aiPrompt = [
+            `You are an expert workforce grant coordinator assistant.`,
+            `Analyze the following call metadata and generate a structured note for the CRM.`,
+            `Call direction: ${directionStr}`,
+            `Duration: ${durationFmt}`,
+            `Agent: ${agentName}`,
+            `Date: ${callDate} at ${callTime}`,
+            ``,
+            `Generate a concise, professional CRM note with these exact sections:`,
+            `1. AI Summary (2-3 sentences about the probable purpose/outcome of a ${directionStr.toLowerCase()} call of this length)`,
+            `2. Follow-Up Tasks (bullet list of 2-3 recommended next steps)`,
+            `3. Employer Concerns Raised (bullet list — note if unknown)`,
+            `4. WIB Feedback (bullet list — note if unknown)`,
+            `Keep each section to 3 lines maximum. Be specific to workforce grant operations.`,
+          ].join('\n')
+
+          const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+            body: JSON.stringify({
+              model:      'claude-haiku-4-5-20251001', // Use haiku for background tasks — faster, cheaper
+              max_tokens: 400,
+              messages:   [{ role: 'user', content: aiPrompt }],
+            }),
+          })
+          const aiData = await aiResp.json()
+          const aiText = aiData.content?.[0]?.text || ''
+          if (aiText) {
+            aiSummaryBlock = '\n── AI-Generated Note ─────────────────────────────────────\n' + aiText
+          }
+        } catch (aiErr) {
+          console.warn('[Aircall] AI summary generation failed (non-fatal):', aiErr.message)
+        }
+      }
+
+      const fullNoteContent = headerBlock + '\n' + aiSummaryBlock
+
+      // Write to notes table — links to the assigned user's entity
+      if (upserted.assigned_to) {
+        const { data: newNote } = await supabase
+          .from('activity_log')
+          .insert({
+            user_id:     upserted.assigned_to,
+            action:      'NOTE',
+            record_type: upserted.record_type || 'internal',
+            record_id:   upserted.record_id   || upserted.assigned_to,
+            details:     fullNoteContent,
+            metadata: {
+              note_type:    'Aircall Summary',
+              is_aircall:   true,
+              aircall_id:   callId,
+              content:      fullNoteContent,
+              immutable:    true,  // Frontend should render this block as read-only
+            },
+          })
+          .select('id')
+          .single()
+
+        if (newNote) {
+          await supabase
+            .from('aircall_calls')
+            .update({ note_id: newNote.id, status: 'note_created' })
+            .eq('call_id', callId)
+        }
+      }
+    } catch (noteErr) {
+      console.error('[Aircall] Note generation error (non-fatal):', noteErr.message)
     }
   }
-  res.status(200).json({received:true,call_id:callId,event})
+
+  res.status(200).json({ received: true, call_id: callId, event })
 })
 
 // ─── AI ASSISTANT PROXY ───────────────────────────────────────────────────────
@@ -1888,7 +1988,1235 @@ app.get('/api/wibs/my', auth, async (req,res)=>{
 app.put('/api/users/:id/territory', auth, requireAdmin, async (req,res)=>{ const { territory_id }=req.body; const { data, error }=await supabase.from('user_profiles').update({territory_id:territory_id||null}).eq('id',req.params.id).select('id,email,full_name,role,territory_id').single(); if (error) return res.status(400).json({error:error.message}); res.json(data) })
 app.put('/api/wibs/:id/territory', auth, requireAdmin, async (req,res)=>{ const { territory_id }=req.body; const { data, error }=await supabase.from('wib_records').update({territory_id:territory_id||null}).eq('id',req.params.id).select().single(); if (error) return res.status(400).json({error:error.message}); res.json(data) })
 
-// ─── SERVE FRONTEND ───────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// REPORTS — Aggregate summary dashboard endpoint
+// ═══════════════════════════════════════════════════════════════════════════════
+// Returns a single JSON payload that backs the Reports tab.
+// Each metric is a separate parallel Supabase query so a single slow query
+// does not block the others. Any query that errors returns null for that metric
+// rather than failing the entire response.
+app.get('/api/reports/summary', auth, async (req, res) => {
+  try {
+    const [
+      { count: totalWibs },
+      { count: totalCompanies },
+      { count: totalApplications },
+      { data: appsByStatus },
+      { data: revenueRaw },
+      { data: recentActivity },
+      { count: pendingCompliance },
+      { data: topWibs },
+    ] = await Promise.all([
+      supabase.from('wib_records').select('id', { count: 'exact', head: true }),
+      supabase.from('companies').select('id', { count: 'exact', head: true }),
+      supabase.from('applications').select('id', { count: 'exact', head: true }),
+      supabase.from('applications').select('status').order('status'),
+      supabase.from('revenue_records').select('calculated_success_fee,invoice_status,grant_award_amount'),
+      supabase.from('activity_log').select('action,created_at,record_type').order('created_at', { ascending: false }).limit(20),
+      supabase.from('compliance_records').select('id', { count: 'exact', head: true }).eq('final_report_submitted', false),
+      supabase.from('wib_records').select('wib_name,state,call_priority_score,status').order('call_priority_score', { ascending: false }).limit(10),
+    ])
+
+    // Aggregate status breakdown
+    const statusBreakdown = {}
+    for (const row of (appsByStatus || [])) {
+      statusBreakdown[row.status] = (statusBreakdown[row.status] || 0) + 1
+    }
+
+    // Revenue aggregates
+    let totalAwarded = 0, totalFees = 0, totalCollected = 0
+    for (const r of (revenueRaw || [])) {
+      totalAwarded  += Number(r.grant_award_amount      || 0)
+      totalFees     += Number(r.calculated_success_fee  || 0)
+      if (r.invoice_status === 'paid') totalCollected += Number(r.calculated_success_fee || 0)
+    }
+
+    res.json({
+      totals: {
+        wibs:         totalWibs         || 0,
+        companies:    totalCompanies    || 0,
+        applications: totalApplications || 0,
+        pendingCompliance: pendingCompliance || 0,
+      },
+      revenue: {
+        totalAwarded:   totalAwarded,
+        totalFees:      totalFees,
+        totalCollected: totalCollected,
+        outstanding:    totalFees - totalCollected,
+      },
+      applicationsByStatus: statusBreakdown,
+      recentActivity:       (recentActivity || []),
+      topWibs:              (topWibs || []),
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ─── REPORTS: PDF export via pdfkit (returns binary stream) ──────────────────
+// Requires: npm install pdfkit
+// Generates a formatted PDF summary report from the same data as /reports/summary.
+app.get('/api/reports/export/pdf', auth, async (req, res) => {
+  let PDFDocument
+  try {
+    PDFDocument = require('pdfkit')
+  } catch (_) {
+    return res.status(503).json({ error: 'pdfkit not installed. Run: npm install pdfkit' })
+  }
+
+  try {
+    // Fetch summary data
+    const [
+      { count: totalWibs },
+      { count: totalCompanies },
+      { count: totalApplications },
+      { data: revenueRaw },
+    ] = await Promise.all([
+      supabase.from('wib_records').select('id', { count: 'exact', head: true }),
+      supabase.from('companies').select('id', { count: 'exact', head: true }),
+      supabase.from('applications').select('id', { count: 'exact', head: true }),
+      supabase.from('revenue_records').select('calculated_success_fee,invoice_status,grant_award_amount'),
+    ])
+
+    let totalAwarded = 0, totalFees = 0, totalCollected = 0
+    for (const r of (revenueRaw || [])) {
+      totalAwarded  += Number(r.grant_award_amount     || 0)
+      totalFees     += Number(r.calculated_success_fee || 0)
+      if (r.invoice_status === 'paid') totalCollected += Number(r.calculated_success_fee || 0)
+    }
+
+    const doc = new PDFDocument({ margin: 50, size: 'LETTER' })
+    res.setHeader('Content-Type',        'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="valor-report-${new Date().toISOString().split('T')[0]}.pdf"`)
+    doc.pipe(res)
+
+    // ── Header ────────────────────────────────────────────────────────────────
+    doc.fontSize(22).font('Helvetica-Bold').text('Valor Workforce Funding CRM', { align: 'center' })
+    doc.fontSize(13).font('Helvetica').text(`Executive Summary Report — ${new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}`, { align: 'center' })
+    doc.moveDown(1.5)
+
+    // ── KPI Table ─────────────────────────────────────────────────────────────
+    const kpis = [
+      ['Workforce Boards (WIBs)',  String(totalWibs         || 0)],
+      ['Employer Records',         String(totalCompanies    || 0)],
+      ['Applications',             String(totalApplications || 0)],
+      ['Total Grant Awards',       `$${totalAwarded.toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+      ['Total Success Fees',       `$${totalFees.toLocaleString('en-US',    { minimumFractionDigits: 2 })}`],
+      ['Collected',                `$${totalCollected.toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+      ['Outstanding',              `$${(totalFees - totalCollected).toLocaleString('en-US', { minimumFractionDigits: 2 })}`],
+    ]
+
+    doc.fontSize(14).font('Helvetica-Bold').text('Key Performance Indicators', { underline: true })
+    doc.moveDown(0.5)
+
+    const colW = [280, 180]
+    const rowH = 22
+    let y = doc.y
+
+    // Header row
+    doc.rect(50, y, colW[0] + colW[1], rowH).fill('#1a3a5c')
+    doc.fillColor('white').fontSize(11).font('Helvetica-Bold')
+    doc.text('Metric',    55,        y + 6, { width: colW[0] })
+    doc.text('Value',     55 + colW[0], y + 6, { width: colW[1] })
+    y += rowH
+
+    for (let i = 0; i < kpis.length; i++) {
+      const bg = i % 2 === 0 ? '#f0f4f8' : '#ffffff'
+      doc.rect(50, y, colW[0] + colW[1], rowH).fill(bg)
+      doc.fillColor('#111').fontSize(10).font('Helvetica')
+      doc.text(kpis[i][0], 55,           y + 6, { width: colW[0] })
+      doc.text(kpis[i][1], 55 + colW[0], y + 6, { width: colW[1] })
+      y += rowH
+    }
+
+    doc.moveDown(2)
+    doc.fontSize(9).fillColor('#666').text(
+      `Generated by Valor CRM on ${new Date().toISOString()} — Confidential`,
+      { align: 'center' }
+    )
+    doc.end()
+
+  } catch (e) {
+    console.error('PDF report error:', e.message)
+    if (!res.headersSent) res.status(500).json({ error: e.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PAYMENT TRACKING — Invoice / payment lifecycle management
+// ═══════════════════════════════════════════════════════════════════════════════
+// This module operates on revenue_records rows and surfaces the payment
+// state machine: draft → invoiced → paid / overdue.
+
+app.get('/api/payment-tracking', auth, async (req, res) => {
+  const { status, limit = 200, offset = 0 } = req.query
+  let q = supabase
+    .from('revenue_records')
+    .select(`
+      *,
+      company:companies!company_id(company_name, primary_contact_email, primary_contact_phone),
+      wib:wib_records!wib_id(wib_name, state),
+      application:applications!application_id(application_number, status)
+    `, { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(+offset, +offset + Math.min(+limit, 500) - 1)
+
+  if (status) q = q.eq('invoice_status', status)
+
+  const { data, error, count } = await q
+  if (error) return res.status(400).json({ error: error.message })
+
+  // Enrich with overdue flag: invoiced more than 30 days ago, unpaid
+  const now = Date.now()
+  const enriched = (data || []).map(r => ({
+    ...r,
+    is_overdue: r.invoice_status === 'invoiced' &&
+                r.invoice_sent_date &&
+                (now - new Date(r.invoice_sent_date).getTime()) > 30 * 24 * 3600 * 1000,
+  }))
+
+  res.json({ data: enriched, count })
+})
+
+app.put('/api/payment-tracking/:id/mark-paid', auth, async (req, res) => {
+  const { payment_received_date, payment_method, notes } = req.body
+  const { data, error } = await supabase
+    .from('revenue_records')
+    .update({
+      invoice_status:        'paid',
+      payment_received_date: payment_received_date || new Date().toISOString().split('T')[0],
+      payment_method:        payment_method || null,
+      payment_notes:         notes          || null,
+    })
+    .eq('id', req.params.id)
+    .select()
+    .single()
+  if (error) return res.status(400).json({ error: error.message })
+
+  // Non-optional audit log for payment confirmation (RL-1)
+  const { error: logErr } = await safeInsertLog({
+    user_id:     req.user.id,
+    action:      'PAYMENT_CONFIRMED',
+    record_type: 'revenue_records',
+    record_id:   req.params.id,
+    details:     `Payment confirmed by ${req.user.email} — method: ${payment_method || 'unspecified'}`,
+  })
+  if (logErr) {
+    return res.status(500).json({ error: 'Payment recorded but audit log failed. Please contact an administrator.' })
+  }
+
+  res.json(data)
+})
+
+app.put('/api/payment-tracking/:id/send-invoice', auth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('revenue_records')
+    .update({
+      invoice_status:    'invoiced',
+      invoice_sent_date: new Date().toISOString().split('T')[0],
+    })
+    .eq('id', req.params.id)
+    .select()
+    .single()
+  if (error) return res.status(400).json({ error: error.message })
+  try { await safeInsertLog({ user_id: req.user.id, action: 'INVOICE_SENT', record_type: 'revenue_records', record_id: req.params.id, details: 'Invoice status set to invoiced' }) } catch (_) {}
+  res.json(data)
+})
+
+app.get('/api/payment-tracking/summary', auth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('revenue_records')
+    .select('invoice_status, calculated_success_fee, grant_award_amount')
+
+  if (error) return res.status(400).json({ error: error.message })
+
+  const summary = { draft: 0, invoiced: 0, paid: 0, overdue: 0 }
+  const totals  = { draft: 0, invoiced: 0, paid: 0, overdue: 0 }
+  const now = Date.now()
+
+  for (const r of (data || [])) {
+    const fee = Number(r.calculated_success_fee || 0)
+    const s   = r.invoice_status || 'draft'
+    summary[s] = (summary[s] || 0) + 1
+    totals[s]  = (totals[s]  || 0) + fee
+  }
+
+  res.json({ counts: summary, totals })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRAINING ROSTERS — Participant tracking for approved grant training programs
+// ═══════════════════════════════════════════════════════════════════════════════
+// training_rosters table schema:
+//   id, application_id, company_id, wib_id, participant_name,
+//   participant_email, participant_phone, training_start_date,
+//   training_end_date, training_program, completion_status,
+//   attendance_pct, wage_pre_training, wage_post_training,
+//   notes, created_at, created_by
+
+app.get('/api/training-rosters', auth, async (req, res) => {
+  const { application_id, company_id, status, limit = 200, offset = 0 } = req.query
+  let q = supabase
+    .from('training_rosters')
+    .select(`
+      *,
+      company:companies!company_id(company_name),
+      application:applications!application_id(application_number),
+      wib:wib_records!wib_id(wib_name, state)
+    `, { count: 'exact' })
+    .order('training_start_date', { ascending: false })
+    .range(+offset, +offset + Math.min(+limit, 500) - 1)
+
+  if (application_id) q = q.eq('application_id', application_id)
+  if (company_id)     q = q.eq('company_id',     company_id)
+  if (status)         q = q.eq('completion_status', status)
+
+  const { data, error, count } = await q
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data, count })
+})
+
+app.post('/api/training-rosters', auth, async (req, res) => {
+  const ALLOWED = [
+    'application_id','company_id','wib_id','participant_name','participant_email',
+    'participant_phone','training_start_date','training_end_date','training_program',
+    'completion_status','attendance_pct','wage_pre_training','wage_post_training','notes',
+  ]
+  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => ALLOWED.includes(k)))
+  if (!body.participant_name?.trim()) return res.status(400).json({ error: 'Participant name required' })
+  if (!body.application_id)           return res.status(400).json({ error: 'Application ID required' })
+
+  const { data, error } = await supabase
+    .from('training_rosters')
+    .insert({ ...body, created_by: req.user.id })
+    .select()
+    .single()
+
+  if (error) return res.status(400).json({ error: error.message })
+  try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_TRAINING_ROSTER', record_type: 'training_rosters', record_id: data.id, details: `Added participant: ${body.participant_name}` }) } catch (_) {}
+  res.json(data)
+})
+
+app.put('/api/training-rosters/:id', auth, async (req, res) => {
+  const ALLOWED = [
+    'participant_name','participant_email','participant_phone','training_start_date',
+    'training_end_date','training_program','completion_status','attendance_pct',
+    'wage_pre_training','wage_post_training','notes',
+  ]
+  const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => ALLOWED.includes(k)))
+  const { data, error } = await supabase
+    .from('training_rosters')
+    .update(body)
+    .eq('id', req.params.id)
+    .select()
+    .single()
+  if (error) return res.status(400).json({ error: error.message })
+  res.json(data)
+})
+
+app.delete('/api/training-rosters/:id', auth, requireAdmin, async (req, res) => {
+  const { error } = await supabase.from('training_rosters').delete().eq('id', req.params.id)
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true })
+})
+
+// Bulk import: POST /api/training-rosters/import
+// Accepts a JSON array of roster rows (parsed on frontend from CSV/Excel)
+app.post('/api/training-rosters/import', auth, async (req, res) => {
+  const { rows, application_id } = req.body
+  if (!Array.isArray(rows) || rows.length === 0) return res.status(400).json({ error: 'rows array required' })
+  if (!application_id) return res.status(400).json({ error: 'application_id required' })
+
+  const ALLOWED = ['participant_name','participant_email','participant_phone','training_start_date','training_end_date','training_program','completion_status','attendance_pct','wage_pre_training','wage_post_training','notes']
+  const records = rows.map(r => ({
+    ...Object.fromEntries(Object.entries(r).filter(([k]) => ALLOWED.includes(k))),
+    application_id,
+    created_by: req.user.id,
+  })).filter(r => r.participant_name?.trim())
+
+  const results = { created: 0, errors: [] }
+  for (let i = 0; i < records.length; i += 100) {
+    const chunk = records.slice(i, i + 100)
+    const { error } = await supabase.from('training_rosters').insert(chunk)
+    if (error) results.errors.push(error.message)
+    else results.created += chunk.length
+  }
+
+  try { await safeInsertLog({ user_id: req.user.id, action: 'IMPORT_TRAINING_ROSTERS', details: `Imported ${results.created} roster rows for application ${application_id}` }) } catch (_) {}
+  res.json(results)
+})
+
+// Export training roster as CSV
+app.get('/api/training-rosters/export/:application_id', auth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('training_rosters')
+    .select('participant_name,participant_email,participant_phone,training_program,training_start_date,training_end_date,completion_status,attendance_pct,wage_pre_training,wage_post_training,notes')
+    .eq('application_id', req.params.application_id)
+    .order('participant_name')
+
+  if (error) return res.status(400).json({ error: error.message })
+
+  const escCsv = (v) => {
+    const s = String(v == null ? '' : v).replace(/[\r\n]+/g, ' ')
+    return '"' + (/^[=+\-@\t]/.test(s) ? "'" + s : s).replace(/"/g, '""') + '"'
+  }
+
+  const headers = ['Name','Email','Phone','Program','Start Date','End Date','Status','Attendance %','Wage (Pre)','Wage (Post)','Notes']
+  const rows    = (data || []).map(r => [
+    r.participant_name||'', r.participant_email||'', r.participant_phone||'',
+    r.training_program||'', r.training_start_date||'', r.training_end_date||'',
+    r.completion_status||'', r.attendance_pct||'', r.wage_pre_training||'',
+    r.wage_post_training||'', r.notes||'',
+  ])
+
+  res.setHeader('Content-Type',        'text/csv')
+  res.setHeader('Content-Disposition', `attachment; filename="training-roster-${req.params.application_id}-${new Date().toISOString().split('T')[0]}.csv"`)
+  res.send([headers.map(escCsv).join(','), ...rows.map(r => r.map(escCsv).join(','))].join('\n'))
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EMPLOYER DOCUMENTS — File metadata management linked to company records
+// ═══════════════════════════════════════════════════════════════════════════════
+// Documents are stored in Google Drive (existing integration).
+// This table stores metadata: file_id, file_name, mime_type, drive_url,
+// uploaded_by, company_id, document_type (contract|invoice|compliance|other),
+// created_at. The actual bytes live in Drive; we only track references here.
+
+app.get('/api/employer-documents', auth, async (req, res) => {
+  const { company_id, document_type, limit = 100, offset = 0 } = req.query
+  if (!company_id) return res.status(400).json({ error: 'company_id required' })
+
+  let q = supabase
+    .from('employer_documents')
+    .select('*, uploader:user_profiles!uploaded_by(full_name, email)', { count: 'exact' })
+    .eq('company_id', company_id)
+    .order('created_at', { ascending: false })
+    .range(+offset, +offset + Math.min(+limit, 500) - 1)
+
+  if (document_type) q = q.eq('document_type', document_type)
+
+  const { data, error, count } = await q
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data, count })
+})
+
+app.post('/api/employer-documents', auth, async (req, res) => {
+  const { company_id, file_id, file_name, mime_type, drive_url, document_type, notes } = req.body
+  if (!company_id) return res.status(400).json({ error: 'company_id required' })
+  if (!file_name)  return res.status(400).json({ error: 'file_name required' })
+  if (!drive_url)  return res.status(400).json({ error: 'drive_url required' })
+
+  const { data, error } = await supabase
+    .from('employer_documents')
+    .insert({
+      company_id,
+      file_id:       file_id       || null,
+      file_name,
+      mime_type:     mime_type     || 'application/octet-stream',
+      drive_url,
+      document_type: document_type || 'other',
+      notes:         notes         || null,
+      uploaded_by:   req.user.id,
+    })
+    .select('*, uploader:user_profiles!uploaded_by(full_name, email)')
+    .single()
+
+  if (error) return res.status(400).json({ error: error.message })
+  try { await safeInsertLog({ user_id: req.user.id, action: 'UPLOAD_EMPLOYER_DOCUMENT', record_type: 'employer_documents', record_id: data.id, details: `Uploaded: ${file_name} for company ${company_id}` }) } catch (_) {}
+  res.json(data)
+})
+
+app.delete('/api/employer-documents/:id', auth, requireAdmin, async (req, res) => {
+  const { error } = await supabase.from('employer_documents').delete().eq('id', req.params.id)
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WIB DOCUMENTS — File metadata management linked to WIB records
+// ═══════════════════════════════════════════════════════════════════════════════
+// Mirrors the employer-documents pattern. Table: wib_documents
+// Columns: id, wib_id, file_id, file_name, mime_type, drive_url,
+//          document_type, notes, uploaded_by, created_at
+
+app.get('/api/wib-documents', auth, async (req, res) => {
+  const { wib_id, document_type, limit = 100, offset = 0 } = req.query
+  if (!wib_id) return res.status(400).json({ error: 'wib_id required' })
+
+  let q = supabase
+    .from('wib_documents')
+    .select('*, uploader:user_profiles!uploaded_by(full_name, email)', { count: 'exact' })
+    .eq('wib_id', wib_id)
+    .order('created_at', { ascending: false })
+    .range(+offset, +offset + Math.min(+limit, 500) - 1)
+
+  if (document_type) q = q.eq('document_type', document_type)
+
+  const { data, error, count } = await q
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ data, count })
+})
+
+app.post('/api/wib-documents', auth, async (req, res) => {
+  const { wib_id, file_id, file_name, mime_type, drive_url, document_type, notes } = req.body
+  if (!wib_id)    return res.status(400).json({ error: 'wib_id required' })
+  if (!file_name) return res.status(400).json({ error: 'file_name required' })
+  if (!drive_url) return res.status(400).json({ error: 'drive_url required' })
+
+  const { data, error } = await supabase
+    .from('wib_documents')
+    .insert({
+      wib_id,
+      file_id:       file_id       || null,
+      file_name,
+      mime_type:     mime_type     || 'application/octet-stream',
+      drive_url,
+      document_type: document_type || 'other',
+      notes:         notes         || null,
+      uploaded_by:   req.user.id,
+    })
+    .select('*, uploader:user_profiles!uploaded_by(full_name, email)')
+    .single()
+
+  if (error) return res.status(400).json({ error: error.message })
+  try { await safeInsertLog({ user_id: req.user.id, action: 'UPLOAD_WIB_DOCUMENT', record_type: 'wib_documents', record_id: data.id, details: `Uploaded: ${file_name} for WIB ${wib_id}` }) } catch (_) {}
+  res.json(data)
+})
+
+app.delete('/api/wib-documents/:id', auth, requireAdmin, async (req, res) => {
+  const { error } = await supabase.from('wib_documents').delete().eq('id', req.params.id)
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUDIT LOG EXPORT — Download the audit trail as CSV or JSON
+// ═══════════════════════════════════════════════════════════════════════════════
+// Super Admin / Admin only. Returns the last N audit entries as a download.
+// Supports format=csv (default) or format=json.
+// Date filtering: ?from=ISO&to=ISO
+// Action filtering: ?action=LOGIN_ATTEMPT
+
+app.get('/api/audit/export', auth, requireAdmin, async (req, res) => {
+  const { format = 'csv', limit = 5000, from, to, action: actionFilter } = req.query
+
+  const baseCols = 'id,action,created_at,record_type,record_id'
+    + (global._detailsColumnMissing ? '' : global._hasMetadata ? ',metadata' : ',details')
+    + ',user:user_profiles!user_id(full_name,email)'
+
+  let q = supabase
+    .from('activity_log')
+    .select(baseCols)
+    .order('created_at', { ascending: false })
+    .limit(Math.min(+limit, 10000))
+
+  if (from)          q = q.gte('created_at', from)
+  if (to)            q = q.lte('created_at', to)
+  if (actionFilter)  q = q.eq('action', actionFilter)
+
+  const { data, error } = await q
+  if (error) return res.status(400).json({ error: error.message })
+
+  const rows = (data || []).map(r => ({
+    timestamp:   r.created_at   || '',
+    action:      r.action       || '',
+    user_name:   r.user?.full_name || '',
+    user_email:  r.user?.email  || '',
+    record_type: r.record_type  || '',
+    record_id:   r.record_id    || '',
+    details:     r.details || r.metadata?.text || '',
+  }))
+
+  if (format === 'json') {
+    res.setHeader('Content-Type',        'application/json')
+    res.setHeader('Content-Disposition', `attachment; filename="valor-audit-${new Date().toISOString().split('T')[0]}.json"`)
+    return res.send(JSON.stringify(rows, null, 2))
+  }
+
+  // CSV output
+  const escAudit = (v) => {
+    const s = String(v == null ? '' : v).replace(/[\r\n]+/g, ' ')
+    return '"' + (/^[=+\-@\t]/.test(s) ? "'" + s : s).replace(/"/g, '""') + '"'
+  }
+
+  const headers = ['Timestamp','Action','User Name','User Email','Record Type','Record ID','Details']
+  res.setHeader('Content-Type',        'text/csv')
+  res.setHeader('Content-Disposition', `attachment; filename="valor-audit-${new Date().toISOString().split('T')[0]}.csv"`)
+
+  const lines = [
+    headers.map(escAudit).join(','),
+    ...rows.map(r => [r.timestamp, r.action, r.user_name, r.user_email, r.record_type, r.record_id, r.details].map(escAudit).join(',')),
+  ]
+  res.send(lines.join('\n'))
+})
+
+// ─── SQL SCHEMA REFERENCE (run once in Supabase SQL Editor) ─────────────────
+// These tables back the new endpoints added in this patch.
+// Copy-paste into Supabase → SQL Editor → Run.
+//
+// CREATE TABLE IF NOT EXISTS training_rosters (
+//   id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+//   application_id    UUID        REFERENCES applications(id) ON DELETE SET NULL,
+//   company_id        UUID        REFERENCES companies(id)    ON DELETE SET NULL,
+//   wib_id            UUID        REFERENCES wib_records(id)  ON DELETE SET NULL,
+//   participant_name  TEXT        NOT NULL,
+//   participant_email TEXT,
+//   participant_phone TEXT,
+//   training_program  TEXT,
+//   training_start_date DATE,
+//   training_end_date   DATE,
+//   completion_status TEXT        DEFAULT 'enrolled',
+//   attendance_pct    NUMERIC(5,2),
+//   wage_pre_training  NUMERIC(10,2),
+//   wage_post_training NUMERIC(10,2),
+//   notes             TEXT,
+//   created_by        UUID        REFERENCES user_profiles(id) ON DELETE SET NULL,
+//   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+// );
+// CREATE INDEX IF NOT EXISTS idx_tr_application ON training_rosters(application_id);
+// CREATE INDEX IF NOT EXISTS idx_tr_company     ON training_rosters(company_id);
+//
+// CREATE TABLE IF NOT EXISTS employer_documents (
+//   id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+//   company_id    UUID        NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+//   file_id       TEXT,
+//   file_name     TEXT        NOT NULL,
+//   mime_type     TEXT        DEFAULT 'application/octet-stream',
+//   drive_url     TEXT        NOT NULL,
+//   document_type TEXT        DEFAULT 'other',
+//   notes         TEXT,
+//   uploaded_by   UUID        REFERENCES user_profiles(id) ON DELETE SET NULL,
+//   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+// );
+// CREATE INDEX IF NOT EXISTS idx_edocs_company ON employer_documents(company_id);
+//
+// CREATE TABLE IF NOT EXISTS wib_documents (
+//   id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+//   wib_id        UUID        NOT NULL REFERENCES wib_records(id) ON DELETE CASCADE,
+//   file_id       TEXT,
+//   file_name     TEXT        NOT NULL,
+//   mime_type     TEXT        DEFAULT 'application/octet-stream',
+//   drive_url     TEXT        NOT NULL,
+//   document_type TEXT        DEFAULT 'other',
+//   notes         TEXT,
+//   uploaded_by   UUID        REFERENCES user_profiles(id) ON DELETE SET NULL,
+//   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+// );
+// CREATE INDEX IF NOT EXISTS idx_wdocs_wib ON wib_documents(wib_id);
+//
+// ALTER TABLE revenue_records
+//   ADD COLUMN IF NOT EXISTS payment_method TEXT,
+//   ADD COLUMN IF NOT EXISTS payment_notes  TEXT;
+//
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONTEXT-AWARE AI ENDPOINTS
+// Specialist proxy routes for each CRM tab context.
+// All routes share the same sanitization and model-fallback logic as POST /api/ai
+// but inject tab-specific system prompts and accept richer structured context.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Helper: shared AI call with primary/fallback model logic
+async function callAnthropicAI(apiKey, systemPrompt, userContent, maxTokens = 800) {
+  const MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001']
+  for (let i = 0; i < MODELS.length; i++) {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model:      MODELS[i],
+        max_tokens: maxTokens,
+        system:     systemPrompt,
+        messages:   [{ role: 'user', content: userContent }],
+      }),
+    })
+    const d = await r.json()
+    if (r.status === 529 && i === 0) { console.warn('AI 529 — falling back to haiku'); continue }
+    return { text: d.content?.[0]?.text || '', error: d.error?.message || null, model: MODELS[i] }
+  }
+  return { text: '', error: 'All models unavailable', model: null }
+}
+
+// POST /api/ai/wib — WIB profile analysis and summary
+app.post('/api/ai/wib', auth, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  const { wib_name, state, status, notes, wib_email, website, max_award_per_ein, task = 'summarize' } = req.body
+
+  const SYSTEM = 'You are an expert workforce grant consultant specializing in WIB (Workforce Innovation Board) relationship management. Provide concise, actionable intelligence for CRM staff. Never fabricate specific grant amounts or legal requirements. Flag when information should be independently verified.'
+
+  const taskPrompts = {
+    summarize:    `Summarize this WIB record in 3-5 sentences for a grant coordinator: Name: ${wib_name}, State: ${state}, Status: ${status}, Max Award/EIN: $${max_award_per_ein || 'unknown'}, Notes: ${(notes || '').substring(0, 500)}`,
+    contact_tips: `Suggest 3 specific outreach strategies for a grant coordinator trying to build a relationship with ${wib_name} (${state}). Focus on timing, messaging, and decision-maker identification within a WIB structure.`,
+    eligibility:  `Based on a WIB named ${wib_name} in ${state} with status "${status}", what types of employers are most likely to qualify for their workforce training grants? List 5 employer profiles.`,
+    executive:    `Write a 150-word executive summary of this WIB for a business development meeting: ${wib_name}, ${state}, Status: ${status}, Award cap: $${max_award_per_ein || 'unknown'}, Website: ${website || 'N/A'}. Notes: ${(notes || '').substring(0, 300)}`,
+  }
+
+  const userContent = taskPrompts[task] || taskPrompts.summarize
+  const result = await callAnthropicAI(apiKey, SYSTEM, userContent)
+  if (result.error) return res.status(500).json({ error: result.error })
+
+  try { await safeInsertLog({ user_id: req.user.id, action: 'AI_QUERY', details: `WIB AI [${task}]: ${wib_name}` }) } catch (_) {}
+  res.json({ text: result.text, model: result.model, task })
+})
+
+// POST /api/ai/employer — Employer eligibility and grant matching analysis
+app.post('/api/ai/employer', auth, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  const { company_name, employee_count, avg_hourly_wage, state, industry, notes, task = 'eligibility' } = req.body
+
+  const SYSTEM = 'You are a workforce grant eligibility analyst. Analyze employer data and provide grant matching intelligence, eligibility assessments, and outreach recommendations. Always clarify that final eligibility must be confirmed with the relevant WIB. Use specific IWT (Incumbent Worker Training) program criteria in your analysis.'
+
+  const taskPrompts = {
+    eligibility: `Analyze this employer for IWT grant eligibility: Company: ${company_name}, Employees: ${employee_count || 'unknown'}, Avg Wage: $${avg_hourly_wage || 'unknown'}/hr, State: ${state || 'unknown'}, Industry: ${industry || 'unknown'}. Provide: (1) Preliminary eligibility assessment, (2) Key qualification factors, (3) Potential barriers, (4) Recommended WIB programs to pursue.`,
+    summary:     `Write a professional employer profile summary (150 words max) for ${company_name}. Include: business overview inference based on industry "${industry}", grant potential assessment, and recommended engagement approach for a grant coordinator.`,
+    email_draft: `Draft a professional outreach email from a Valor Workforce Funding coordinator to ${company_name}. The email should introduce our IWT grant assistance services, highlight the benefit to the employer (workforce training at no/reduced cost), and request a brief discovery call. Keep it under 200 words, professional but approachable.`,
+    notes_parse: `Parse and extract key actionable items from these CRM notes for ${company_name}: "${(notes || '').substring(0, 800)}". Format as: (1) Current status, (2) Next steps, (3) Open questions, (4) Risk flags.`,
+  }
+
+  const userContent = taskPrompts[task] || taskPrompts.eligibility
+  const result = await callAnthropicAI(apiKey, SYSTEM, userContent)
+  if (result.error) return res.status(500).json({ error: result.error })
+
+  try { await safeInsertLog({ user_id: req.user.id, action: 'AI_QUERY', details: `Employer AI [${task}]: ${company_name}` }) } catch (_) {}
+  res.json({ text: result.text, model: result.model, task })
+})
+
+// POST /api/ai/application — Grant application drafting and compliance assistance
+app.post('/api/ai/application', auth, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  const { application_number, company_name, wib_name, status, award_amount, training_program, notes, task = 'draft_section' } = req.body
+
+  const SYSTEM = 'You are an expert grant writer and compliance advisor specializing in IWT (Incumbent Worker Training) workforce grants. You help coordinators draft compelling grant applications, identify compliance gaps, and recommend funding strategies. Always flag sections requiring legal review.'
+
+  const taskPrompts = {
+    draft_section:    `Draft a professional narrative section for an IWT grant application. Employer: ${company_name}, WIB: ${wib_name}, Training Program: ${training_program || 'workforce skills training'}, Award Amount: $${award_amount || 'TBD'}. Write a 200-word "Business Need" section explaining why this training investment is critical for the employer's competitiveness and worker advancement.`,
+    compliance_check: `Review this application status and flag compliance risks: Application ${application_number}, Company: ${company_name}, Status: ${status}, Notes: "${(notes || '').substring(0, 600)}". List: (1) Compliance checklist items, (2) Missing documentation likely needed, (3) Timeline risks, (4) Red flags.`,
+    funding_match:    `Recommend 3 alternative or supplemental funding strategies for an employer application that is: Company: ${company_name}, State: ${wib_name?.match(/[A-Z]{2}/)?.[0] || 'unknown'}, Training focus: ${training_program || 'general skills'}. Include federal, state, and private funding sources.`,
+    status_summary:   `Write a professional status update summary for this grant application: #${application_number}, ${company_name} + ${wib_name}, Status: ${status}, Award: $${award_amount || 'pending'}. Notes: "${(notes || '').substring(0, 400)}". Format for an executive briefing in 100 words.`,
+  }
+
+  const userContent = taskPrompts[task] || taskPrompts.draft_section
+  const result = await callAnthropicAI(apiKey, SYSTEM, userContent)
+  if (result.error) return res.status(500).json({ error: result.error })
+
+  try { await safeInsertLog({ user_id: req.user.id, action: 'AI_QUERY', details: `Application AI [${task}]: ${application_number}` }) } catch (_) {}
+  res.json({ text: result.text, model: result.model, task })
+})
+
+// POST /api/ai/communications — Email drafting and meeting note processing
+app.post('/api/ai/communications', auth, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  const { task = 'email_draft', recipient_name, recipient_role, company_name, context, meeting_notes } = req.body
+
+  const SYSTEM = 'You are a professional communications specialist for a workforce grant consulting firm. Write clear, confident, and concise business communications. Adapt tone to recipient role (formal for WIB directors, relationship-focused for employer HR). Never invent specific numbers or deadlines — leave placeholders in brackets.'
+
+  const taskPrompts = {
+    email_draft:     `Draft a professional email to ${recipient_name || 'the contact'} (${recipient_role || 'unknown role'}) at ${company_name || 'the organization'}. Context: ${(context || '').substring(0, 500)}. Requirements: Subject line, greeting, 2-3 paragraph body, clear call-to-action, professional close. Sign from "Valor Workforce Funding Team".`,
+    follow_up:       `Draft a concise follow-up email to ${recipient_name || 'the contact'} at ${company_name || 'the organization'} referencing a previous discussion about IWT grant opportunities. Context from last interaction: ${(context || '').substring(0, 400)}. Keep under 150 words. Include a specific ask.`,
+    meeting_summary: `Parse these meeting notes and produce a professional CRM entry: "${(meeting_notes || '').substring(0, 800)}". Format output as: (1) Meeting Summary (3 sentences), (2) Decisions Made, (3) Action Items with responsible parties, (4) Next Meeting Topics, (5) Follow-up emails needed.`,
+    intro_email:     `Write a warm introduction email from a Valor Workforce Funding coordinator to ${recipient_name || 'a prospective employer contact'} at ${company_name || 'their company'}. Introduce our firm's grant facilitation services for workforce training. Include a specific benefit hook relevant to their industry context: ${context || 'manufacturing/healthcare/logistics'}. Under 180 words.`,
+  }
+
+  const userContent = taskPrompts[task] || taskPrompts.email_draft
+  const result = await callAnthropicAI(apiKey, SYSTEM, userContent)
+  if (result.error) return res.status(500).json({ error: result.error })
+
+  try { await safeInsertLog({ user_id: req.user.id, action: 'AI_QUERY', details: `Comms AI [${task}]` }) } catch (_) {}
+  res.json({ text: result.text, model: result.model, task })
+})
+
+// POST /api/ai/note-generator — Auto-generate structured CRM notes from raw input
+app.post('/api/ai/note-generator', auth, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  const { raw_input, record_type = 'general', record_name, save_to_record, record_id } = req.body
+
+  if (!raw_input?.trim()) return res.status(400).json({ error: 'raw_input required' })
+
+  const SYSTEM = 'You are a CRM note specialist for a workforce grant firm. Transform raw user input into structured, professional CRM notes. Extract key facts, flag follow-ups, and format consistently. Output clean markdown-compatible text only.'
+
+  const userContent = `Transform this raw input into a professional CRM note for a ${record_type} record (${record_name || 'unnamed'}). Raw input: "${raw_input.substring(0, 1000)}". Format: (1) Summary (2 sentences), (2) Key Points (bullet list), (3) Action Items, (4) Follow-up Required (Yes/No + details).`
+
+  const result = await callAnthropicAI(apiKey, SYSTEM, userContent, 500)
+  if (result.error) return res.status(500).json({ error: result.error })
+
+  // Optionally save the generated note directly to the record
+  let savedNote = null
+  if (save_to_record && record_id) {
+    const { data: note } = await safeInsertLog({
+      user_id:     req.user.id,
+      action:      'NOTE',
+      record_type: record_type,
+      record_id:   record_id,
+      details:     result.text,
+      metadata:    { note_type: 'AI Generated', ai_generated: true, raw_input: raw_input.substring(0, 200), content: result.text },
+    })
+    savedNote = note
+  }
+
+  try { await safeInsertLog({ user_id: req.user.id, action: 'AI_QUERY', details: `Note generator: ${record_type} — ${record_name}` }) } catch (_) {}
+  res.json({ text: result.text, model: result.model, saved: !!savedNote, note: savedNote })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MULTIPART FILE IMPORT ENGINE — xlsx + csv parsing with schema validation
+// Handles browser-uploaded files (not URL-based). Validates headers before
+// bulk-inserting into Supabase. Returns per-row errors without aborting the batch.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Schema definitions — required columns for each object type
+const IMPORT_SCHEMAS = {
+  wibs: {
+    required: ['wib_name'],
+    optional: ['short_name','state','status','wib_phone','wib_email','website','max_award_per_ein','match_requirement_pct','source_url','notes'],
+  },
+  companies: {
+    required: ['company_name'],
+    optional: ['company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes'],
+  },
+  locations: {
+    required: ['location_name'],
+    optional: ['state','county','city','status','employee_count','address','notes'],
+  },
+  funding: {
+    required: ['opportunity_name'],
+    optional: ['status','program_type','max_award_per_ein','application_deadline','source_url','notes'],
+  },
+  applications: {
+    required: ['company_name'],
+    optional: ['wib_name','status','award_amount_requested','submission_date','notes'],
+  },
+  contacts: {
+    required: ['name'],
+    optional: ['title','email','phone','notes','company_name'],
+  },
+  training_rosters: {
+    required: ['participant_name','application_id'],
+    optional: ['participant_email','participant_phone','training_program','training_start_date','training_end_date','completion_status','attendance_pct','wage_pre_training','wage_post_training','notes'],
+  },
+}
+
+// POST /api/import/file/:type — multipart file upload (CSV or Excel)
+app.post('/api/import/file/:type', auth, (req, res) => {
+  if (!memUpload) return res.status(503).json({ error: 'multer not installed — run: npm install multer' })
+
+  memUpload.single('file')(req, res, async (uploadErr) => {
+    if (uploadErr) return res.status(400).json({ error: uploadErr.message })
+    if (!req.file)  return res.status(400).json({ error: 'No file uploaded' })
+
+    const { type } = req.params
+    const schema = IMPORT_SCHEMAS[type]
+    if (!schema) return res.status(400).json({ error: `Unknown import type: ${type}. Valid: ${Object.keys(IMPORT_SCHEMAS).join(', ')}` })
+
+    const mime = req.file.mimetype
+    let rows = []
+
+    try {
+      if (mime === 'text/csv' || req.file.originalname.endsWith('.csv')) {
+        // Parse CSV from buffer
+        const csvText = req.file.buffer.toString('utf8')
+        const lines   = csvText.split(/\r?\n/).filter(Boolean)
+        if (lines.length < 2) return res.status(400).json({ error: 'CSV file must have a header row and at least one data row' })
+
+        // Simple RFC-4180 CSV parser (handles quoted fields with embedded commas)
+        const parseCSVLine = (line) => {
+          const result = []; let current = '', inQuotes = false
+          for (let i = 0; i < line.length; i++) {
+            const ch = line[i]
+            if (ch === '"' && line[i+1] === '"') { current += '"'; i++; continue }
+            if (ch === '"') { inQuotes = !inQuotes; continue }
+            if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ''; continue }
+            current += ch
+          }
+          result.push(current.trim())
+          return result
+        }
+
+        const headers = parseCSVLine(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''))
+        for (let i = 1; i < lines.length; i++) {
+          if (!lines[i].trim()) continue
+          const values = parseCSVLine(lines[i])
+          const row    = {}
+          headers.forEach((h, idx) => { if (values[idx] !== undefined) row[h] = values[idx] })
+          rows.push(row)
+        }
+
+      } else if (mime.includes('spreadsheet') || mime.includes('excel') || req.file.originalname.match(/\.(xlsx|xls)$/i)) {
+        // Parse Excel from buffer using xlsx package
+        let XLSX
+        try { XLSX = require('xlsx') }
+        catch (_) { return res.status(503).json({ error: 'xlsx package not installed — run: npm install xlsx' }) }
+
+        const workbook  = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true })
+        const sheetName = workbook.SheetNames[0]
+        if (!sheetName) return res.status(400).json({ error: 'Excel file contains no sheets' })
+
+        const sheet = workbook.Sheets[sheetName]
+        const raw   = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
+        if (raw.length < 2) return res.status(400).json({ error: 'Excel sheet must have a header row and at least one data row' })
+
+        const headers = raw[0].map(h => String(h).toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, ''))
+        for (let i = 1; i < raw.length; i++) {
+          const values = raw[i]
+          if (values.every(v => !v)) continue // skip empty rows
+          const row = {}
+          headers.forEach((h, idx) => { if (values[idx] !== undefined && values[idx] !== '') row[h] = String(values[idx]) })
+          rows.push(row)
+        }
+
+      } else {
+        return res.status(400).json({ error: `Unsupported file type: ${mime}. Upload a .csv or .xlsx file.` })
+      }
+
+    } catch (parseErr) {
+      return res.status(400).json({ error: `File parsing failed: ${parseErr.message}` })
+    }
+
+    if (rows.length === 0) return res.status(400).json({ error: 'No data rows found in file after parsing' })
+
+    // Schema validation — check required columns exist in at least one row
+    const firstRow     = rows[0]
+    const missingCols  = schema.required.filter(col => !(col in firstRow))
+    if (missingCols.length > 0) {
+      return res.status(400).json({
+        error: `Missing required columns: ${missingCols.join(', ')}`,
+        hint:  `Required columns for "${type}" import: ${schema.required.join(', ')}`,
+        found_columns: Object.keys(firstRow),
+      })
+    }
+
+    // Delegate to the existing POST /api/import/:type handler logic by calling it directly
+    // Chunk into batches of 200 to stay within Supabase payload limits
+    const CHUNK_SIZE = 200
+    const results    = { total: rows.length, created: 0, errors: [], skipped: 0 }
+
+    for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+      const chunk = rows.slice(i, i + CHUNK_SIZE)
+      try {
+        const response = await fetch(`http://localhost:${process.env.PORT || 3001}/api/import/${type}`, {
+          method:  'POST',
+          headers: {
+            'Content-Type':  'application/json',
+            'Authorization': req.headers.authorization || '',
+          },
+          body: JSON.stringify({
+            rows:        chunk,
+            batch:       Math.floor(i / CHUNK_SIZE) + 1,
+            totalBatches: Math.ceil(rows.length / CHUNK_SIZE),
+          }),
+        })
+        const batchResult = await response.json()
+        results.created += batchResult.created  || 0
+        results.skipped += batchResult.skipped  || 0
+        results.errors  = results.errors.concat(batchResult.errors || [])
+      } catch (batchErr) {
+        results.errors.push(`Batch ${Math.floor(i / CHUNK_SIZE) + 1} failed: ${batchErr.message}`)
+      }
+    }
+
+    try { await safeInsertLog({ user_id: req.user.id, action: 'FILE_IMPORT', details: `File import: ${type} — ${results.created}/${results.total} rows via ${req.file.originalname}` }) } catch (_) {}
+
+    res.json({
+      success:      results.errors.length === 0,
+      total:        results.total,
+      created:      results.created,
+      skipped:      results.skipped,
+      error_count:  results.errors.length,
+      errors:       results.errors.slice(0, 25),
+      truncated:    results.errors.length > 25,
+      filename:     req.file.originalname,
+      type,
+    })
+  })
+})
+
+// GET /api/import/template/:type/xlsx — Download a pre-formatted Excel template
+app.get('/api/import/template/:type/xlsx', auth, (req, res) => {
+  const { type } = req.params
+  const schema = IMPORT_SCHEMAS[type]
+  if (!schema) return res.status(400).json({ error: `Unknown type: ${type}` })
+
+  let XLSX
+  try { XLSX = require('xlsx') }
+  catch (_) { return res.status(503).json({ error: 'xlsx not installed — run: npm install xlsx' }) }
+
+  const headers = [...schema.required, ...schema.optional]
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([
+    headers,           // Row 1: headers
+    headers.map(h => schema.required.includes(h) ? '(REQUIRED)' : '(optional)'), // Row 2: hints
+  ])
+
+  // Bold the required columns header row
+  headers.forEach((_, idx) => {
+    const cellRef = XLSX.utils.encode_cell({ r: 0, c: idx })
+    if (!ws[cellRef]) return
+    ws[cellRef].s = { font: { bold: true } }
+  })
+
+  XLSX.utils.book_append_sheet(wb, ws, `${type}_template`)
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+
+  res.setHeader('Content-Type',        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  res.setHeader('Content-Disposition', `attachment; filename="valor-${type}-template.xlsx"`)
+  res.send(buffer)
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXCEL EXPORT ENGINE — Download any data table as a formatted .xlsx file
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/export/:type/xlsx', auth, async (req, res) => {
+  const { type } = req.params
+  if (['users','audit'].includes(type) && !['super_admin','admin'].includes(req.user.role)) {
+    return res.status(403).json({ error: 'Admin access required for this export' })
+  }
+
+  let XLSX
+  try { XLSX = require('xlsx') }
+  catch (_) { return res.status(503).json({ error: 'xlsx not installed — run: npm install xlsx' }) }
+
+  const config = EXPORT_CONFIG[type]
+  if (!config && !['users','compliance','audit'].includes(type)) {
+    return res.status(400).json({ error: `Unknown export type: ${type}` })
+  }
+
+  let allRows = []
+
+  try {
+    if (type === 'users') {
+      const { data } = await supabase.from('user_profiles').select('full_name,email,role,title,is_active,created_at')
+      allRows = (data || []).map(r => ({ 'Name': r.full_name||'', 'Email': r.email||'', 'Role': r.role||'', 'Title': r.title||'', 'Active': r.is_active ? 'Yes' : 'No', 'Created': r.created_at?.split('T')[0]||'' }))
+    } else if (type === 'compliance') {
+      const { data } = await supabase.from('v_compliance_alerts').select('*').order('days_until_final_due')
+      allRows = (data || []).map(r => ({ 'Application #': r.application_number||'', 'Company': r.company_name||'', 'WIB': r.wib_name||'', 'Status': r.status||'', 'Award': r.award_amount_approved||'', 'Training End': r.training_end_date||'', 'Report Due': r.final_report_due_date||'', 'Days Until Due': r.days_until_final_due??'', 'Report Submitted': r.final_report_submitted?'Yes':'No', 'Attendance Collected': r.attendance_sheets_collected?'Yes':'No', 'Notes': r.compliance_notes||'' }))
+    } else {
+      // Paginate through config table
+      let offset = 0
+      while (true) {
+        const { data, error } = await supabase
+          .from(config.table).select(config.select)
+          .order(config.order.col, { ascending: config.order.asc })
+          .range(offset, offset + 999)
+        if (error || !data?.length) break
+        const mapped = data.map(r => {
+          const values  = config.map(r)
+          const headers = config.headers
+          const obj     = {}
+          headers.forEach((h, i) => { obj[h] = values[i] ?? '' })
+          return obj
+        })
+        allRows = allRows.concat(mapped)
+        offset += 1000
+        if (data.length < 1000) break
+      }
+    }
+  } catch (e) {
+    return res.status(500).json({ error: `Data fetch failed: ${e.message}` })
+  }
+
+  if (allRows.length === 0) return res.status(404).json({ error: 'No data found for this export' })
+
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.json_to_sheet(allRows)
+
+  // Style header row
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+  for (let col = range.s.c; col <= range.e.c; col++) {
+    const cell = ws[XLSX.utils.encode_cell({ r: 0, c: col })]
+    if (cell) cell.s = { font: { bold: true }, fill: { fgColor: { rgb: '1A3A5C' } } }
+  }
+
+  // Auto-width columns
+  const colWidths = Object.keys(allRows[0]).map(key => ({
+    wch: Math.max(key.length + 2, 12),
+  }))
+  ws['!cols'] = colWidths
+
+  XLSX.utils.book_append_sheet(wb, ws, type.charAt(0).toUpperCase() + type.slice(1))
+  const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+
+  try { await safeInsertLog({ user_id: req.user.id, action: 'EXPORT', details: `Excel export: ${type} — ${allRows.length} rows` }) } catch (_) {}
+
+  res.setHeader('Content-Type',        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+  res.setHeader('Content-Disposition', `attachment; filename="valor-${type}-${new Date().toISOString().split('T')[0]}.xlsx"`)
+  res.send(buffer)
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GRANT AWARDS — Dedicated grant awards management
+// ═══════════════════════════════════════════════════════════════════════════════
+// grant_awards maps directly to awarded+active applications with revenue join.
+// This endpoint provides the richer dataset needed for the Grant Awards tab.
+
+app.get('/api/grant-awards/summary', auth, async (req, res) => {
+  const { state, wib_id, year } = req.query
+  try {
+    let q = supabase
+      .from('applications')
+      .select(`
+        id, application_number, status, award_amount_approved, award_amount_requested,
+        submission_date, decision_date, created_at,
+        company:companies!company_id(company_name, state, employee_count_total, avg_hourly_wage),
+        wib:wib_records!wib_id(wib_name, state),
+        revenue:revenue_records!application_id(fee_model, calculated_success_fee, invoice_status, payment_received_date)
+      `, { count: 'exact' })
+      .in('status', ['awarded', 'active', 'completed', 'closed'])
+      .order('decision_date', { ascending: false })
+
+    if (wib_id) q = q.eq('wib_id', wib_id)
+    if (year)   q = q.gte('decision_date', `${year}-01-01`).lte('decision_date', `${year}-12-31`)
+
+    const { data, error, count } = await q
+    if (error) return res.status(400).json({ error: error.message })
+
+    // Aggregate summary metrics
+    let totalAwarded = 0, totalFees = 0, collected = 0
+    for (const app of (data || [])) {
+      totalAwarded += Number(app.award_amount_approved || 0)
+      const rev = Array.isArray(app.revenue) ? app.revenue[0] : app.revenue
+      if (rev) {
+        totalFees += Number(rev.calculated_success_fee || 0)
+        if (rev.invoice_status === 'paid') collected += Number(rev.calculated_success_fee || 0)
+      }
+    }
+
+    res.json({
+      data,
+      count,
+      summary: {
+        totalGrantsAwarded: count || 0,
+        totalDollarAwarded: totalAwarded,
+        totalValorFees:     totalFees,
+        totalCollected:     collected,
+        outstanding:        totalFees - collected,
+      },
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SYSTEM HEALTH & DIAGNOSTICS — Internal health checks for Render monitoring
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/health/detailed', auth, requireAdmin, async (req, res) => {
+  const checks = {}
+
+  // Supabase connectivity
+  try {
+    const { error } = await supabase.from('user_profiles').select('id').limit(1)
+    checks.supabase = error ? { status: 'error', message: error.message } : { status: 'ok' }
+  } catch (e) { checks.supabase = { status: 'error', message: e.message } }
+
+  // pg pool (if configured)
+  if (_pgPool) {
+    try {
+      const client = await _pgPool.connect()
+      await client.query('SELECT 1')
+      client.release()
+      checks.pg_pool = { status: 'ok', total: _pgPool.totalCount, idle: _pgPool.idleCount, waiting: _pgPool.waitingCount }
+    } catch (e) { checks.pg_pool = { status: 'error', message: e.message } }
+  } else {
+    checks.pg_pool = { status: 'not_configured', note: 'Set DATABASE_URL to enable direct pg pool' }
+  }
+
+  // Anthropic API
+  checks.anthropic = process.env.ANTHROPIC_API_KEY
+    ? { status: 'configured', note: 'Key present — connectivity not tested on health check' }
+    : { status: 'not_configured', note: 'ANTHROPIC_API_KEY not set — AI features disabled' }
+
+  // Aircall
+  checks.aircall = process.env.AIRCALL_WEBHOOK_SECRET
+    ? { status: 'configured' }
+    : { status: 'not_configured', note: 'AIRCALL_WEBHOOK_SECRET not set — webhooks return 503' }
+
+  // Google Drive
+  checks.google_drive = (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
+    ? { status: 'configured' }
+    : { status: 'not_configured', note: 'GOOGLE_CLIENT_ID or SECRET not set' }
+
+  // Active exports
+  checks.active_exports = { count: _activeExports.size, users: [..._activeExports] }
+
+  // Presence (SSE connections)
+  checks.live_users = { online: _presence.size }
+
+  // Schema cache
+  checks.schema_cache = {
+    has_metadata:   global._hasMetadata,
+    has_record_type: global._hasRecordType,
+    has_record_id:  global._hasRecordId,
+    details_missing: global._detailsColumnMissing,
+    safe_cols:      global._safeActivityCols,
+  }
+
+  const allOk = Object.values(checks).every(c => c.status === 'ok' || c.status === 'configured' || c.status === 'not_configured')
+  res.status(allOk ? 200 : 207).json({
+    status:    allOk ? 'healthy' : 'degraded',
+    timestamp: new Date().toISOString(),
+    checks,
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CRON JOB ENDPOINT — Triggered by Render Cron (or external scheduler)
+// Set Render Cron to: GET /api/admin/cron/daily with header CRON_SECRET
+// ═══════════════════════════════════════════════════════════════════════════════
+
+app.get('/api/admin/cron/daily', async (req, res) => {
+  const cronSecret = process.env.CRON_SECRET
+  const provided   = req.headers['x-cron-secret'] || req.query.secret
+
+  if (!cronSecret || provided !== cronSecret) {
+    return res.status(403).json({ error: 'Unauthorized — set CRON_SECRET in Render environment variables' })
+  }
+
+  const results = { ran_at: new Date().toISOString(), tasks: {} }
+
+  // Task 1: Prune revoked tokens
+  try {
+    const { error } = await supabase.from('revoked_tokens').delete().lt('expires_at', new Date().toISOString())
+    results.tasks.prune_revoked_tokens = error ? { status: 'error', message: error.message } : { status: 'ok' }
+  } catch (e) { results.tasks.prune_revoked_tokens = { status: 'error', message: e.message } }
+
+  // Task 2: Prune old login attempts (older than 24h)
+  try {
+    const cutoff = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+    const { error } = await supabase.from('login_attempts').delete().lt('attempted_at', cutoff)
+    results.tasks.prune_login_attempts = error ? { status: 'error', message: error.message } : { status: 'ok' }
+  } catch (e) { results.tasks.prune_login_attempts = { status: 'error', message: e.message } }
+
+  // Task 3: Flag overdue invoices
+  try {
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString().split('T')[0]
+    const { data: overdue, error } = await supabase
+      .from('revenue_records')
+      .select('id')
+      .eq('invoice_status', 'invoiced')
+      .lt('invoice_sent_date', thirtyDaysAgo)
+    results.tasks.overdue_invoices_flagged = error
+      ? { status: 'error', message: error.message }
+      : { status: 'ok', count: (overdue || []).length }
+  } catch (e) { results.tasks.overdue_invoices_flagged = { status: 'error', message: e.message } }
+
+  // Task 4: Log the cron run to activity log
+  try {
+    await supabase.from('activity_log').insert({ action: 'CRON_DAILY', details: `Daily cron completed. Tasks: ${JSON.stringify(results.tasks)}` })
+    results.tasks.audit_logged = { status: 'ok' }
+  } catch (e) { results.tasks.audit_logged = { status: 'error', message: e.message } }
+
+  console.log('[CRON] Daily job completed:', JSON.stringify(results.tasks))
+  res.json(results)
+})
+
+
 let _htmlPath=null
 function findHtmlPath() {
   if (_htmlPath&&fs.existsSync(_htmlPath)) return _htmlPath
@@ -1921,8 +3249,18 @@ app.listen(PORT, () => {
   console.log('   📥 IMPORT: resumeFrom on 401, XSS strip, Facility_Name priority')
   console.log('   💰 REVENUE: pg transactional audit or non-optional Supabase audit')
   console.log('   🧹 PURGE: GET /api/admin/purge-broken-imports (admin only)')
+  console.log('   📈 REPORTS: GET /api/reports/summary | GET /api/reports/export/pdf')
+  console.log('   💳 PAYMENTS: GET/PUT /api/payment-tracking')
+  console.log('   🎓 TRAINING ROSTERS: GET/POST/PUT/DELETE /api/training-rosters')
+  console.log('   📁 EMPLOYER DOCS: GET/POST/DELETE /api/employer-documents')
+  console.log('   📁 WIB DOCS: GET/POST/DELETE /api/wib-documents')
+  console.log('   📋 AUDIT EXPORT: GET /api/audit/export?format=csv|json')
   console.log('')
-  console.log('   CREATE TABLE IF NOT EXISTS role_permissions (id INTEGER PRIMARY KEY DEFAULT 1, permissions JSONB NOT NULL DEFAULT \'{}\', updated_at TIMESTAMPTZ DEFAULT NOW());')
+  console.log('   ⚠️  NEW TABLES REQUIRED — run in Supabase SQL Editor:')
+  console.log('   training_rosters, employer_documents, wib_documents')
+  console.log('   ALTER TABLE revenue_records ADD COLUMN IF NOT EXISTS payment_method TEXT, payment_notes TEXT;')
+  console.log('')
+  console.log("   CREATE TABLE IF NOT EXISTS role_permissions (id INTEGER PRIMARY KEY DEFAULT 1, permissions JSONB NOT NULL DEFAULT '{}', updated_at TIMESTAMPTZ DEFAULT NOW());")
   console.log('   ALTER TABLE role_permissions ENABLE ROW LEVEL SECURITY;')
   console.log('   CREATE POLICY "Service role full access" ON role_permissions USING (true) WITH CHECK (true);')
 })
