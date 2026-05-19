@@ -1511,9 +1511,41 @@ function fundingStatusPill(s){
   const l={open:'Open',pending:'Pending',blocked:'Blocked',closed_deadline:'Closed',closed_out_of_funds:'Out of Funds',stop_applications:'Stop Applications'}
   return`<span class="pill ${m[s]||'p-gray'}"><span class="sdot ${d[s]||'d-gray'}"></span>${l[s]||s||'—'}</span>`
 }
+// 10-state Application Pipeline — must match server.js appStatusMap and Stage-7→10 spec.
+// Order is the pipeline order; used by the Kanban view as well.
+const APP_PIPELINE = [
+  { id:'draft',                label:'Draft',                 cls:'p-gray',  icon:'📝' },
+  { id:'documents_requested',  label:'Documents Requested',   cls:'p-amber', icon:'📋' },
+  { id:'documents_received',   label:'Documents Received',    cls:'p-amber', icon:'📥' },
+  { id:'reviewing',            label:'Reviewing',             cls:'p-blue',  icon:'🔍' },
+  { id:'ready_for_submission', label:'Ready for Submission',  cls:'p-teal',  icon:'✉️' },
+  { id:'submitted',            label:'Submitted',             cls:'p-blue',  icon:'📤' },
+  { id:'pending_wib_review',   label:'Pending WIB Review',    cls:'p-amber', icon:'⏳' },
+  { id:'approved',             label:'Approved',              cls:'p-green', icon:'✅' },
+  { id:'denied',               label:'Denied',                cls:'p-red',   icon:'⛔' },
+  { id:'needs_revision',       label:'Needs Revision',        cls:'p-amber', icon:'🔁' },
+]
+// Aliases / legacy values that map into the canonical pipeline. Anything not in
+// here falls through to the raw value rendered with a gray pill.
+const APP_STATUS_ALIASES = {
+  in_progress:'reviewing', intake:'draft', new:'draft',
+  under_review:'reviewing', review:'reviewing',
+  awarded:'approved', won:'approved', funded:'approved',
+  rejected:'denied', lost:'denied',
+  withdrawn:'denied', cancelled:'denied',
+  active:'approved', completed:'approved', closed:'approved',
+}
+function canonicalAppStatus(s){
+  if (!s) return 'draft'
+  const k = String(s).toLowerCase().trim().replace(/[\s-]+/g,'_')
+  return APP_STATUS_ALIASES[k] || k
+}
 function appStatusPill(s){
-  const m={draft:'p-gray',submitted:'p-blue',under_review:'p-amber',approved:'p-green',awarded:'p-teal',rejected:'p-red',withdrawn:'p-gray'}
-  return`<span class="pill ${m[s]||'p-gray'}">${s?s.replace(/_/g,' '):'—'}</span>`
+  const canon = canonicalAppStatus(s)
+  const stage = APP_PIPELINE.find(x => x.id === canon)
+  if (stage) return `<span class="pill ${stage.cls}">${stage.label}</span>`
+  // Unknown status — show raw value
+  return `<span class="pill p-gray">${s?String(s).replace(/_/g,' '):'—'}</span>`
 }
 function invPill(s){
   const m={not_invoiced:'p-gray',invoiced:'p-amber',paid:'p-green',overdue:'p-red'}
@@ -2115,6 +2147,10 @@ async function pageWibs(){
         <div class="ie-group-label" style="color:var(--red-t)">Admin Tools</div>
         <div class="ie-item" onclick="closeAllIE();previewWibContamination()" style="color:var(--yellow-t)"><span class="ie-icon">🔍</span>Preview Data Cleanup<span class="ie-item-hint">Dry run</span></div>
         <div class="ie-item" onclick="closeAllIE();removeWibContamination()" style="color:var(--red-t)"><span class="ie-icon">🗑</span>Remove Contaminated Records</div>
+        <div class="ie-sep"></div>
+        <div class="ie-group-label" style="color:var(--blue-t)">Batch & AI</div>
+        <div class="ie-item" onclick="closeAllIE();openWibBatchHistory()" style="color:var(--blue-t)"><span class="ie-icon">🗂</span>WIB Import Batch History<span class="ie-item-hint">Rollback</span></div>
+        <div class="ie-item" onclick="closeAllIE();openAiSystemUpdate()" style="color:var(--blue-t)"><span class="ie-icon">🤖</span>AI Search & System Update<span class="ie-item-hint">Verify WIB data</span></div>
         `:''}
       </div>
     </div>
@@ -6128,6 +6164,235 @@ async function removeWibContamination() {
   }
 }
 
+/* ═══════════════════════════════════════════════════
+   WIB IMPORT BATCH HISTORY + ROLLBACK
+   Talks to /api/admin/wib-import-batches and
+   /api/admin/wib-import-batches/:id/rollback (server.js)
+═══════════════════════════════════════════════════ */
+async function openWibBatchHistory() {
+  showModal('🗂 WIB Import Batch History', '<div class="loading">⏳ Loading batches...</div>', null, '')
+  try {
+    const r = await api('/api/admin/wib-import-batches')
+    const batches = r.data || []
+    const rows = batches.length === 0
+      ? '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text3);font-size:12px">No batch imports recorded yet. Future WIB imports via the batched endpoint will appear here.</td></tr>'
+      : batches.map(b => {
+          const m = b.metadata || {}
+          const status = m.status || 'unknown'
+          const created = m.records_created || 0
+          const rolledBack = status === 'rolled_back'
+          const statusPill = rolledBack
+            ? '<span class="pill pill-red" style="font-size:9.5px">rolled back</span>'
+            : status === 'complete'
+              ? '<span class="pill pill-green" style="font-size:9.5px">complete</span>'
+              : '<span class="pill pill-yellow" style="font-size:9.5px">'+status+'</span>'
+          const date = b.created_at ? new Date(b.created_at).toLocaleString() : '—'
+          const filename = escHtml(m.filename || b.details || '(unnamed)')
+          const actions = rolledBack
+            ? '<span style="color:var(--text3);font-size:10.5px">Deleted '+(m.records_deleted||0)+' rows</span>'
+            : `<button class="btn btn-xs" style="color:var(--red-t);border-color:var(--red-t)" onclick="rollbackWibBatch('${b.id}', ${created})">⮌ Rollback</button>`
+          return `<tr>
+            <td style="font-size:11.5px">${filename}</td>
+            <td style="font-size:11px;color:var(--text3)">${date}</td>
+            <td style="text-align:center;font-size:11px">${created}</td>
+            <td style="text-align:center">${statusPill}</td>
+            <td style="text-align:right">${actions}</td>
+          </tr>`
+        }).join('')
+
+    document.getElementById('modal-body').innerHTML = `
+      <div style="font-size:11.5px;color:var(--text3);margin-bottom:10px">
+        Batch-tracked imports can be rolled back as a unit. Pre-existing WIBs imported before batch tracking was added cannot be rolled back here — use Preview Data Cleanup instead.
+      </div>
+      <div style="max-height:420px;overflow-y:auto;border:0.5px solid var(--border1);border-radius:8px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--bg2);position:sticky;top:0">
+            <th style="padding:8px 10px;text-align:left;font-size:10.5px;color:var(--text3)">File / Description</th>
+            <th style="padding:8px 10px;text-align:left;font-size:10.5px;color:var(--text3)">Imported</th>
+            <th style="padding:8px 10px;text-align:center;font-size:10.5px;color:var(--text3)">Rows</th>
+            <th style="padding:8px 10px;text-align:center;font-size:10.5px;color:var(--text3)">Status</th>
+            <th style="padding:8px 10px;text-align:right;font-size:10.5px;color:var(--text3)">Action</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`
+    const foot = document.getElementById('modal-foot')
+    if (foot) foot.innerHTML = '<button class="btn btn-ghost" onclick="closeModal()">Close</button>'
+  } catch (e) {
+    document.getElementById('modal-body').innerHTML = `<div class="alert alert-error">Failed to load batches: ${escHtml(e.message)}</div>`
+  }
+}
+
+async function rollbackWibBatch(batchId, expectedCount) {
+  if (!confirm('⚠️ Roll back this batch?\n\nThis will permanently delete '+expectedCount+' WIB record'+(expectedCount===1?'':'s')+' that were imported as part of this batch. Records from OTHER batches and manually-created WIBs are not affected.\n\nProceed?')) return
+  showToast('🗑 Rolling back batch...', 'info')
+  try {
+    const r = await api('/api/admin/wib-import-batches/'+batchId+'/rollback', 'POST', {})
+    if (r.error) { showToast(r.error, 'error'); return }
+    showToast(`✅ Rollback complete. Deleted ${r.deleted} record${r.deleted===1?'':'s'}.`, 'success')
+    // Reload the batch list and the WIBs page if visible
+    openWibBatchHistory()
+    if (currentPage === 'wibs') setTimeout(() => loadPage('wibs'), 800)
+  } catch (e) {
+    showToast('Rollback failed: ' + e.message, 'error')
+  }
+}
+
+/* ═══════════════════════════════════════════════════
+   AI SEARCH & SYSTEM UPDATE
+   Two-step UI:
+   1. Pick a WIB → POST /api/admin/ai-system-update {wib_id} → returns proposed updates
+   2. Review proposals → POST again with {wib_id, apply:true, proposed_updates} to commit
+   The server route enforces a 5/hour rate limit and whitelists writable fields.
+═══════════════════════════════════════════════════ */
+async function openAiSystemUpdate() {
+  // Build the picker UI from the WIBs currently loaded in window._wibs
+  const wibs = (window._wibs || []).slice(0, 500)
+  if (wibs.length === 0) {
+    showToast('No WIBs loaded. Open the Workforce Boards page first.', 'error')
+    return
+  }
+  const options = wibs.map(w => `<option value="${w.id}">${escHtml(w.wib_name)} — ${w.state || '?'}</option>`).join('')
+
+  showModal('🤖 AI Search & System Update', `
+    <div style="font-size:12px;color:var(--text2);margin-bottom:14px;line-height:1.5">
+      Claude will run a web search to find current contact info and program status for the selected WIB. Results are <strong>reviewed before applying</strong> — nothing is written to the database until you confirm. Rate-limited to 5 searches/hour.
+    </div>
+    <div style="margin-bottom:14px">
+      <label class="form-label" style="display:block;margin-bottom:6px;font-size:12px;font-weight:600">Select a WIB to verify</label>
+      <select id="ai-su-wib" class="form-input" style="font-size:13px;width:100%">
+        <option value="">— Select WIB —</option>
+        ${options}
+      </select>
+      <div style="font-size:10.5px;color:var(--text3);margin-top:4px">Showing ${wibs.length} loaded WIB${wibs.length===1?'':'s'}.</div>
+    </div>
+    <div id="ai-su-result" style="margin-top:12px"></div>
+  `, null, '')
+  const foot = document.getElementById('modal-foot')
+  if (foot) foot.innerHTML = `
+    <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+    <button class="btn btn-primary" id="ai-su-search-btn" onclick="runAiSystemUpdateSearch()">🔍 Search & Review</button>`
+}
+
+async function runAiSystemUpdateSearch() {
+  const wibId = document.getElementById('ai-su-wib')?.value
+  if (!wibId) { showToast('Select a WIB first', 'error'); return }
+  const resultDiv = document.getElementById('ai-su-result')
+  const searchBtn = document.getElementById('ai-su-search-btn')
+  if (searchBtn) { searchBtn.disabled = true; searchBtn.textContent = '⏳ Searching...' }
+  resultDiv.innerHTML = '<div class="loading" style="padding:14px">⏳ Claude is searching the web. This can take 20-40s...</div>'
+  try {
+    const r = await api('/api/admin/ai-system-update', 'POST', { wib_id: wibId })
+    if (r.error) {
+      resultDiv.innerHTML = `<div class="alert alert-error">${escHtml(r.error)}</div>`
+      if (searchBtn) { searchBtn.disabled = false; searchBtn.textContent = '🔍 Search & Review' }
+      return
+    }
+    const proposed = r.proposed || {}
+    const current = r.current || {}
+    const conf = proposed.confidence || 'unknown'
+    const confColor = conf === 'high' ? 'var(--green-t)' : conf === 'medium' ? 'var(--yellow-t)' : conf === 'low' ? 'var(--red-t)' : 'var(--text3)'
+
+    // If the AI couldn't find anything verifiable
+    if (!proposed || conf === 'none' || (proposed.parse_error)) {
+      resultDiv.innerHTML = `
+        <div class="alert alert-warning" style="margin-bottom:10px">
+          AI could not verify any updates for this WIB.
+          ${proposed?.reason ? '<div style="margin-top:6px;font-size:11.5px">'+escHtml(proposed.reason)+'</div>' : ''}
+        </div>
+        ${r.raw_response ? `<details style="font-size:11px;color:var(--text3)"><summary style="cursor:pointer">AI raw response</summary><pre style="max-height:200px;overflow:auto;background:var(--bg2);padding:8px;border-radius:6px;white-space:pre-wrap">${escHtml(r.raw_response)}</pre></details>` : ''}`
+      if (searchBtn) { searchBtn.disabled = false; searchBtn.textContent = '🔍 Search & Review' }
+      return
+    }
+
+    // Build a diff: only show fields where the AI proposed something AND it differs
+    const fields = ['wib_email','wib_phone','website','source_url','notes']
+    const diffs = []
+    for (const f of fields) {
+      if (proposed[f] && proposed[f] !== current[f]) {
+        diffs.push({ field: f, current: current[f] || '(empty)', proposed: proposed[f] })
+      }
+    }
+    if (diffs.length === 0) {
+      resultDiv.innerHTML = `<div class="alert alert-success">✅ AI found no changes — current data matches verified sources.</div>`
+      if (searchBtn) { searchBtn.disabled = false; searchBtn.textContent = '🔍 Search & Review' }
+      return
+    }
+
+    const diffRows = diffs.map((d,i) => `
+      <tr>
+        <td style="padding:6px 10px;vertical-align:top">
+          <div style="font-weight:600;font-size:11.5px">${d.field.replace('_',' ')}</div>
+        </td>
+        <td style="padding:6px 10px;vertical-align:top;color:var(--text3);font-size:11px;max-width:200px;word-break:break-word">${escHtml(String(d.current))}</td>
+        <td style="padding:6px 10px;vertical-align:top;font-size:11px;max-width:240px;word-break:break-word">
+          <div style="display:flex;gap:6px;align-items:flex-start">
+            <input type="checkbox" id="ai-su-apply-${i}" checked data-field="${d.field}" data-value="${escAttr(String(d.proposed))}" style="margin-top:2px">
+            <label for="ai-su-apply-${i}" style="cursor:pointer">${escHtml(String(d.proposed))}</label>
+          </div>
+        </td>
+      </tr>
+    `).join('')
+
+    const sources = (proposed.sources && Array.isArray(proposed.sources))
+      ? proposed.sources.map(s => `<a href="${escAttr(s)}" target="_blank" style="color:var(--blue-t);font-size:10.5px;display:block">🔗 ${escHtml(s)}</a>`).join('')
+      : ''
+
+    resultDiv.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:11.5px;color:var(--text2)">AI confidence:</span>
+        <span class="pill" style="background:${confColor};color:#fff;font-size:10px">${conf}</span>
+      </div>
+      <div style="border:0.5px solid var(--border1);border-radius:8px;overflow:hidden;margin-bottom:10px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--bg2)">
+            <th style="padding:6px 10px;text-align:left;font-size:10px;color:var(--text3)">Field</th>
+            <th style="padding:6px 10px;text-align:left;font-size:10px;color:var(--text3)">Current</th>
+            <th style="padding:6px 10px;text-align:left;font-size:10px;color:var(--text3)">Proposed (check to apply)</th>
+          </tr></thead>
+          <tbody>${diffRows}</tbody>
+        </table>
+      </div>
+      ${sources ? `<div style="font-size:11px;color:var(--text3);margin-bottom:10px"><strong>Sources:</strong><div style="margin-top:4px">${sources}</div></div>` : ''}
+    `
+    const foot = document.getElementById('modal-foot')
+    if (foot) foot.innerHTML = `
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="applyAiSystemUpdate('${wibId}', ${diffs.length})">✅ Apply Selected Updates</button>`
+  } catch (e) {
+    resultDiv.innerHTML = `<div class="alert alert-error">Search failed: ${escHtml(e.message)}</div>`
+    if (searchBtn) { searchBtn.disabled = false; searchBtn.textContent = '🔍 Search & Review' }
+  }
+}
+
+async function applyAiSystemUpdate(wibId, expectedDiffs) {
+  // Collect checked proposals from the diff table
+  const proposed_updates = {}
+  for (let i = 0; i < expectedDiffs; i++) {
+    const cb = document.getElementById('ai-su-apply-'+i)
+    if (cb && cb.checked) {
+      const field = cb.getAttribute('data-field')
+      const value = cb.getAttribute('data-value')
+      if (field) proposed_updates[field] = value
+    }
+  }
+  if (Object.keys(proposed_updates).length === 0) {
+    showToast('No updates selected to apply', 'error'); return
+  }
+  showToast('💾 Applying updates...', 'info')
+  try {
+    const r = await api('/api/admin/ai-system-update', 'POST', {
+      wib_id: wibId, apply: true, proposed_updates,
+    })
+    if (r.error) { showToast(r.error, 'error'); return }
+    showToast('✅ Updates applied to WIB record', 'success')
+    closeModal()
+    if (currentPage === 'wibs') loadPage('wibs')
+  } catch (e) {
+    showToast('Apply failed: ' + e.message, 'error')
+  }
+}
+
 
 async function pageAgreements() {
   setTopbar('Agreements & Contracts', '', `
@@ -7905,7 +8170,14 @@ async function pageApplications(){
   const data=await api('/api/applications?limit=1000')
   window._applications=data.data||[]
   const total=data.count||window._applications.length
+  if (typeof window._appView === 'undefined') window._appView = 'table'
+  const viewToggle = `
+    <div style="display:inline-flex;border:0.5px solid var(--border1);border-radius:6px;overflow:hidden;margin-right:6px">
+      <button onclick="setAppView('table')" style="padding:5px 10px;font-size:11.5px;background:${window._appView==='table'?'var(--gd)':'var(--bg2)'};color:${window._appView==='table'?'#0B1E3C':'var(--text2)'};border:0;cursor:pointer;font-weight:${window._appView==='table'?'600':'400'}">⊞ Table</button>
+      <button onclick="setAppView('kanban')" style="padding:5px 10px;font-size:11.5px;background:${window._appView==='kanban'?'var(--gd)':'var(--bg2)'};color:${window._appView==='kanban'?'#0B1E3C':'var(--text2)'};border:0;border-left:0.5px solid var(--border1);cursor:pointer;font-weight:${window._appView==='kanban'?'600':'400'}">▥ Kanban</button>
+    </div>`
   setTopbar('Applications',`${total} total`,`
+    ${viewToggle}
     <div class="ie-wrap">
       <button class="btn ie-btn" onclick="toggleIEMenu('app-ie')">⬆ Import / Export ∨</button>
       <div class="ie-menu" id="app-ie">
@@ -7925,6 +8197,10 @@ async function pageApplications(){
     {id:'in_progress',icon:'⊞',label:'In Progress'},
     {id:'awarded',icon:'⊞',label:'Awarded'},
   ],'all',[],'Created at')
+  if (window._appView === 'kanban') {
+    document.getElementById('page-area').innerHTML = renderAppsKanban(window._applications||[])
+    return
+  }
   document.getElementById('page-area').innerHTML=`
   <div class="att-wrap">
     <div class="att-toolbar">
@@ -7970,6 +8246,86 @@ async function pageApplications(){
   </div>`
 }
 
+// Switch between Table and Kanban view. Persists for the session.
+function setAppView(v) {
+  window._appView = (v === 'kanban') ? 'kanban' : 'table'
+  pageApplications()
+}
+
+// Kanban view — 10 columns, one per APP_PIPELINE stage. Cards show company,
+// funding, award, deadline. Clicking a card opens the edit modal.
+// Drag-and-drop is disabled by default to avoid accidental status changes;
+// status changes go through the edit modal which logs the change in activity_log.
+function renderAppsKanban(apps) {
+  // Group by canonical status
+  const byStatus = {}
+  for (const s of APP_PIPELINE) byStatus[s.id] = []
+  let unclassified = []
+  for (const a of apps) {
+    const k = canonicalAppStatus(a.status)
+    if (byStatus[k]) byStatus[k].push(a)
+    else unclassified.push(a)
+  }
+
+  const cardHtml = (a) => {
+    const co = escHtml(a.company?.company_name || 'Unknown')
+    const fo = escHtml(a.funding?.opportunity_name || '')
+    const amt = a.award_amount_approved || a.award_amount_requested
+    const wib = escHtml(a.wib?.wib_name || a.funding?.wib?.wib_name || '')
+    const sub = a.submission_date ? fmtDate(a.submission_date) : (a.decision_date ? fmtDate(a.decision_date) : '')
+    return `<div class="kanban-card" onclick='openEditApplicationModal(${JSON.stringify(a).replace(/'/g,"&apos;").replace(/"/g,"&quot;")})'
+      style="background:var(--bg1);border:0.5px solid var(--border1);border-radius:8px;padding:10px 12px;margin-bottom:8px;cursor:pointer;font-size:12px">
+      <div style="font-weight:600;color:var(--text1);margin-bottom:4px;line-height:1.3">${co}</div>
+      ${fo ? `<div style="color:var(--text3);font-size:10.5px;margin-bottom:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📋 ${fo}</div>` : ''}
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap">
+        ${amt ? `<span style="color:var(--green-t);font-weight:600;font-size:11px">${fmtMoney(amt)}</span>` : '<span style="color:var(--text3);font-size:10.5px">—</span>'}
+        ${sub ? `<span style="color:var(--text3);font-size:10px">${sub}</span>` : ''}
+      </div>
+      ${wib ? `<div style="color:var(--text3);font-size:10px;margin-top:4px;border-top:0.5px solid var(--border1);padding-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">🏛️ ${wib}</div>` : ''}
+    </div>`
+  }
+
+  const colHtml = (stage) => {
+    const list = byStatus[stage.id]
+    return `<div class="kanban-col" style="min-width:260px;width:260px;background:var(--bg2);border:0.5px solid var(--border1);border-radius:10px;padding:10px;display:flex;flex-direction:column;max-height:calc(100vh - 160px)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding:2px 4px">
+        <div style="font-size:12px;font-weight:600;color:var(--text1);display:flex;align-items:center;gap:5px">
+          <span>${stage.icon}</span><span>${stage.label}</span>
+        </div>
+        <span class="pill ${stage.cls}" style="font-size:9.5px">${list.length}</span>
+      </div>
+      <div style="overflow-y:auto;flex:1;padding-right:2px">
+        ${list.length === 0
+          ? '<div style="color:var(--text3);font-size:10.5px;text-align:center;padding:14px 4px">No applications</div>'
+          : list.map(cardHtml).join('')}
+      </div>
+    </div>`
+  }
+
+  const unclassifiedColumn = unclassified.length ? `
+    <div class="kanban-col" style="min-width:260px;width:260px;background:rgba(186,117,23,0.06);border:0.5px dashed var(--yellow-t);border-radius:10px;padding:10px;display:flex;flex-direction:column;max-height:calc(100vh - 160px)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding:2px 4px">
+        <div style="font-size:12px;font-weight:600;color:var(--yellow-t);display:flex;align-items:center;gap:5px">
+          <span>⚠️</span><span>Unmapped Status</span>
+        </div>
+        <span class="pill p-amber" style="font-size:9.5px">${unclassified.length}</span>
+      </div>
+      <div style="overflow-y:auto;flex:1;padding-right:2px">
+        ${unclassified.map(cardHtml).join('')}
+      </div>
+    </div>` : ''
+
+  return `
+  <div style="margin-bottom:10px;display:flex;justify-content:space-between;align-items:center">
+    <div style="font-size:11.5px;color:var(--text3)">10-state grant pipeline: ${apps.length} application${apps.length===1?'':'s'} across ${APP_PIPELINE.length} stages${unclassified.length?` · ${unclassified.length} unmapped`:''}</div>
+    <button class="btn btn-xs btn-ghost" onclick="pageApplications()">↻ Refresh</button>
+  </div>
+  <div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:14px;align-items:flex-start">
+    ${APP_PIPELINE.map(colHtml).join('')}
+    ${unclassifiedColumn}
+  </div>`
+}
+
 function renderAppsRows(apps){
   if(!apps.length)return`<tr><td colspan="13"><div class="empty-state"><div class="empty-icon">📋</div><div class="empty-text">No applications yet</div><button class="btn btn-primary" onclick="openNewApplicationModal()">+ New Application</button></div></td></tr>`
   return apps.map(a=>`<tr onclick="openEditApplicationModal(${JSON.stringify(a).replace(/"/g,"'")})">
@@ -8003,9 +8359,7 @@ function openNewApplicationModal(){
       <select id="app-fo"><option value="">Select opportunity...</option></select>
     </div></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Status</label><select id="app-status">
-      <option value="draft">Draft</option><option value="submitted">Submitted</option>
-      <option value="under_review">Under Review</option><option value="approved">Approved</option>
-      <option value="awarded">Awarded</option><option value="rejected">Rejected</option>
+      ${APP_PIPELINE.map(s => `<option value="${s.id}">${s.icon} ${s.label}</option>`).join('')}
     </select></div>
     <div class="form-group"><label class="form-label">Award Requested ($)</label><input id="app-req" type="number" placeholder="0.00"></div></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Submission Date</label><input id="app-sub" type="date"></div>
@@ -8047,12 +8401,7 @@ function openEditApplicationModal(a){
   showModal('Edit Application',`
     <div class="form-row"><div class="form-group"><div class="form-label">Company</div><input value="${escHtml(a.company?.company_name||'—')}" disabled style="opacity:.6"></div>
     <div class="form-group"><div class="form-label">Status</div><select id="eapp-status">
-      <option value="draft"${a.status==='draft'?' selected':''}>Draft</option>
-      <option value="submitted"${a.status==='submitted'?' selected':''}>Submitted</option>
-      <option value="under_review"${a.status==='under_review'?' selected':''}>Under Review</option>
-      <option value="approved"${a.status==='approved'?' selected':''}>Approved</option>
-      <option value="awarded"${a.status==='awarded'?' selected':''}>Awarded</option>
-      <option value="rejected"${a.status==='rejected'?' selected':''}>Rejected</option>
+      ${APP_PIPELINE.map(s => `<option value="${s.id}"${canonicalAppStatus(a.status)===s.id?' selected':''}>${s.icon} ${s.label}</option>`).join('')}
     </select></div></div>
     <div class="form-row"><div class="form-group"><div class="form-label">Award Requested ($)</div><input id="eapp-req" type="number" value="${a.award_amount_requested||''}"></div>
     <div class="form-group"><div class="form-label">Award Approved ($)</div><input id="eapp-award" type="number" value="${a.award_amount_approved||''}"></div></div>
