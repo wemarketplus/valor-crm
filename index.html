@@ -1154,11 +1154,20 @@ async function importWibsCSV() {
 // ── Admin: Preview which WIB records are contaminated ──────────────────────
 async function runWibDryPurge() {
   if (!['super_admin','admin'].includes(currentUser?.role)) {
-    showToast('Admin access required', 'error'); return
+    alert('Admin access required. Current role: ' + (currentUser?.role || 'unknown'))
+    return
   }
-  showToast('Scanning for contaminated records...', 'info')
+  // Show immediate visible feedback
+  showToast('⏳ Scanning WIB database...', 'info')
+  let result
   try {
-    const result = await api('/api/admin/purge-wib-contamination', 'POST', { dry_run: true })
+    result = await api('/api/admin/purge-wib-contamination', 'POST', { dry_run: true })
+  } catch (e) {
+    console.error('runWibDryPurge API error:', e)
+    alert('Scan failed:\n\n' + (e.message || String(e)) + '\n\nCheck browser console for details.')
+    return
+  }
+  try {
     const samples = (result.sample_contaminated || []).slice(0, 15)
       .map(c => `  • ${c.name}${c.state ? ' ('+c.state+')' : ''} [${c.reason}]`).join('\n')
     const msg = [
@@ -1734,8 +1743,9 @@ async function pageWibs(){
         ${['super_admin','admin'].includes(currentUser?.role) ? `
         <div class="ie-sep"></div>
         <div class="ie-group-label" style="color:var(--red-t)">Admin Tools</div>
-        <div class="ie-item" onclick="closeAllIE();runWibDryPurge()" style="color:var(--red-t)"><span class="ie-icon">🔍</span>Preview Data Cleanup<span class="ie-item-hint">Shows contaminated records</span></div>
-        <div class="ie-item" onclick="closeAllIE();runWibPurge()" style="color:var(--red-t)"><span class="ie-icon">🗑</span>Remove Contaminated Records<span class="ie-item-hint">Removes non-WIB entries</span></div>
+        <div class="ie-item" onclick="(function(){closeAllIE();api('/api/health').then(d=>alert('✅ Server connected\n\nStatus: '+d.status+'\nTimestamp: '+d.ts)).catch(e=>alert('❌ Server error: '+e.message))})()"><span class="ie-icon">🟢</span>Test Server Connection<span class="ie-item-hint">Verify server is live</span></div>
+        <div class="ie-item" onclick="(function(){closeAllIE();if(typeof runWibDryPurge==='function'){runWibDryPurge()}else{alert('Function not loaded yet. Try refreshing the page.')}})()" style="color:var(--red-t)"><span class="ie-icon">🔍</span>Preview Data Cleanup<span class="ie-item-hint">Shows contaminated records</span></div>
+        <div class="ie-item" onclick="(function(){closeAllIE();if(typeof runWibPurge==='function'){runWibPurge()}else{alert('Function not loaded yet. Try refreshing the page.')}})()" style="color:var(--red-t)"><span class="ie-icon">🗑</span>Remove Contaminated Records<span class="ie-item-hint">Removes non-WIB entries</span></div>
         ` : ''}
       </div>
     </div>
