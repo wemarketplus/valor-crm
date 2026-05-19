@@ -1159,15 +1159,27 @@ async function runWibDryPurge() {
   showToast('Scanning for contaminated records...', 'info')
   try {
     const result = await api('/api/admin/purge-wib-contamination', 'POST', { dry_run: true })
-    const msg = `Data Scan Results:\n\n` +
-      `Total WIB records: ${result.total_wib_records}\n` +
-      `Contaminated (company records): ${result.contaminated_count}\n` +
-      `Clean WIB records: ${result.clean_count}\n\n` +
-      `Sample contaminated names:\n${(result.sample_contaminated||[]).slice(0,10).map(c => `• ${c.name} (${c.state}) — ${c.reason}`).join('\n')}\n\n` +
-      `Click "Remove Contaminated Records" to delete these from the WIB list.`
+    const samples = (result.sample_contaminated || []).slice(0, 15)
+      .map(c => `  • ${c.name}${c.state ? ' ('+c.state+')' : ''} [${c.reason}]`).join('\n')
+    const msg = [
+      '━━━ WIB Data Scan Results ━━━',
+      '',
+      `Total WIB records:       ${result.total_wib_records}`,
+      `Contaminated (to delete): ${result.contaminated_count}`,
+      `Clean (to keep):          ${result.clean_count}`,
+      '',
+      'Sample contaminated names:',
+      samples || '  (none found)',
+      '',
+      result.contaminated_count > 15 ? `  ... and ${result.contaminated_count - 15} more.` : '',
+      '',
+      'To delete these, use "Remove Contaminated Records".',
+    ].join('\n')
     alert(msg)
+    showToast(`Scan complete: ${result.contaminated_count} contaminated, ${result.clean_count} clean`, 'info')
   } catch (e) {
-    showToast('Scan failed: ' + e.message, 'error')
+    console.error('runWibDryPurge error:', e)
+    showToast('Scan failed: ' + (e.message || String(e)), 'error')
   }
 }
 
@@ -1176,39 +1188,48 @@ async function runWibPurge() {
   if (!['super_admin','admin'].includes(currentUser?.role)) {
     showToast('Admin access required', 'error'); return
   }
-  // First show dry run count
+  // Always do dry run first so we know the count before showing confirm dialog
   let dryResult
   try {
+    showToast('Scanning before purge...', 'info')
     dryResult = await api('/api/admin/purge-wib-contamination', 'POST', { dry_run: true })
-  } catch(e) {
-    showToast('Failed to scan: ' + e.message, 'error'); return
+  } catch (e) {
+    showToast('Pre-scan failed: ' + (e.message || String(e)), 'error')
+    return
   }
 
-  if (dryResult.contaminated_count === 0) {
-    showToast('No contaminated records found. WIB list is clean!', 'success'); return
+  if (!dryResult || dryResult.contaminated_count === 0) {
+    showToast('No contaminated records found — WIB list is already clean!', 'success')
+    return
   }
+
+  const samples = (dryResult.sample_contaminated || []).slice(0, 8)
+    .map(c => `  • ${c.name} [${c.reason}]`).join('\n')
 
   const confirmed = confirm(
-    `This will permanently delete ${dryResult.contaminated_count} non-WIB records from the Workforce Boards list.\n\n` +
-    `These are company/employer records that were incorrectly imported as WIBs.\n\n` +
-    `${dryResult.clean_count} legitimate WIB records will be preserved.\n\n` +
-    `This action cannot be undone. Continue?`
+    `⚠️ CONFIRM DATA CLEANUP\n\n` +
+    `This will permanently delete ${dryResult.contaminated_count} non-WIB records:\n\n` +
+    `${samples}\n` +
+    (dryResult.contaminated_count > 8 ? `  ... and ${dryResult.contaminated_count - 8} more.\n` : '\n') +
+    `${dryResult.clean_count} legitimate WIB records will be PRESERVED.\n\n` +
+    `This action CANNOT be undone. Continue?`
   )
-  if (!confirmed) return
+  if (!confirmed) { showToast('Cleanup cancelled', 'info'); return }
 
-  showToast(`Removing ${dryResult.contaminated_count} contaminated records...`, 'info')
+  showToast(`Deleting ${dryResult.contaminated_count} contaminated records...`, 'info')
   try {
     const result = await api('/api/admin/purge-wib-contamination', 'POST', {
       dry_run: false,
       confirm_phrase: 'CONFIRM PURGE',
     })
     showToast(
-      `Cleanup complete! Deleted ${result.deleted} contaminated records. ${result.clean_preserved} legitimate WIBs preserved.`,
+      `✅ Cleanup complete! Deleted ${result.deleted} records. ${result.clean_preserved} legitimate WIBs preserved.`,
       'success'
     )
     pageWibs()
   } catch (e) {
-    showToast('Purge failed: ' + e.message, 'error')
+    console.error('runWibPurge error:', e)
+    showToast('Purge failed: ' + (e.message || String(e)), 'error')
   }
 }
 
