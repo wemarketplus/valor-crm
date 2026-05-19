@@ -2856,6 +2856,173 @@ function findHtmlPath() {
   return null
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WIB DECONTAMINATION — Preview & Execute
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// POST /api/admin/purge-wib-contamination
+// dry_run=true → returns preview of contaminated records (no delete)
+// dry_run=false + confirm_phrase='CONFIRM PURGE' → deletes contaminated records
+app.post('/api/admin/purge-wib-contamination', auth, requireAdmin, async (req, res) => {
+  const { dry_run = true, confirm_phrase } = req.body
+
+  if (!dry_run && confirm_phrase !== 'CONFIRM PURGE') {
+    return res.status(400).json({
+      error: 'Safety check failed. Send { dry_run: false, confirm_phrase: "CONFIRM PURGE" } to execute.'
+    })
+  }
+
+  try {
+    const { data: allWibs, error: readErr } = await supabase
+      .from('wib_records')
+      .select('id, wib_name, state, created_at')
+      .order('created_at', { ascending: false })
+
+    if (readErr) return res.status(500).json({ error: readErr.message })
+
+    // Contamination detection signals
+    // Signal 1 — person name: "First Last" Title Case, no WIB keywords
+    const PERSON_NAME = /^[A-Z][a-z]+(?:\s[A-Z][a-z]+){1,2}$/
+    // Signal 2 — company/entity suffix with no WIB keywords
+    const COMPANY_SUFFIXES = /\b(LLC|Inc\.?|Corp\.?|Ltd\.?|L\.L\.C|Incorporated|Healthcare|Health\s+Systems|Medical|Hospital|Hospice|Pharmacy|Rehabilitation|Clinic|Foundation\b|Trust\b|County\s+Of|City\s+Of|State\s+Of|Department\s+Of|Office\s+Of)\b/i
+    // Signal 3 — WIB keywords that mark a record as legitimate
+    const WIB_KEYWORDS = /\b(workforce|development\s+board|investment\s+board|works|career|employment|labor|WIB|WIOA|CareerSource|WorkForce|One\s*Stop|American\s+Job|Workforce\s+Commission|Employment\s+Council|Economic\s+Development|Consortium|Job\s+Center|Job\s+Training|Job\s+Corps)\b/i
+    const STATE_PREFIX  = /^[A-Z]{2}\s*[-–]\s*/
+
+    const contaminated = []
+    const clean = []
+
+    for (const wib of (allWibs || [])) {
+      const name = (wib.wib_name || '').trim()
+      if (!name) {
+        contaminated.push({ id: wib.id, name: '(empty)', state: wib.state, reason: 'empty_name' })
+        continue
+      }
+
+      const hasWIBKeyword  = WIB_KEYWORDS.test(name)
+      const hasStatePrefix = STATE_PREFIX.test(name)
+
+      if (hasWIBKeyword || hasStatePrefix) {
+        clean.push(wib.id)
+        continue
+      }
+
+      let reason = 'no_wib_pattern'
+      if (PERSON_NAME.test(name))           reason = 'person_name'
+      else if (COMPANY_SUFFIXES.test(name)) reason = 'company_suffix'
+
+      contaminated.push({ id: wib.id, name, state: wib.state, reason })
+    }
+
+    if (dry_run) {
+      return res.json({
+        dry_run: true,
+        total_records:      allWibs?.length || 0,
+        contaminated_count: contaminated.length,
+        clean_count:        clean.length,
+        sample_contaminated: contaminated.slice(0, 30).map(c => ({ name: c.name, state: c.state, reason: c.reason })),
+        message: `Dry run complete. ${contaminated.length} of ${allWibs?.length} records are contaminated. ${clean.length} legitimate WIBs will be preserved.`
+      })
+    }
+
+    // Execute purge
+    let deleted = 0
+    const ids = contaminated.map(c => c.id)
+    for (let i = 0; i < ids.length; i += 100) {
+      const chunk = ids.slice(i, i + 100)
+      const { error: delErr } = await supabase.from('wib_records').delete().in('id', chunk)
+      if (delErr) { console.error('[WIB DECON] Delete error:', delErr.message); continue }
+      deleted += chunk.length
+    }
+
+    global._importCoCache = null
+
+    try {
+      await safeInsertLog({
+        user_id: req.user.id,
+        action: 'WIB_DECONTAMINATION',
+        details: `Deleted ${deleted} contaminated records. ${clean.length} legitimate WIBs preserved.`
+      })
+    } catch (_) {}
+
+    return res.json({
+      success: true,
+      deleted,
+      clean_preserved: clean.length,
+      total_remaining: clean.length,
+      message: `Done. Deleted ${deleted} contaminated WIB records. ${clean.length} legitimate WIBs preserved.`
+    })
+
+  } catch (e) {
+    console.error('[WIB DECON] Fatal:', e.message)
+    return res.status(500).json({ success: false, error: e.message })
+  }
+})
+
+// GET /api/admin/purge-broken-imports — purge company duplicates from bad imports
+app.get('/api/admin/purge-broken-imports', auth, requireAdmin, async (req, res) => {
+  let recordsPurged = 0
+  try {
+    const { error: err1 } = await supabase
+      .from('companies').delete().ilike('company_name', '%CMS Provider Data Catalog%')
+    const { error: err2 } = await supabase
+      .from('companies').delete().ilike('company_name', '%CMS NH Provider%')
+    if (err1 || err2) {
+      return res.status(500).json({ success: false, error: (err1||err2)?.message })
+    }
+
+    const { data: allCos } = await supabase
+      .from('companies')
+      .select('id,company_name,primary_contact_phone,primary_contact_email,notes,created_at')
+      .order('created_at', { ascending: true })
+
+    if (allCos) {
+      const seen = { phone: new Map(), email: new Map(), addr: new Map() }
+      const dupeIds = new Set()
+      for (const row of allCos) {
+        const phone = (row.primary_contact_phone || '').replace(/\D/g, '').slice(-10)
+        const email = (row.primary_contact_email || '').toLowerCase().trim()
+        const addrMatch = (row.notes || '').match(/Address:\s*(\d+\s+\w+)/i)
+        const addr = addrMatch ? addrMatch[1].toLowerCase().trim() : ''
+        const isDupe = (phone.length >= 7 && seen.phone.has(phone)) ||
+                       (email.length >= 4 && seen.email.has(email)) ||
+                       (addr.length >= 4 && seen.addr.has(addr))
+        if (isDupe) {
+          dupeIds.add(row.id)
+        } else {
+          if (phone.length >= 7) seen.phone.set(phone, row.id)
+          if (email.length >= 4) seen.email.set(email, row.id)
+          if (addr.length >= 4) seen.addr.set(addr, row.id)
+        }
+      }
+      if (dupeIds.size > 0) {
+        const dupeArr = [...dupeIds]
+        await supabase.from('locations').update({ company_id: null }).in('company_id', dupeArr)
+        await supabase.from('applications').update({ company_id: null }).in('company_id', dupeArr)
+        for (let i = 0; i < dupeArr.length; i += 200) {
+          const chunk = dupeArr.slice(i, i + 200)
+          const { error: delErr } = await supabase.from('companies').delete().in('id', chunk)
+          if (!delErr) recordsPurged += chunk.length
+        }
+      }
+    }
+
+    global._importCoCache = null
+    try {
+      await safeInsertLog({
+        user_id: req.user.id, action: 'PURGE_BROKEN_IMPORTS', record_type: 'companies',
+        details: `Purge by ${req.user.email}: ${recordsPurged} duplicate rows removed`
+      })
+    } catch (_) {}
+
+    return res.json({ success: true, recordsPurged, message: 'All system duplicates have been eliminated.' })
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e.message })
+  }
+})
+
+
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' })
   const htmlPath = findHtmlPath()
