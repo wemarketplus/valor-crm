@@ -2110,6 +2110,12 @@ async function pageWibs(){
         <div class="ie-item" onclick="closeAllIE();exportCSV('wibs')"><span class="ie-icon">📤</span>Export as CSV</div>
         <div class="ie-item" onclick="closeAllIE();exportExcel('wibs')"><span class="ie-icon">📊</span>Export as Excel (.xlsx)</div>
         <div class="ie-item" onclick="closeAllIE();exportPDF('wibs')"><span class="ie-icon">📄</span>Export as PDF</div>
+        ${(currentUser?.role==='super_admin'||currentUser?.role==='admin')?`
+        <div class="ie-sep"></div>
+        <div class="ie-group-label" style="color:var(--red-t)">Admin Tools</div>
+        <div class="ie-item" onclick="closeAllIE();previewWibContamination()" style="color:var(--yellow-t)"><span class="ie-icon">🔍</span>Preview Data Cleanup<span class="ie-item-hint">Dry run</span></div>
+        <div class="ie-item" onclick="closeAllIE();removeWibContamination()" style="color:var(--red-t)"><span class="ie-icon">🗑</span>Remove Contaminated Records</div>
+        `:''}
       </div>
     </div>
     <button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button>`)
@@ -2439,6 +2445,10 @@ function renderWibProfile(){
 
         <div class="profile-section">
           <div class="profile-section-title">Contact Information</div>
+          <div class="field-row" id="wib-primary-contact-row" style="display:none">
+            <span class="field-key">WIB Contact</span>
+            <span class="field-val" id="wib-primary-contact-val">—</span>
+          </div>
           <div class="field-row"><span class="field-key">Email</span><span class="field-val">${w.wib_email?`<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap"><a href="mailto:${escHtml(w.wib_email)}?subject=${encodeURIComponent('IWT Grant Inquiry \u2014 Valor')}" class="fv-link">\u2709\uFE0F ${escHtml(w.wib_email)}</a><button class="btn btn-xs" style="padding:2px 6px;font-size:9px" onclick="openComposeEmail('${escAttr(w.wib_email)}','IWT Grant Inquiry \u2014 Valor')">Compose</button></div>`:'<span class="fv-empty">\u2014</span>'}</span></div>
           <div class="field-row"><span class="field-key">Phone</span><span class="field-val">${w.wib_phone?`<div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap"><a href="tel:${escAttr(w.wib_phone)}" class="fv-link" onclick="aircallDialOut('${escAttr(w.wib_phone)}','${escAttr(w.wib_name)}');event.preventDefault()">\uD83D\uDCDE ${escHtml(w.wib_phone)}</a><button class="btn btn-xs" style="padding:2px 6px;font-size:9px;background:var(--green-bg);color:var(--green-t);border-color:var(--green)" onclick="aircallDialOut('${escAttr(w.wib_phone)}','${escAttr(w.wib_name)}')">Call</button><button class="btn btn-xs" style="padding:2px 6px;font-size:9px;background:var(--blue-bg);color:var(--blue-t);border-color:var(--blue)" onclick="openSmsModal('${escAttr(w.wib_phone)}','${escAttr(w.wib_name)}')">SMS</button></div>`:'<span class="fv-empty">\u2014</span>'}</span></div>
           <div class="field-row"><span class="field-key">Website</span><span class="field-val">${w.source_url?`<a href="${w.source_url}" target="_blank" class="fv-link">🔗 ${w.source_url.replace(/^https?:\/\//,'').split('/')[0]}</a>`:'<span class="fv-empty">—</span>'}</span></div>
@@ -2493,6 +2503,30 @@ function renderWibProfile(){
         </div>
       </div>
     </div>`
+
+    // Load WIB primary contact from notes async
+    api('/api/notes?record_type=wib_records&record_id='+w.id+'&limit=20').then(nr=>{
+      const notes = nr.data || []
+      const contactNote = notes.find(n => {
+        const m = n.metadata || {}
+        return m.note_type === 'Contact' || m.contact_name || (n.details||'').startsWith('Primary Contact:')
+      })
+      if (contactNote) {
+        const m = contactNote.metadata || {}
+        const name = m.contact_name || (contactNote.details||'').replace('Primary Contact:','').split('|')[0].trim()
+        const email = m.contact_email || ''
+        const phone = m.contact_phone || ''
+        const row = document.getElementById('wib-primary-contact-row')
+        const val  = document.getElementById('wib-primary-contact-val')
+        if (row && val && name) {
+          row.style.display = ''
+          let html = '<span style="font-weight:500">' + escHtml(name) + '</span>'
+          if (email) html += '<br><a href="mailto:' + escHtml(email) + '" class="fv-link" style="font-size:10.5px">' + escHtml(email) + '</a>'
+          if (phone) html += '<br><span style="font-size:10.5px;color:var(--text3)">' + escHtml(phone) + '</span>'
+          val.innerHTML = html
+        }
+      }
+    }).catch(()=>{})
 
     // Load sidebar locations async
     api('/api/locations?wib_id='+w.id+'&limit=5').then(r=>{
@@ -5652,9 +5686,278 @@ async function sendChatMsg(){
 /* ═══════════════════════════════════════════════════
    STUB PAGES (Invoices, Contracts, Grants, Payments, Training, Sequences, Workflows, Settings)
 ═══════════════════════════════════════════════════ */
-async function pageInvoices(){
-  setTopbar('Invoices','',`<button class="btn btn-primary" onclick="showToast('Invoice creation coming soon','info')">+ New Invoice</button>`)
-  document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🧾</div><div class="empty-text">Invoices</div><div class="empty-sub">Invoices are auto-generated when grants are awarded</div><button class="btn btn-primary" onclick="loadPage('applications')">View Applications</button></div>`
+let _invoiceFilter = 'all'
+let _invoiceData   = []
+
+async function pageInvoices() {
+  setTopbar('Invoices', '', `
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn ie-btn" onclick="toggleIEMenu('inv-ie')">⬆ Import / Export ∨</button>
+      <div class="ie-menu" id="inv-ie">
+        <div class="ie-menu-hd">Invoices Import & Export</div>
+        <div class="ie-item" onclick="closeAllIE();importCSV('invoices')"><span class="ie-icon">📥</span>Import from CSV / Excel</div>
+        <div class="ie-sep"></div>
+        <div class="ie-item" onclick="closeAllIE();exportCSV('invoices')"><span class="ie-icon">📤</span>Export as CSV</div>
+        <div class="ie-item" onclick="closeAllIE();exportExcel('invoices')"><span class="ie-icon">📊</span>Export as Excel</div>
+      </div>
+      <button class="btn btn-primary" onclick="openNewInvoiceModal()">+ New Invoice</button>
+    </div>`)
+  
+  document.getElementById('page-area').innerHTML = '<div class="loading">⏳ Loading invoices...</div>'
+  
+  try {
+    const r = await api('/api/invoices?limit=300')
+    _invoiceData = (r.data || []).map(parseLogRow)
+    renderInvoicePage()
+  } catch(e) {
+    document.getElementById('page-area').innerHTML = `<div class="alert alert-error" style="margin:20px">Failed to load invoices: ${escHtml(e.message)}</div>`
+  }
+}
+
+const INV_STATUS = {
+  draft:           { label:'Draft',           cls:'pill-gray'   },
+  sent:            { label:'Sent',            cls:'pill-blue'   },
+  unpaid:          { label:'Unpaid',          cls:'pill-yellow' },
+  partially_paid:  { label:'Partial',         cls:'pill-yellow' },
+  paid:            { label:'Paid',            cls:'pill-green'  },
+  overdue:         { label:'Overdue',         cls:'pill-red'    },
+}
+
+function invStatusPill(s) {
+  const st = INV_STATUS[s] || { label: s||'Draft', cls: 'pill-gray' }
+  return `<span class="pill ${st.cls}">${st.label}</span>`
+}
+
+function renderInvoicePage() {
+  const pa = document.getElementById('page-area')
+  let rows = _invoiceData
+  if (_invoiceFilter !== 'all') rows = rows.filter(r => (r.metadata?.status||'draft') === _invoiceFilter)
+
+  // Stats
+  const totals = { all:0, draft:0, sent:0, unpaid:0, paid:0, overdue:0 }
+  let totalAmt = 0, paidAmt = 0
+  for (const r of _invoiceData) {
+    const s = r.metadata?.status || 'draft'
+    totals.all++
+    totals[s] = (totals[s]||0) + 1
+    const amt = parseFloat(r.metadata?.amount || 0)
+    totalAmt += amt
+    if (s === 'paid') paidAmt += amt
+  }
+  const outstandingAmt = totalAmt - paidAmt
+
+  pa.innerHTML = `
+  <!-- ALERT: overdue invoices -->
+  ${totals.overdue > 0 ? `
+  <div style="background:rgba(162,45,45,0.07);border:0.5px solid rgba(162,45,45,0.3);border-radius:10px;padding:10px 14px;margin-bottom:14px;display:flex;gap:8px;align-items:center">
+    <span style="font-size:16px">⚠️</span>
+    <span style="font-size:12.5px;color:var(--text1)"><strong>${totals.overdue} overdue invoice${totals.overdue!==1?'s':''}</strong> require immediate attention.</span>
+    <button class="btn btn-xs" style="margin-left:auto;color:var(--red-t);border-color:var(--red-t)" onclick="setInvoiceFilter('overdue')">View Overdue</button>
+  </div>` : ''}
+
+  <!-- Stats -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px">
+    ${[
+      {label:'Total Invoices',val:totals.all,icon:'🧾'},
+      {label:'Total Billed',val:'$'+Number(totalAmt).toLocaleString(),icon:'💵',color:'var(--text1)'},
+      {label:'Collected',val:'$'+Number(paidAmt).toLocaleString(),icon:'✅',color:'var(--green-t)'},
+      {label:'Outstanding',val:'$'+Number(outstandingAmt).toLocaleString(),icon:'⏳',color:outstandingAmt>0?'var(--yellow-t)':'var(--green-t)'},
+    ].map(s=>`<div style="background:var(--bg2);border:0.5px solid var(--border1);border-radius:10px;padding:12px 14px">
+      <div style="font-size:18px;margin-bottom:6px">${s.icon}</div>
+      <div style="font-size:21px;font-weight:600;color:${s.color||'var(--text1)'}">${s.val}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">${s.label}</div>
+    </div>`).join('')}
+  </div>
+
+  <!-- Filter tabs -->
+  <div style="display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap">
+    ${[
+      {id:'all',label:'All ('+totals.all+')'},
+      {id:'draft',label:'Draft ('+( totals.draft||0)+')'},
+      {id:'sent',label:'Sent ('+(totals.sent||0)+')'},
+      {id:'unpaid',label:'Unpaid ('+(totals.unpaid||0)+')'},
+      {id:'paid',label:'Paid ('+(totals.paid||0)+')'},
+      {id:'overdue',label:'Overdue ('+(totals.overdue||0)+')','red':true},
+    ].map(t=>`<button onclick="setInvoiceFilter('${t.id}')" style="padding:4px 12px;font-size:12px;border-radius:20px;cursor:pointer;border:0.5px solid var(--border1);background:${_invoiceFilter===t.id?(t.red?'var(--red-t)':'var(--gd)'):'var(--bg2)'};color:${_invoiceFilter===t.id?(_invoiceFilter==='overdue'?'#fff':'#0B1E3C'):'var(--text2)'};font-weight:${_invoiceFilter===t.id?'600':'400'}">${t.label}</button>`).join('')}
+  </div>
+
+  <!-- Table -->
+  ${rows.length === 0 ? `
+    <div class="empty-state">
+      <div class="empty-icon">🧾</div>
+      <div class="empty-text">No invoices found</div>
+      <div class="empty-sub">Create your first invoice or import from CSV/Excel</div>
+      <button class="btn btn-primary" onclick="openNewInvoiceModal()" style="margin-top:12px">+ New Invoice</button>
+    </div>` : `
+  <div style="background:var(--bg1);border:0.5px solid var(--border1);border-radius:10px;overflow:hidden">
+    <table class="data-table">
+      <thead><tr>
+        <th>Invoice #</th>
+        <th>Company</th>
+        <th>Type</th>
+        <th>Amount</th>
+        <th>Status</th>
+        <th>Due Date</th>
+        <th>Created</th>
+        <th style="width:80px"></th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r => {
+          const m = r.metadata || {}
+          const isOverdue = m.status !== 'paid' && m.due_date && new Date(m.due_date) < new Date()
+          return `<tr>
+            <td style="font-weight:500;font-size:12.5px">${escHtml(m.invoice_number||r.id?.slice(-6)||'—')}</td>
+            <td>${escHtml(m.company_name||'—')}</td>
+            <td style="font-size:11px;color:var(--text3)">${escHtml(m.fee_model||'—')}</td>
+            <td style="color:var(--green-t);font-weight:500">${m.amount?'$'+Number(m.amount).toLocaleString():'—'}</td>
+            <td>${isOverdue?'<span class="pill pill-red">Overdue</span>':invStatusPill(m.status)}</td>
+            <td class="cell-dim">${m.due_date?fmtDate(m.due_date):'—'}</td>
+            <td class="cell-dim">${fmtDate(r.created_at)}</td>
+            <td onclick="event.stopPropagation()" style="text-align:right">
+              <button class="btn btn-xs" onclick="openEditInvoiceModal('${r.id}')">Edit</button>
+              <button class="btn btn-xs btn-ghost" onclick="markInvoicePaid('${r.id}')">✓ Paid</button>
+            </td>
+          </tr>`
+        }).join('')}
+      </tbody>
+    </table>
+  </div>`}
+  `
+}
+
+function setInvoiceFilter(f) {
+  _invoiceFilter = f
+  renderInvoicePage()
+}
+
+async function openNewInvoiceModal() {
+  const body = `
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">Company Name *</label>
+        <input id="inv-company" class="form-input" placeholder="Employer name" style="font-size:13px">
+      </div>
+      <div>
+        <label class="form-label">Invoice Type</label>
+        <select id="inv-type" class="form-input" style="font-size:13px">
+          <option value="success_fee">Success Fee (% of reimbursement)</option>
+          <option value="flat_fee">Flat Fee (application prep)</option>
+          <option value="retainer">Retainer (monthly compliance)</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">Amount ($) *</label>
+        <input id="inv-amount" class="form-input" type="number" placeholder="0.00" style="font-size:13px">
+      </div>
+      <div>
+        <label class="form-label">Due Date</label>
+        <input id="inv-due" class="form-input" type="date" style="font-size:13px">
+      </div>
+    </div>
+    <div>
+      <label class="form-label">Status</label>
+      <select id="inv-status" class="form-input" style="font-size:13px">
+        <option value="draft">Draft</option>
+        <option value="sent">Sent</option>
+        <option value="unpaid">Unpaid</option>
+        <option value="paid">Paid</option>
+      </select>
+    </div>
+    <div>
+      <label class="form-label">Notes</label>
+      <textarea id="inv-notes" class="form-input" rows="2" placeholder="Additional notes..." style="font-size:13px;resize:vertical"></textarea>
+    </div>
+  </div>`
+  showModal('+ New Invoice', body, saveNewInvoice, '', 'Create Invoice')
+}
+
+async function saveNewInvoice() {
+  const company = document.getElementById('inv-company')?.value?.trim()
+  const amount  = document.getElementById('inv-amount')?.value
+  const type    = document.getElementById('inv-type')?.value
+  const status  = document.getElementById('inv-status')?.value || 'draft'
+  const due     = document.getElementById('inv-due')?.value
+  const notes   = document.getElementById('inv-notes')?.value?.trim()
+  
+  if (!company) return showToast('Company name required', 'error')
+  if (!amount)  return showToast('Amount required', 'error')
+  
+  const r = await api('/api/invoices', 'POST', {
+    company_name: company,
+    amount: parseFloat(amount),
+    fee_model: type,
+    status,
+    due_date: due || null,
+    notes: notes || null
+  })
+  if (r.error) { showToast(r.error, 'error'); return }
+  _invoiceData.unshift(parseLogRow(r))
+  showToast('Invoice created', 'success')
+  closeModal()
+  renderInvoicePage()
+}
+
+async function openEditInvoiceModal(id) {
+  const inv = _invoiceData.find(i => i.id === id)
+  if (!inv) return showToast('Invoice not found', 'error')
+  const m = inv.metadata || {}
+  
+  const body = `
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">Status</label>
+        <select id="einv-status" class="form-input" style="font-size:13px">
+          ${Object.entries(INV_STATUS).map(([k,v])=>`<option value="${k}" ${m.status===k?'selected':''}>${v.label}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label class="form-label">Amount ($)</label>
+        <input id="einv-amount" class="form-input" type="number" value="${m.amount||''}" style="font-size:13px">
+      </div>
+    </div>
+    <div>
+      <label class="form-label">Due Date</label>
+      <input id="einv-due" class="form-input" type="date" value="${m.due_date||''}" style="font-size:13px">
+    </div>
+    <div>
+      <label class="form-label">Notes</label>
+      <textarea id="einv-notes" class="form-input" rows="2" style="font-size:13px;resize:vertical">${escHtml(m.notes||'')}</textarea>
+    </div>
+  </div>`
+  
+  window._editInvId = id
+  showModal('Edit Invoice', body, saveEditInvoice, '', 'Save Changes')
+}
+
+async function saveEditInvoice() {
+  const id = window._editInvId
+  if (!id) return
+  const r = await api('/api/invoices/'+id, 'PUT', {
+    status:   document.getElementById('einv-status')?.value,
+    amount:   parseFloat(document.getElementById('einv-amount')?.value) || undefined,
+    due_date: document.getElementById('einv-due')?.value || null,
+    notes:    document.getElementById('einv-notes')?.value?.trim() || null,
+  })
+  if (r.error) { showToast(r.error, 'error'); return }
+  const idx = _invoiceData.findIndex(i => i.id === id)
+  if (idx !== -1) _invoiceData[idx] = parseLogRow(r)
+  showToast('Invoice updated', 'success')
+  closeModal()
+  renderInvoicePage()
+}
+
+async function markInvoicePaid(id) {
+  const r = await api('/api/invoices/'+id, 'PUT', { status: 'paid' })
+  if (r.error) { showToast(r.error, 'error'); return }
+  const idx = _invoiceData.findIndex(i => i.id === id)
+  if (idx !== -1) _invoiceData[idx] = parseLogRow(r)
+  showToast('Invoice marked as paid', 'success')
+  renderInvoicePage()
 }
 async function pageContracts(){ return pageAgreements() }
 
@@ -5741,6 +6044,90 @@ function agrTypeBadge(type) {
   const t = AGR_TYPES[type] || { label: type, icon: '📄', color: '#888', bg: 'rgba(128,128,128,0.1)' }
   return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;background:${t.bg};color:${t.color};padding:2px 8px;border-radius:10px;font-weight:500">${t.icon} ${t.label}</span>`
 }
+
+/* ═══════════════════════════════════════════════════
+   WIB DATA CONTAMINATION TOOLS (Admin Only)
+═══════════════════════════════════════════════════ */
+
+async function previewWibContamination() {
+  showModal('🔍 Preview Data Cleanup', '<div class="loading">⏳ Running dry-run analysis...</div>', null, '')
+  try {
+    const r = await api('/api/admin/purge-wib-contamination', 'POST', { dry_run: true })
+    if (r.error) { showToast(r.error, 'error'); closeModal(); return }
+    
+    const rows = (r.sample_contaminated || []).map(c => `
+      <tr>
+        <td style="font-size:12px">${escHtml(c.name)}</td>
+        <td style="font-size:11px;color:var(--text3)">${c.state||'—'}</td>
+        <td><span class="pill ${c.reason==='person_name'?'pill-red':c.reason==='company_suffix'?'pill-yellow':'pill-gray'}" style="font-size:9px">${c.reason.replace(/_/g,' ')}</span></td>
+      </tr>`).join('')
+
+    const body = `
+      <div style="margin-bottom:14px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+          <div style="background:var(--bg2);border:0.5px solid var(--border1);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:20px;font-weight:700;color:var(--text1)">${r.total_records}</div>
+            <div style="font-size:10px;color:var(--text3)">Total Records</div>
+          </div>
+          <div style="background:rgba(162,45,45,0.08);border:0.5px solid rgba(162,45,45,0.3);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:20px;font-weight:700;color:var(--red-t)">${r.contaminated_count}</div>
+            <div style="font-size:10px;color:var(--text3)">Contaminated</div>
+          </div>
+          <div style="background:rgba(34,197,94,0.08);border:0.5px solid rgba(34,197,94,0.3);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:20px;font-weight:700;color:var(--green-t)">${r.clean_count}</div>
+            <div style="font-size:10px;color:var(--text3)">Legitimate WIBs</div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text2);margin-bottom:10px">
+          <strong>Sample contaminated records</strong> (showing up to 30 of ${r.contaminated_count}):
+        </div>
+        <div style="max-height:300px;overflow-y:auto;border:0.5px solid var(--border1);border-radius:8px">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr style="background:var(--bg2)">
+              <th style="padding:6px 10px;text-align:left;font-size:10px;color:var(--text3)">Name</th>
+              <th style="padding:6px 10px;text-align:left;font-size:10px;color:var(--text3)">State</th>
+              <th style="padding:6px 10px;text-align:left;font-size:10px;color:var(--text3)">Reason</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <div style="margin-top:12px;padding:10px;background:rgba(186,117,23,0.08);border:0.5px solid rgba(186,117,23,0.3);border-radius:8px;font-size:11.5px;color:var(--yellow-t)">
+          ⚠️ ${r.message}
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="closeModal();removeWibContamination()">🗑 Execute Purge Now</button>
+          <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+        </div>
+      </div>`
+    
+    document.getElementById('modal-body').innerHTML = body
+    // Hide default footer
+    const foot = document.getElementById('modal-foot')
+    if (foot) foot.style.display = 'none'
+  } catch(e) {
+    showToast('Preview failed: ' + e.message, 'error')
+    closeModal()
+  }
+}
+
+async function removeWibContamination() {
+  if (!confirm('⚠️ This will permanently delete contaminated WIB records. Legitimate WIBs matching government/workforce patterns will be preserved.\n\nAre you absolutely sure?')) return
+  
+  showToast('🗑 Running purge...', 'info')
+  try {
+    const r = await api('/api/admin/purge-wib-contamination', 'POST', {
+      dry_run: false,
+      confirm_phrase: 'CONFIRM PURGE'
+    })
+    if (r.error) { showToast(r.error, 'error'); return }
+    showToast(`✅ ${r.deleted} contaminated records removed. ${r.clean_preserved} legitimate WIBs preserved.`, 'success')
+    // Reload WIB page
+    if (currentPage === 'wibs') loadPage('wibs')
+  } catch(e) {
+    showToast('Purge failed: ' + e.message, 'error')
+  }
+}
+
 
 async function pageAgreements() {
   setTopbar('Agreements & Contracts', '', `
@@ -6289,9 +6676,240 @@ async function pagePayments(){
   setTopbar('Payment Tracking','')
   document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">💳</div><div class="empty-text">Payment Tracking</div><div class="empty-sub">Track grant disbursements and employer payments</div></div>`
 }
-async function pageTraining(){
-  setTopbar('Training Providers','')
-  document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">🎓</div><div class="empty-text">Training Providers</div><div class="empty-sub">Manage approved training providers and curricula</div></div>`
+let _trainingData = []
+
+async function pageTraining() {
+  setTopbar('Training Providers', '', `
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn ie-btn" onclick="toggleIEMenu('tp-ie')">⬆ Import / Export ∨</button>
+      <div class="ie-menu" id="tp-ie">
+        <div class="ie-menu-hd">Training Providers Import & Export</div>
+        <div class="ie-item" onclick="closeAllIE();importCSV('training_providers')"><span class="ie-icon">📥</span>Import from CSV / Excel</div>
+        <div class="ie-sep"></div>
+        <div class="ie-item" onclick="closeAllIE();exportCSV('training_providers')"><span class="ie-icon">📤</span>Export as CSV</div>
+        <div class="ie-item" onclick="closeAllIE();exportExcel('training_providers')"><span class="ie-icon">📊</span>Export as Excel</div>
+      </div>
+      <button class="btn btn-primary" onclick="openNewTrainingModal()">+ Add Provider</button>
+    </div>`)
+  
+  document.getElementById('page-area').innerHTML = '<div class="loading">⏳ Loading training providers...</div>'
+  
+  try {
+    const r = await api('/api/training-providers?limit=300')
+    _trainingData = (r.data || []).map(parseLogRow)
+    renderTrainingPage()
+  } catch(e) {
+    document.getElementById('page-area').innerHTML = `<div class="alert alert-error" style="margin:20px">Failed: ${escHtml(e.message)}</div>`
+  }
+}
+
+function renderTrainingPage() {
+  const pa = document.getElementById('page-area')
+  const rows = _trainingData
+  
+  // Count by status
+  const active   = rows.filter(r => (r.metadata?.status||'active') === 'active').length
+  const inactive = rows.filter(r => r.metadata?.status === 'inactive').length
+
+  pa.innerHTML = `
+  <!-- Stats -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+    ${[
+      {label:'Total Providers', val:rows.length, icon:'🎓'},
+      {label:'Active',          val:active,      icon:'✅', color:'var(--green-t)'},
+      {label:'Inactive',        val:inactive,    icon:'⏸',  color:'var(--text3)'},
+    ].map(s=>`<div style="background:var(--bg2);border:0.5px solid var(--border1);border-radius:10px;padding:12px 14px">
+      <div style="font-size:18px;margin-bottom:6px">${s.icon}</div>
+      <div style="font-size:22px;font-weight:600;color:${s.color||'var(--text1)'}">${s.val}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">${s.label}</div>
+    </div>`).join('')}
+  </div>
+
+  ${rows.length === 0 ? `
+    <div class="empty-state">
+      <div class="empty-icon">🎓</div>
+      <div class="empty-text">No training providers yet</div>
+      <div class="empty-sub">Add approved training providers and track their documents, invoices, and curricula</div>
+      <button class="btn btn-primary" onclick="openNewTrainingModal()" style="margin-top:12px">+ Add Provider</button>
+    </div>` : `
+  <div style="background:var(--bg1);border:0.5px solid var(--border1);border-radius:10px;overflow:hidden">
+    <table class="data-table">
+      <thead><tr>
+        <th>Provider Name</th>
+        <th>Type</th>
+        <th>State</th>
+        <th>Contact</th>
+        <th>Programs</th>
+        <th>Status</th>
+        <th>Added</th>
+        <th style="width:70px"></th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r => {
+          const m = r.metadata || {}
+          return `<tr>
+            <td>
+              <div style="font-weight:500;font-size:13px">${escHtml(m.name||r.details||'—')}</div>
+              ${m.website?`<a href="${escHtml(m.website)}" target="_blank" class="fv-link" style="font-size:10.5px">🔗 ${escHtml(m.website.replace(/^https?:\/\//,'').split('/')[0])}</a>`:''}
+            </td>
+            <td class="cell-dim">${escHtml(m.provider_type||'—')}</td>
+            <td class="cell-dim">${escHtml(m.state||'—')}</td>
+            <td style="font-size:11.5px">
+              ${m.contact_email?`<a href="mailto:${escHtml(m.contact_email)}" class="fv-link">${escHtml(m.contact_email)}</a><br>`:''}
+              ${m.contact_phone?`<span class="cell-dim">${escHtml(m.contact_phone)}</span>`:''}
+            </td>
+            <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(m.programs||'')}">
+              ${escHtml(m.programs||'—')}
+            </td>
+            <td><span class="pill ${m.status==='active'||!m.status?'pill-green':'pill-gray'}">${m.status||'active'}</span></td>
+            <td class="cell-dim">${fmtDate(r.created_at)}</td>
+            <td onclick="event.stopPropagation()" style="text-align:right">
+              <button class="btn btn-xs" onclick="openEditTrainingModal('${r.id}')">Edit</button>
+            </td>
+          </tr>`
+        }).join('')}
+      </tbody>
+    </table>
+  </div>`}
+  `
+}
+
+async function openNewTrainingModal() {
+  const body = `
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">Provider Name *</label>
+        <input id="tp-name" class="form-input" placeholder="e.g. CNA Training Institute" style="font-size:13px">
+      </div>
+      <div>
+        <label class="form-label">Provider Type</label>
+        <select id="tp-type" class="form-input" style="font-size:13px">
+          <option value="">— select type —</option>
+          <option value="vocational_school">Vocational School</option>
+          <option value="community_college">Community College</option>
+          <option value="private_trainer">Private Trainer</option>
+          <option value="employer_internal">Employer Internal</option>
+          <option value="online_platform">Online Platform</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">Contact Email</label>
+        <input id="tp-email" class="form-input" type="email" placeholder="contact@provider.com" style="font-size:13px">
+      </div>
+      <div>
+        <label class="form-label">Contact Phone</label>
+        <input id="tp-phone" class="form-input" placeholder="(555) 000-0000" style="font-size:13px">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">State</label>
+        <input id="tp-state" class="form-input" placeholder="TX" maxlength="2" style="font-size:13px">
+      </div>
+      <div>
+        <label class="form-label">Website</label>
+        <input id="tp-website" class="form-input" placeholder="https://..." style="font-size:13px">
+      </div>
+    </div>
+    <div>
+      <label class="form-label">Programs / Certifications</label>
+      <input id="tp-programs" class="form-input" placeholder="e.g. CNA, Forklift Safety, HVAC Certification" style="font-size:13px">
+    </div>
+    <div>
+      <label class="form-label">Notes</label>
+      <textarea id="tp-notes" class="form-input" rows="2" placeholder="Agreement status, insurance docs, curricula info..." style="font-size:13px;resize:vertical"></textarea>
+    </div>
+  </div>`
+  showModal('+ Add Training Provider', body, saveNewTrainingProvider, '', 'Add Provider')
+}
+
+async function saveNewTrainingProvider() {
+  const name = document.getElementById('tp-name')?.value?.trim()
+  if (!name) return showToast('Provider name required', 'error')
+  
+  const r = await api('/api/training-providers', 'POST', {
+    name,
+    provider_type: document.getElementById('tp-type')?.value || null,
+    contact_email: document.getElementById('tp-email')?.value?.trim() || null,
+    contact_phone: document.getElementById('tp-phone')?.value?.trim() || null,
+    state:         document.getElementById('tp-state')?.value?.trim()?.toUpperCase() || null,
+    website:       document.getElementById('tp-website')?.value?.trim() || null,
+    programs:      document.getElementById('tp-programs')?.value?.trim() || null,
+    notes:         document.getElementById('tp-notes')?.value?.trim() || null,
+    status:        'active'
+  })
+  if (r.error) { showToast(r.error, 'error'); return }
+  _trainingData.unshift(parseLogRow(r))
+  showToast('Training provider added', 'success')
+  closeModal()
+  renderTrainingPage()
+}
+
+async function openEditTrainingModal(id) {
+  const prov = _trainingData.find(p => p.id === id)
+  if (!prov) return showToast('Provider not found', 'error')
+  const m = prov.metadata || {}
+  
+  const body = `
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">Provider Name</label>
+        <input id="etp-name" class="form-input" value="${escHtml(m.name||prov.details||'')}" style="font-size:13px">
+      </div>
+      <div>
+        <label class="form-label">Status</label>
+        <select id="etp-status" class="form-input" style="font-size:13px">
+          <option value="active" ${m.status==='active'||!m.status?'selected':''}>Active</option>
+          <option value="inactive" ${m.status==='inactive'?'selected':''}>Inactive</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <label class="form-label">Contact Email</label>
+        <input id="etp-email" class="form-input" type="email" value="${escHtml(m.contact_email||'')}" style="font-size:13px">
+      </div>
+      <div>
+        <label class="form-label">Contact Phone</label>
+        <input id="etp-phone" class="form-input" value="${escHtml(m.contact_phone||'')}" style="font-size:13px">
+      </div>
+    </div>
+    <div>
+      <label class="form-label">Programs</label>
+      <input id="etp-programs" class="form-input" value="${escHtml(m.programs||'')}" style="font-size:13px">
+    </div>
+    <div>
+      <label class="form-label">Notes</label>
+      <textarea id="etp-notes" class="form-input" rows="2" style="font-size:13px;resize:vertical">${escHtml(m.notes||'')}</textarea>
+    </div>
+  </div>`
+  
+  window._editTpId = id
+  showModal('Edit Training Provider', body, saveEditTrainingProvider, '', 'Save Changes')
+}
+
+async function saveEditTrainingProvider() {
+  const id = window._editTpId
+  if (!id) return
+  const r = await api('/api/training-providers/'+id, 'PUT', {
+    name:          document.getElementById('etp-name')?.value?.trim(),
+    status:        document.getElementById('etp-status')?.value,
+    contact_email: document.getElementById('etp-email')?.value?.trim() || null,
+    contact_phone: document.getElementById('etp-phone')?.value?.trim() || null,
+    programs:      document.getElementById('etp-programs')?.value?.trim() || null,
+    notes:         document.getElementById('etp-notes')?.value?.trim() || null,
+  })
+  if (r.error) { showToast(r.error, 'error'); return }
+  const idx = _trainingData.findIndex(p => p.id === id)
+  if (idx !== -1) _trainingData[idx] = parseLogRow(r)
+  showToast('Provider updated', 'success')
+  closeModal()
+  renderTrainingPage()
 }
 
 /* ═══════════════════════════════════════════════════
@@ -8702,7 +9320,9 @@ function _getLocalData(type){
     applications: window._applications,
     revenue:   window._revenue,
     users:     window._users,
-    audit:     window._auditLogs
+    audit:     window._auditLogs,
+    training_providers: window._trainingData || [],
+    invoices:  window._invoiceData || []
   }
   return map[type]||null
 }
@@ -8714,6 +9334,32 @@ function _buildCSVFromData(type){
   const esc=v=>{const s=String(v==null?'':v);return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s}
   // ── Applications: nested API shape (a.company.company_name, a.funding.opportunity_name) ──
   // Export the 6 canonical relational columns mandated by the import/export spec.
+  // ── Training Providers: extract from metadata ──
+  if(type==='training_providers'){
+    const HEADERS='Name,Type,State,Website,Contact Email,Contact Phone,Programs,Status,Notes'
+    const lines=[HEADERS]
+    rows.forEach(r=>{
+      const m=r.metadata||{}
+      const name=m.name||r.details||''
+      lines.push([name,m.provider_type||'',m.state||'',m.website||'',
+        m.contact_email||'',m.contact_phone||'',m.programs||'',m.status||'active',m.notes||''
+      ].map(v=>esc(v)).join(','))
+    })
+    return lines.join('\n')
+  }
+  // ── Invoices: extract from metadata ──
+  if(type==='invoices'){
+    const HEADERS='Invoice Number,Company Name,Type,Amount,Status,Due Date,Notes,Created'
+    const lines=[HEADERS]
+    rows.forEach(r=>{
+      const m=r.metadata||{}
+      lines.push([m.invoice_number||'',m.company_name||'',m.fee_model||'',
+        m.amount||'',m.status||'draft',m.due_date||'',m.notes||'',
+        r.created_at?r.created_at.slice(0,10):''
+      ].map(v=>esc(v)).join(','))
+    })
+    return lines.join('\n')
+  }
   if(type==='applications'){
     const HEADERS='Application ID,Operator Name,Funding Opportunity,Lifecycle Status,Award Approved,Created Date'
     const lines=[HEADERS]
