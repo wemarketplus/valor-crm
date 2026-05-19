@@ -271,7 +271,12 @@ app.post('/api/users/:id/reset-password', auth, requireAdmin, async (req, res) =
 app.get('/api/wibs', auth, async (req, res) => {
   const { state, status, search, limit = 200, offset = 0 } = req.query
   let q = supabase.from('wib_records').select('*, owner:user_profiles!owner_id(full_name,email)', { count: 'exact' })
-  if (state) q = q.eq('state', state); if (status) q = q.eq('status', status); if (search) q = q.ilike('wib_name', `%${search}%`)
+  if (state)  q = q.eq('state', state)
+  if (status) q = q.eq('status', status)
+  if (search) {
+    const s = `%${search}%`
+    q = q.or(`wib_name.ilike.${s},wib_email.ilike.${s},wib_phone.ilike.${s},state.ilike.${s},notes.ilike.${s}`)
+  }
   q = q.order('call_priority_score', { ascending: false }).range(+offset, +offset + Math.min(+limit, 500) - 1)
   const { data, error, count } = await q; if (error) return res.status(400).json({ error: error.message }); res.json({ data, count })
 })
@@ -328,7 +333,11 @@ app.post('/api/companies/dedup', auth, requireAdmin, async (req, res) => {
 app.get('/api/companies', auth, async (req, res) => {
   const { search, status, limit = 200, offset = 0 } = req.query
   let q = supabase.from('companies').select('*', { count: 'exact' })
-  if (status) q = q.eq('status', status); if (search) q = q.ilike('company_name', `%${search}%`)
+  if (status) q = q.eq('status', status)
+  if (search) {
+    const s = `%${search}%`
+    q = q.or(`company_name.ilike.${s},primary_contact_email.ilike.${s},primary_contact_phone.ilike.${s},primary_contact_name.ilike.${s},notes.ilike.${s},domain.ilike.${s}`)
+  }
   q = q.order('company_name').range(+offset, +offset + Math.min(+limit, 500) - 1)
   const { data, error, count } = await q; if (error) return res.status(400).json({ error: error.message }); res.json({ data, count })
 })
@@ -337,18 +346,43 @@ app.post('/api/companies', auth, async (req, res) => {
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => A.includes(k)))
   if (!body.company_name?.trim()) return res.status(400).json({ error: 'Company name required' })
   const nameClean = body.company_name.trim().toLowerCase()
-  const { data: byName }   = await supabase.from('companies').select('id,company_name,domain,primary_contact_email,status,notes').ilike('company_name', `%${nameClean.substring(0,20)}%`).limit(5)
-  const { data: byDomain } = body.domain ? await supabase.from('companies').select('id,company_name,domain').ilike('domain', `%${body.domain.replace(/^https?:\/\//,'').split('/')[0]}%`).limit(3) : { data: [] }
-  const { data: byEmail }  = body.primary_contact_email ? await supabase.from('companies').select('id,company_name,primary_contact_email').eq('primary_contact_email', body.primary_contact_email).limit(3) : { data: [] }
-  const deduped = [...new Map([...(byName||[]),...(byDomain||[]),...(byEmail||[])].map(d=>[d.id,d])).values()]
+
+  // ── Phase 1: name / domain / email match (existing logic) ─────────────────
+  const { data: byName }   = await supabase.from('companies').select('id,company_name,domain,primary_contact_email,primary_contact_phone,status,notes,created_at').ilike('company_name', `%${nameClean.substring(0,20)}%`).limit(5)
+  const { data: byDomain } = body.domain ? await supabase.from('companies').select('id,company_name,domain,primary_contact_email,primary_contact_phone,status,notes,created_at').ilike('domain', `%${body.domain.replace(/^https?:\/\//,'').split('/')[0]}%`).limit(3) : { data: [] }
+  const { data: byEmail }  = body.primary_contact_email ? await supabase.from('companies').select('id,company_name,domain,primary_contact_email,primary_contact_phone,status,notes,created_at').eq('primary_contact_email', body.primary_contact_email).limit(3) : { data: [] }
+
+  // ── Phase 2: phone match (new — catches duplicates the old logic missed) ───
+  const { data: byPhone }  = body.primary_contact_phone ? await supabase.from('companies').select('id,company_name,domain,primary_contact_email,primary_contact_phone,status,notes,created_at').eq('primary_contact_phone', body.primary_contact_phone).limit(3) : { data: [] }
+
+  // ── Phase 3: address footprint match via notes field ─────────────────────
+  // Extract a meaningful address fragment from the incoming notes block (first
+  // street number + word, e.g. "123 Main") for loose matching.
+  let byAddress = { data: [] }
+  if (body.notes) {
+    const addrMatch = body.notes.match(/Address:\s*(\d+\s+\w+)/i)
+    if (addrMatch) {
+      const addrFrag = addrMatch[1].trim()
+      byAddress = await supabase.from('companies').select('id,company_name,domain,primary_contact_email,primary_contact_phone,status,notes,created_at').ilike('notes', `%${addrFrag}%`).limit(3)
+    }
+  }
+
+  const deduped = [...new Map([
+    ...(byName||[]), ...(byDomain||[]), ...(byEmail||[]),
+    ...(byPhone||[]), ...(byAddress.data||[]),
+  ].map(d=>[d.id,d])).values()]
+
   const match = deduped.find(d => {
     const existName = d.company_name.trim().toLowerCase()
     if (existName === nameClean) return true
     if (existName.substring(0,25) === nameClean.substring(0,25)) return true
     if (body.domain && d.domain && d.domain.toLowerCase().includes(body.domain.replace(/^https?:\/\//,'').split('/')[0].toLowerCase())) return true
     if (body.primary_contact_email && d.primary_contact_email === body.primary_contact_email) return true
+    if (body.primary_contact_phone && d.primary_contact_phone === body.primary_contact_phone) return true
     return false
   })
+
+  // ── Merge path ────────────────────────────────────────────────────────────
   if (req.body.merge === true && req.body.merge_into_id) {
     const mergeId = req.body.merge_into_id
     const { data: existing } = await supabase.from('companies').select('*').eq('id', mergeId).single()
@@ -361,7 +395,26 @@ app.post('/api/companies', auth, async (req, res) => {
     try { await safeInsertLog({ user_id: req.user.id, action: 'MERGE_COMPANY', record_type: 'companies', record_id: mergeId, details: `Merged: ${body.company_name} into ${existing.company_name}` }) } catch (_) {}
     return res.json({ merged: true, data: merged })
   }
-  if (match && req.body.force !== true) return res.status(409).json({ duplicate: true, message: `A company named "${match.company_name}" already exists`, existing: { id: match.id, company_name: match.company_name, domain: match.domain, status: match.status } })
+
+  // ── Duplicate interceptor — return full payload so frontend modal can offer
+  //    Merge / Delete-Cancel / Continue-Adding options ──────────────────────
+  if (match && req.body.force !== true) {
+    return res.status(409).json({
+      duplicate: true,
+      message: 'Duplicate record detected',
+      existing: {
+        id:                    match.id,
+        company_name:          match.company_name,
+        primary_contact_phone: match.primary_contact_phone || null,
+        primary_contact_email: match.primary_contact_email || null,
+        domain:                match.domain                || null,
+        status:                match.status                || null,
+        notes:                 match.notes                 || null,
+        created_at:            match.created_at            || null,
+      },
+    })
+  }
+
   const { data, error } = await supabase.from('companies').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
   try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_COMPANY', record_type: 'companies', record_id: data.id, details: `Created: ${data.company_name}` }) } catch (_) {}
@@ -715,18 +768,94 @@ app.get('/api/grant-awards', auth, async (req,res)=>{
 })
 
 // ─── PURGE BROKEN IMPORT RECOVERY ROUTE ──────────────────────────────────────
-// Two direct ILIKE deletes only — no loops, no recursion, no child scanning.
+// Phase 1: wipes CMS catalog sentinel rows by name pattern (two ILIKE deletes)
+// Phase 2: deduplicates genuine duplicates by phone, email, and address
+//          footprint — retains the earliest created_at row, safely nulls
+//          foreign-key references on children before deleting the duplicate.
 // GET /api/admin/purge-broken-imports  (admin or super_admin only)
 app.get('/api/admin/purge-broken-imports', auth, requireAdmin, async (req, res) => {
+  let recordsPurged = 0
   try {
-    const { error: err1 } = await supabase.from('companies').delete().ilike('company_name', '%CMS Provider Data Catalog%')
+    // ── Phase 1: catalog sentinel wipe ────────────────────────────────────────
+    const { error: err1 } = await supabase
+      .from('companies').delete().ilike('company_name', '%CMS Provider Data Catalog%')
     if (err1) { console.error('[PURGE] err1:', err1.message); return res.status(500).json({ success: false, error: err1.message }) }
-    const { error: err2 } = await supabase.from('companies').delete().ilike('company_name', '%CMS NH Provider%')
+
+    const { error: err2 } = await supabase
+      .from('companies').delete().ilike('company_name', '%CMS NH Provider%')
     if (err2) { console.error('[PURGE] err2:', err2.message); return res.status(500).json({ success: false, error: err2.message }) }
+
+    // ── Phase 2: genuine duplicate detection and removal ──────────────────────
+    // Fetch all companies ordered oldest-first so the first occurrence in each
+    // group is always the one we keep.
+    const { data: allCos, error: fetchErr } = await supabase
+      .from('companies')
+      .select('id,company_name,primary_contact_phone,primary_contact_email,notes,created_at')
+      .order('created_at', { ascending: true })
+
+    if (!fetchErr && allCos) {
+      // Build a fingerprint for each record. We use three independent signals:
+      // normalised phone, normalised email, and the first address fragment
+      // found inside the notes block. Any collision on *any single signal*
+      // marks the newer row as a duplicate of the earlier one.
+      const seen = { phone: new Map(), email: new Map(), addr: new Map() }
+      const dupeIds = new Set()
+
+      for (const row of allCos) {
+        const phone = (row.primary_contact_phone || '').replace(/\D/g, '').slice(-10)
+        const email = (row.primary_contact_email || '').toLowerCase().trim()
+        // Extract "123 Main" style fragment from notes
+        const addrMatch = (row.notes || '').match(/Address:\s*(\d+\s+\w+)/i)
+        const addr = addrMatch ? addrMatch[1].toLowerCase().trim() : ''
+
+        const isDupe = (
+          (phone.length >= 7 && seen.phone.has(phone)) ||
+          (email.length  >= 4 && seen.email.has(email)) ||
+          (addr.length   >= 4 && seen.addr.has(addr))
+        )
+
+        if (isDupe) {
+          dupeIds.add(row.id)
+        } else {
+          if (phone.length >= 7) seen.phone.set(phone, row.id)
+          if (email.length >= 4) seen.email.set(email, row.id)
+          if (addr.length  >= 4) seen.addr.set(addr,  row.id)
+        }
+      }
+
+      if (dupeIds.size > 0) {
+        const dupeArr = [...dupeIds]
+        // Null-out FK references in child tables before deleting parents
+        await supabase.from('locations').update({ company_id: null }).in('company_id', dupeArr)
+        await supabase.from('applications').update({ company_id: null }).in('company_id', dupeArr)
+        // Delete duplicates in chunks of 200
+        for (let i = 0; i < dupeArr.length; i += 200) {
+          const chunk = dupeArr.slice(i, i + 200)
+          const { error: delErr } = await supabase.from('companies').delete().in('id', chunk)
+          if (!delErr) recordsPurged += chunk.length
+          else console.warn('[PURGE] chunk delete error:', delErr.message)
+        }
+      }
+    }
+
+    // Reset the import cache so next import rebuilds a clean map
     global._importCoCache = null
-    try { await safeInsertLog({ user_id: req.user.id, action: 'PURGE_BROKEN_IMPORTS', record_type: 'companies', details: `Broken import records cleared by ${req.user.email}` }) } catch (_) {}
-    console.log(`[PURGE] Broken records cleared by ${req.user.email}`)
-    return res.json({ success: true, message: 'Broken records completely cleared.' })
+
+    try {
+      await safeInsertLog({
+        user_id:     req.user.id,
+        action:      'PURGE_BROKEN_IMPORTS',
+        record_type: 'companies',
+        details:     `Purge by ${req.user.email}: ${recordsPurged} duplicate rows removed`,
+      })
+    } catch (_) {}
+
+    console.log(`[PURGE] Complete — ${recordsPurged} records removed by ${req.user.email}`)
+    return res.json({
+      success:       true,
+      recordsPurged,
+      message:       'All system duplicates have been eliminated.',
+    })
   } catch (e) {
     console.error('[PURGE] Fatal:', e.message)
     return res.status(500).json({ success: false, error: e.message })
@@ -1203,7 +1332,7 @@ app.post('/api/ai', auth, async (req, res) => {
   const { count:aiCount } = await supabase.from('activity_log').select('id',{count:'exact',head:true}).eq('user_id',req.user.id).eq('action','AI_QUERY').gte('created_at',oha)
   if ((aiCount||0)>=50) return res.status(429).json({error:'AI rate limit reached (50 requests/hour).',text:'Rate limit reached. Try again in an hour.'})
   try {
-    const response=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,system:'You are an expert workforce grant consultant AI assistant for Valor Workforce Funding LLC. You help staff analyze WIB relationships, employer eligibility, grant funding opportunities, and application status. Never reveal data from other organizations. Only discuss the context provided. Be concise, actionable, and format for CRM display.',messages:[{role:'user',content:`Context: ${sc}\n\nTask: ${sp}`}]})})
+    const response=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01'},body:JSON.stringify({model:'claude-sonnet-4-5',max_tokens:1000,system:'You are an expert workforce grant consultant AI assistant for Valor Workforce Funding LLC. You help staff analyze WIB relationships, employer eligibility, grant funding opportunities, and application status. Never reveal data from other organizations. Only discuss the context provided. Be concise, actionable, and format for CRM display.',messages:[{role:'user',content:`Context: ${sc}\n\nTask: ${sp}`}]})})
     const data=await response.json()
     if (data.error) return res.json({text:`AI Error: ${data.error.message}`,error:true})
     const text=data.content?.[0]?.text||'No response generated.'
