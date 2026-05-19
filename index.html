@@ -1955,10 +1955,10 @@ function renderWibProfile(){
 
         <div class="profile-section">
           <div class="profile-section-title">Record Info</div>
-          <div class="field-row"><span class="field-key">Created By</span><span class="field-val">Claude</span></div>
+          <div class="field-row"><span class="field-key">Created By</span><span class="field-val">${escHtml(w.owner?.full_name||w.owner?.email||'System')}</span></div>
           <div class="field-row"><span class="field-key">Created</span><span class="field-val">${fmtDate(w.created_at)}</span></div>
           <div class="field-row"><span class="field-key">Last Interaction</span><span class="field-val">${w.last_contact_date?fmtAgo(w.last_contact_date):'<span class="fv-empty">No contact</span>'}</span></div>
-          <div class="field-row"><span class="field-key">Owner</span><span class="field-val">${w.owner||'<span class="fv-empty">—</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Owner</span><span class="field-val">${escHtml(w.owner?.full_name||w.owner?.email||'—')}</span></div>
         </div>
 
         <div class="profile-section">
@@ -2776,7 +2776,7 @@ function renderCompanyProfile(){
 
         <div class="profile-section">
           <div class="profile-section-title">Record Info</div>
-          <div class="field-row"><span class="field-key">Created By</span><span class="field-val">Claude</span></div>
+          <div class="field-row"><span class="field-key">Created By</span><span class="field-val">${escHtml(c.owner?.full_name||c.owner?.email||'—')}</span></div>
           <div class="field-row"><span class="field-key">Created</span><span class="field-val">${fmtDate(c.created_at)}</span></div>
           <div class="field-row"><span class="field-key">Last Interaction</span><span class="field-val">${c.last_contact_date?fmtAgo(c.last_contact_date):'<span class="fv-empty">No contact</span>'}</span></div>
         </div>
@@ -4039,7 +4039,12 @@ window._FIPS_MAP = {
 async function pageTerritories(){
   const isAdmin=['super_admin','admin'].includes(currentUser?.role)
   setTopbar('WIB Territories','Nationwide map, contacts & AI assistant',
-    isAdmin?`<button class="btn btn-primary" onclick="openNewTerritoryModal()">+ New Territory</button>`:'')
+    isAdmin?`
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-ghost btn-sm" onclick="runWibDecontamination()" title="Remove person names and company records incorrectly imported as WIBs">🧹 Clean WIB Data</button>
+      <button class="btn btn-ghost btn-sm" onclick="runAITerritoryGeneration()" title="Use Claude AI to fill in missing WIBs for uncovered states">🤖 AI Fill Gaps</button>
+      <button class="btn btn-primary" onclick="openNewTerritoryModal()">+ New Territory</button>
+    </div>`:''  )
   clearViewbar()
 
   document.getElementById('page-area').innerHTML=`
@@ -4758,7 +4763,131 @@ function getSelectedStates(containerId) {
   return [...document.querySelectorAll(`#${containerId} .rs-chk:checked`)].map(c => c.value)
 }
 // ─────────────────────────────────────────────────────────────────────────────
-async function openNewTerritoryModal(){
+async 
+// ── WIB Data Decontamination (removes person names / company names imported as WIBs) ──
+async function runWibDecontamination(){
+  if(!['super_admin','admin'].includes(currentUser?.role)){
+    showToast('Admin access required', 'error'); return
+  }
+  const btn = event?.target
+  if(btn){ btn.disabled=true; btn.textContent='🔍 Scanning...' }
+
+  try {
+    // Step 1: Dry run preview
+    const preview = await api('/api/admin/purge-wib-contamination', 'POST', { dry_run: true })
+    const { contaminated_count, total_wib_records, sample_contaminated } = preview
+
+    if(contaminated_count === 0){
+      showToast('✅ No contaminated records found. WIB data is clean!', 'success')
+      if(btn){ btn.disabled=false; btn.textContent='🧹 Clean WIB Data' }
+      return
+    }
+
+    // Show confirmation modal with sample of what would be deleted
+    const sampleHtml = (sample_contaminated || []).slice(0,10).map(c =>
+      `<div style="padding:2px 0;font-size:11px;color:var(--text2)">
+        <span style="color:var(--text3);width:90px;display:inline-block">[${c.reason}]</span>
+        ${escHtml(c.name)} (${c.state||'no state'})
+      </div>`
+    ).join('')
+
+    const confirmed = await showConfirmModal(
+      '🧹 Clean WIB Data',
+      `Found <strong>${contaminated_count.toLocaleString()}</strong> records out of ${total_wib_records.toLocaleString()} total that appear to be person names or company names (not WIB boards).<br><br>
+      <strong>Sample records that will be removed:</strong>
+      <div style="max-height:180px;overflow-y:auto;background:var(--bg2);border-radius:6px;padding:8px;margin-top:6px">${sampleHtml}</div>
+      <br>The ${(total_wib_records - contaminated_count).toLocaleString()} legitimate WIB board records will be preserved.`,
+      'Delete Contaminated Records', 'danger'
+    )
+    if(!confirmed){
+      if(btn){ btn.disabled=false; btn.textContent='🧹 Clean WIB Data' }
+      return
+    }
+
+    // Step 2: Execute purge
+    if(btn) btn.textContent='🗑️ Purging...'
+    const result = await api('/api/admin/purge-wib-contamination', 'POST', {
+      dry_run: false,
+      confirm_phrase: 'CONFIRM PURGE',
+    })
+    showToast(`✅ Removed ${result.deleted.toLocaleString()} contaminated records. ${result.clean_preserved.toLocaleString()} legitimate WIBs preserved.`, 'success')
+    // Refresh the WIB list
+    loadPage('wibs')
+  } catch(e) {
+    showToast('Decontamination failed: ' + e.message, 'error')
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='🧹 Clean WIB Data' }
+  }
+}
+
+// ── AI WIB Territory Generation (fills missing states with Claude-generated WIBs) ──
+async function runAITerritoryGeneration(){
+  if(!['super_admin','admin'].includes(currentUser?.role)){
+    showToast('Admin access required', 'error'); return
+  }
+  const btn = event?.target
+  if(btn){ btn.disabled=true; btn.textContent='⏳ Generating...' }
+
+  try {
+    // First check coverage
+    const coverage = await api('/api/admin/ai/territory-coverage')
+    const { states_missing, states_covered, total_wibs } = coverage
+
+    if(states_missing === 0){
+      showToast('✅ All 51 states have WIB coverage!', 'success')
+      if(btn){ btn.disabled=false; btn.textContent='🤖 AI Fill Gaps' }
+      return
+    }
+
+    const confirmed = await showConfirmModal(
+      '🤖 AI Territory Generation',
+      `<strong>${states_missing} states</strong> currently have no WIB records.<br><br>
+      Claude AI will generate realistic WIB records for the missing states, including:<br>
+      • Official board names<br>• Government contact emails<br>• Website URLs<br>• Contact persons (saved as nested notes)<br><br>
+      <em>This will target up to 15 states per run. Run again for more coverage.</em>`,
+      'Generate WIB Records', 'primary'
+    )
+    if(!confirmed){
+      if(btn){ btn.disabled=false; btn.textContent='🤖 AI Fill Gaps' }
+      return
+    }
+
+    showToast('🤖 Claude is generating WIB records...', 'info')
+    const result = await api('/api/admin/ai/generate-wib-territories', 'POST', { dry_run: false })
+    showToast(`✅ Generated ${result.inserted} new WIBs across ${result.target_states?.length||0} states. ${result.states_still_missing?.length||0} states still need coverage.`, 'success')
+    // Refresh territories tab
+    pageTerritories()
+  } catch(e) {
+    showToast('AI generation failed: ' + e.message, 'error')
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='🤖 AI Fill Gaps' }
+  }
+}
+
+// ── Generic confirmation modal helper ─────────────────────────────────────────
+function showConfirmModal(title, bodyHtml, confirmLabel='Confirm', variant='primary'){
+  return new Promise(resolve => {
+    const overlay = document.createElement('div')
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center'
+    overlay.innerHTML = `
+      <div style="background:var(--bg1,#fff);border-radius:12px;padding:24px;max-width:500px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+        <div style="font-size:16px;font-weight:700;margin-bottom:12px">${title}</div>
+        <div style="font-size:12.5px;line-height:1.6;color:var(--text2,#555);margin-bottom:20px">${bodyHtml}</div>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button id="cm-cancel" class="btn btn-ghost">Cancel</button>
+          <button id="cm-confirm" class="btn btn-${variant==='danger'?'danger':'primary'}" style="${variant==='danger'?'background:#dc2626':''}">
+            ${confirmLabel}
+          </button>
+        </div>
+      </div>`
+    document.body.appendChild(overlay)
+    overlay.querySelector('#cm-cancel').onclick  = () => { overlay.remove(); resolve(false) }
+    overlay.querySelector('#cm-confirm').onclick = () => { overlay.remove(); resolve(true)  }
+    overlay.onclick = e => { if(e.target===overlay){ overlay.remove(); resolve(false) } }
+  })
+}
+
+function openNewTerritoryModal(){
   // Pre-fetch users so the dropdown is ready when the modal opens
   let allUsers=[]
   try{const r=await api('/api/users');allUsers=(r.data||[]).filter(u=>u.is_active!==false)}catch(_){}
@@ -10256,6 +10385,8 @@ function initChatSSE(){
     es.onopen = () => {
       const dot = document.getElementById('fw-sse-status')
       if(dot){ dot.classList.remove('disconnected'); dot.title='Connected' }
+      const presenceEl = document.getElementById('fw-presence-count')
+      if(presenceEl && presenceEl.textContent === 'Connecting...') presenceEl.textContent = 'Connected'
       window._chatSSERetries = 0
     }
   }
