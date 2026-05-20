@@ -1273,6 +1273,219 @@ app.post('/api/admin/purge-wib-contamination', auth, requireAdmin, async (req, r
 })
 
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// AI WIB DIRECTORY SEARCH — searches all 51 states (50 + DC) for workforce boards
+// using Claude with web search, validates each record so contact names never
+// land in the WIB-name field, skips duplicates, and saves cleanly to wib_records.
+//
+// Routes:
+//   POST /api/admin/wib-ai-search          — start a background search job
+//   GET  /api/admin/wib-ai-search/status   — poll job progress
+//
+// The job runs state-by-state in the background. Each found board is validated
+// before saving: if the "name" looks like a person, it's moved to contact_name
+// and excluded from wib_name. Duplicates (fuzzy name match) are skipped.
+// ═══════════════════════════════════════════════════════════════════════════════
+const US_STATES = [
+  ['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],['CA','California'],
+  ['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],['FL','Florida'],['GA','Georgia'],
+  ['HI','Hawaii'],['ID','Idaho'],['IL','Illinois'],['IN','Indiana'],['IA','Iowa'],
+  ['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],['ME','Maine'],['MD','Maryland'],
+  ['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],['MS','Mississippi'],['MO','Missouri'],
+  ['MT','Montana'],['NE','Nebraska'],['NV','Nevada'],['NH','New Hampshire'],['NJ','New Jersey'],
+  ['NM','New Mexico'],['NY','New York'],['NC','North Carolina'],['ND','North Dakota'],['OH','Ohio'],
+  ['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],['SC','South Carolina'],
+  ['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],['VT','Vermont'],
+  ['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming'],
+  ['DC','District of Columbia'],
+]
+
+// In-memory job state. Single job at a time (admin tool, low frequency).
+let _wibAiJob = null
+
+// Validate + clean one AI-returned board record so it saves into the RIGHT columns.
+// This is the contamination guard — it ensures a person's name never becomes a WIB name.
+function _cleanWibRecord(raw, stateCode) {
+  const PERSON_NAME = /^[A-Z][a-z']+(?:\s[A-Z][a-z'.]+){1,2}$/
+  const WIB_KEYWORDS = /\b(workforce|development\s+board|investment\s+board|works|career|employment|labor|WIB|WIOA|CareerSource|one\s*stop|american\s+job|commission|council|consortium|job\s+center|job\s+training|partnership|alliance|region)\b/i
+
+  let name = String(raw.wib_name || raw.name || raw.board_name || '').trim()
+  let contactName = String(raw.contact_name || raw.contact || raw.director || '').trim()
+
+  // Contamination guard: if the "name" is actually a person, move it to contact
+  // and reject the record as a WIB (we won't save a person as a board).
+  if (name && PERSON_NAME.test(name) && !WIB_KEYWORDS.test(name)) {
+    if (!contactName) contactName = name
+    name = '' // reject — a person is not a board
+  }
+  if (!name || !WIB_KEYWORDS.test(name)) return null // not a valid board name
+
+  // Strip any leading state prefix duplication, normalize whitespace
+  name = name.replace(/\s+/g, ' ').trim()
+
+  return {
+    wib_name:    name,
+    state:       stateCode,
+    wib_phone:   String(raw.phone || raw.wib_phone || '').trim() || null,
+    wib_email:   String(raw.email || raw.wib_email || '').trim() || null,
+    website:     String(raw.website || raw.url || '').trim() || null,
+    wib_type:    String(raw.type || raw.wib_type || 'Local').trim(),
+    source_url:  String(raw.source_url || raw.website || raw.url || '').trim() || 'https://www.careeronestop.org',
+    status:      'no_reachout_complete',
+    contact_name: contactName || null, // stored in metadata/notes, NOT in wib_name
+  }
+}
+
+// Fuzzy duplicate check — normalizes names so "Workforce Solutions Greater Dallas"
+// and "Greater Dallas Workforce Board" are recognized as the same board.
+function _normWibName(n) {
+  return String(n || '').toLowerCase()
+    .replace(/\b(workforce|solutions?|development|board|investment|inc|llc|the|of|and|area|region|local)\b/g, '')
+    .replace(/[^a-z0-9]/g, '')
+    .trim()
+}
+
+async function _runWibAiSearch(apiKey, userId, stateCodes) {
+  const job = _wibAiJob
+  // Pre-load existing WIB names for duplicate detection
+  const { data: existing } = await supabase.from('wib_records').select('wib_name, state')
+  const existingKeys = new Set((existing || []).map(w => w.state + '|' + _normWibName(w.wib_name)))
+
+  for (const code of stateCodes) {
+    if (job.cancelled) break
+    const stateName = (US_STATES.find(s => s[0] === code) || [code, code])[1]
+    job.currentState = stateName
+    job.statesDone++
+
+    try {
+      // Ask Claude to web-search this state's local workforce boards.
+      const SYSTEM = 'You are a workforce development research assistant. You search the web for accurate, current information about Local Workforce Development Boards (also called Workforce Investment Boards / WIBs / Workforce Development Areas). You return ONLY valid JSON. Never fabricate data — if you cannot find a board, omit it. Never put a person\'s name in the board_name field.'
+      const userContent = `Search the web and list ALL Local Workforce Development Boards in the state of ${stateName}. For each board return an object with these exact keys: board_name (the official board/area name ONLY — never a person), contact_name (director or main contact if known, else empty string), phone, email, website, type ("Local" or "Regional" or "State"). Return ONLY a JSON array, no other text. Example: [{"board_name":"Workforce Solutions Greater Dallas","contact_name":"","phone":"214-555-0100","email":"info@example.org","website":"https://example.org","type":"Local"}]`
+
+      let rawText = ''
+      const MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001']
+      for (let mi = 0; mi < MODELS.length; mi++) {
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: MODELS[mi],
+            max_tokens: 4000,
+            system: SYSTEM,
+            tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+            messages: [{ role: 'user', content: userContent }],
+          }),
+        })
+        const d = await r.json()
+        if (r.status === 529 && mi === 0) { continue }
+        // Concatenate all text blocks (web_search responses are multi-block)
+        rawText = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
+        break
+      }
+
+      // Extract the JSON array from the response
+      let boards = []
+      const jsonMatch = rawText.match(/\[[\s\S]*\]/)
+      if (jsonMatch) {
+        try { boards = JSON.parse(jsonMatch[0]) } catch (_) { boards = [] }
+      }
+      if (!Array.isArray(boards)) boards = []
+
+      // Validate, dedup, and save each board
+      for (const raw of boards) {
+        const clean = _cleanWibRecord(raw, code)
+        if (!clean) { job.rejected++; continue }
+        const key = code + '|' + _normWibName(clean.wib_name)
+        if (existingKeys.has(key)) { job.duplicates++; continue }
+        existingKeys.add(key) // prevent dupes within this run too
+
+        // Save — contact_name goes into metadata/notes, NEVER the wib_name column
+        const contactNote = clean.contact_name
+          ? `[AI Search] Contact: ${clean.contact_name}`
+          : '[AI Search] Imported via AI Directory Search'
+        try {
+          const { error } = await supabase.from('wib_records').insert({
+            wib_name:   clean.wib_name,
+            state:      clean.state,
+            wib_phone:  clean.wib_phone,
+            wib_email:  clean.wib_email,
+            website:    clean.website,
+            wib_type:   clean.wib_type,
+            source_url: clean.source_url,
+            status:     clean.status,
+            notes:      contactNote,
+            owner_id:   userId,
+            call_priority_score: 0,
+          })
+          if (error) { job.errors.push(`${clean.wib_name}: ${error.message}`) }
+          else { job.created++; job.savedThisState++ }
+        } catch (e) {
+          job.errors.push(`${clean.wib_name}: ${e.message}`)
+        }
+      }
+    } catch (e) {
+      job.errors.push(`${stateName}: ${e.message}`)
+      job.failedStates.push(stateName)
+    }
+    job.savedThisState = 0
+  }
+
+  job.status = job.cancelled ? 'cancelled' : 'complete'
+  job.finishedAt = Date.now()
+  try {
+    await safeInsertLog({ user_id: userId, action: 'WIB_AI_SEARCH',
+      details: `AI WIB search ${job.status}: ${job.created} added, ${job.duplicates} duplicates skipped, ${job.rejected} rejected` })
+  } catch (_) {}
+}
+
+// POST /api/admin/wib-ai-search — start the background search job
+app.post('/api/admin/wib-ai-search', auth, requireAdmin, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured. Add it in Render env vars.' })
+
+  if (_wibAiJob && _wibAiJob.status === 'running') {
+    return res.status(409).json({ error: 'A WIB AI search is already running.', job: _wibAiJob })
+  }
+
+  // Which states? Default = all 51. Accept a subset via { states: ['TX','CA'] }
+  let stateCodes = US_STATES.map(s => s[0])
+  if (Array.isArray(req.body?.states) && req.body.states.length) {
+    const valid = new Set(US_STATES.map(s => s[0]))
+    stateCodes = req.body.states.filter(c => valid.has(c))
+  }
+  if (!stateCodes.length) return res.status(400).json({ error: 'No valid states specified' })
+
+  _wibAiJob = {
+    status: 'running', cancelled: false,
+    totalStates: stateCodes.length, statesDone: 0, currentState: null,
+    created: 0, duplicates: 0, rejected: 0, savedThisState: 0,
+    errors: [], failedStates: [],
+    startedAt: Date.now(), finishedAt: null,
+  }
+
+  // Fire the job in the background — don't await it
+  _runWibAiSearch(apiKey, req.user.id, stateCodes)
+    .catch(e => { if (_wibAiJob) { _wibAiJob.status = 'error'; _wibAiJob.errors.push('Fatal: ' + e.message) } })
+
+  res.json({ started: true, totalStates: stateCodes.length, message: 'AI WIB search started. Poll /api/admin/wib-ai-search/status for progress.' })
+})
+
+// GET /api/admin/wib-ai-search/status — poll progress
+app.get('/api/admin/wib-ai-search/status', auth, requireAdmin, (req, res) => {
+  if (!_wibAiJob) return res.json({ status: 'idle' })
+  res.json(_wibAiJob)
+})
+
+// POST /api/admin/wib-ai-search/cancel — stop a running job
+app.post('/api/admin/wib-ai-search/cancel', auth, requireAdmin, (req, res) => {
+  if (_wibAiJob && _wibAiJob.status === 'running') {
+    _wibAiJob.cancelled = true
+    return res.json({ cancelling: true })
+  }
+  res.json({ cancelling: false, message: 'No running job' })
+})
+
+
 // ─── IMPORT — lightweight JWT auth (multi-batch safe) ─────────────────────────
 app.post('/api/import/:type', async (req, res) => {
   const rawToken = req.headers.authorization?.replace('Bearer ', '').trim()
