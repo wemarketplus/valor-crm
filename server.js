@@ -149,61 +149,120 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, 'public'), { index: false, dotfiles: 'deny' }))
 
-// ─── PHASE 1: ZERO-CDN SHEETJS LIBRARY SERVER ─────────────────────────────────
-// Serves xlsx.full.min.js from this same origin so the frontend never has to
-// reach out to cdnjs/jsdelivr/unpkg (which can be blocked by ad blockers,
-// browser extensions, or corporate network policies).
+// ─── ZERO-CDN SHEETJS LIBRARY SERVER (with self-bootstrap) ────────────────────
+// Serves xlsx.full.min.js from this same origin so the user's browser never has
+// to reach out to a CDN (which may be blocked by ad blockers, browser
+// extensions, or corporate network policies).
 //
-// SETUP: download SheetJS from https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js
-// and commit it to your repo. The route below auto-discovers it in any of
-// these locations (whichever matches your repo layout):
+// HOW IT WORKS:
+//   1. First, check 4 candidate disk paths (in case the file is in the repo)
+//   2. If not on disk, fetch it ONCE from a public CDN — using Render's network,
+//      NOT the user's browser. Cache in memory forever after the first fetch.
+//   3. Serve from cache on subsequent requests (instant, no network call)
 //
-//   xlsx.full.min.js                  (repo root — works for flat repos)
-//   static/xlsx.full.min.js           (repo root /static/)
-//   public/xlsx.full.min.js           (public folder)
-//   public/static/xlsx.full.min.js    (public/static folder)
-//
-// Once placed and pushed, Render redeploys and the file is reachable at
-// /api/static/xlsx.full.min.js (this route) AND at /static/xlsx.full.min.js
-// or wherever express.static finds it.
-app.get('/api/static/xlsx.full.min.js', (req, res) => {
-  // Search candidate paths in order. First match wins.
-  const candidates = [
+// This means the user does nothing — the server self-installs SheetJS on first
+// use. The user's browser only ever talks to valor-crm.onrender.com.
+let _xlsxCachedBuffer = null
+let _xlsxFetchPromise = null
+const XLSX_FETCH_URLS = [
+  'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+  'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
+  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+]
+
+async function _fetchSheetJS() {
+  // Returns a Buffer with the SheetJS library contents.
+  // Tries CDNs in order, returns first successful download.
+  for (const url of XLSX_FETCH_URLS) {
+    try {
+      console.log('[xlsx] Self-bootstrap: fetching from', url)
+      // Node 18+ has built-in fetch
+      const resp = await fetch(url, { redirect: 'follow' })
+      if (!resp.ok) {
+        console.warn('[xlsx] ' + url + ' returned status ' + resp.status)
+        continue
+      }
+      const arrBuf = await resp.arrayBuffer()
+      const buf = Buffer.from(arrBuf)
+      // Sanity check — file should be >500KB and start with "/*! xlsx.js"
+      if (buf.length < 500000) {
+        console.warn('[xlsx] ' + url + ' returned only ' + buf.length + ' bytes — too small, skipping')
+        continue
+      }
+      const head = buf.slice(0, 100).toString('utf8')
+      if (!head.includes('xlsx.js') && !head.includes('SheetJS')) {
+        console.warn('[xlsx] ' + url + ' did not return SheetJS, skipping')
+        continue
+      }
+      console.log('[xlsx] Self-bootstrap success: cached ' + buf.length + ' bytes from ' + url)
+      return buf
+    } catch (e) {
+      console.warn('[xlsx] ' + url + ' fetch failed:', e.message)
+    }
+  }
+  throw new Error('All CDN fetches failed')
+}
+
+app.get('/api/static/xlsx.full.min.js', async (req, res) => {
+  // Step 1 — Check disk first (in case admin committed file to repo)
+  const diskCandidates = [
     path.join(__dirname, 'xlsx.full.min.js'),
     path.join(__dirname, 'static', 'xlsx.full.min.js'),
     path.join(__dirname, 'public', 'xlsx.full.min.js'),
     path.join(__dirname, 'public', 'static', 'xlsx.full.min.js'),
   ]
-  let found = null
-  for (const p of candidates) {
-    try { if (fs.existsSync(p)) { found = p; break } } catch (_) {}
+  for (const p of diskCandidates) {
+    try {
+      if (fs.existsSync(p)) {
+        res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
+        res.setHeader('Cache-Control', 'public, max-age=604800, immutable')
+        res.setHeader('X-Content-Type-Options', 'nosniff')
+        return res.sendFile(p)
+      }
+    } catch (_) {}
   }
-  if (!found) {
-    // File not on disk — return 503 with actionable instructions in the body.
-    // The frontend surfaces this to the user via the import error banner.
-    res.status(503).type('application/javascript').send(
-      '/* SheetJS not installed on the server.\n' +
-      ' *\n' +
-      ' * Download xlsx.full.min.js from:\n' +
-      ' *   https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js\n' +
-      ' *\n' +
-      ' * Then commit it to your repo at ANY of these paths:\n' +
-      ' *   xlsx.full.min.js                  (root)\n' +
-      ' *   static/xlsx.full.min.js\n' +
-      ' *   public/xlsx.full.min.js\n' +
-      ' *   public/static/xlsx.full.min.js\n' +
-      ' *\n' +
-      ' * Push to GitHub, wait ~2 min for Render to redeploy, then retry. */\n' +
-      'console.error("[xlsx] not installed on server — drop xlsx.full.min.js into the repo");\n'
+
+  // Step 2 — Serve from memory cache if available
+  if (_xlsxCachedBuffer) {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('X-Xlsx-Source', 'memory-cache')
+    return res.send(_xlsxCachedBuffer)
+  }
+
+  // Step 3 — Not on disk and not cached. Fetch from CDN now (server-side, not
+  // browser-side), cache in memory, serve. Subsequent requests skip this.
+  try {
+    if (!_xlsxFetchPromise) _xlsxFetchPromise = _fetchSheetJS()
+    _xlsxCachedBuffer = await _xlsxFetchPromise
+    _xlsxFetchPromise = null
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable')
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('X-Xlsx-Source', 'fresh-cdn-fetch')
+    return res.send(_xlsxCachedBuffer)
+  } catch (e) {
+    _xlsxFetchPromise = null
+    console.error('[xlsx] Self-bootstrap totally failed:', e.message)
+    return res.status(503).type('application/javascript').send(
+      '/* SheetJS unavailable. The server tried to fetch it from CDNs but all attempts failed.\n' +
+      ' * Possible causes:\n' +
+      ' *   - Render outbound network restrictions\n' +
+      ' *   - All CDNs (jsdelivr, unpkg, cdnjs) down simultaneously\n' +
+      ' * Workaround: save your Excel file as .csv and re-import. */\n' +
+      'console.error("[xlsx] self-bootstrap failed: ' + e.message.replace(/"/g, "'") + '");\n'
     )
-    return
   }
-  // Long cache — the file is versioned by content, never changes per request
-  res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
-  res.setHeader('Cache-Control', 'public, max-age=604800, immutable') // 7 days
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  res.sendFile(found)
 })
+
+// Try to warm the cache on startup (best-effort, non-blocking)
+// This means even the FIRST user import doesn't have to wait for the CDN fetch.
+setTimeout(() => {
+  _fetchSheetJS()
+    .then(buf => { _xlsxCachedBuffer = buf; console.log('[xlsx] Startup warm-up complete: ' + buf.length + ' bytes cached') })
+    .catch(e => { console.warn('[xlsx] Startup warm-up failed (will retry on first request):', e.message) })
+}, 5000)
 
 // ─── GLOBAL RATE LIMITER MOUNT (SEC-5) ────────────────────────────────────────
 if (_rateLimit) {
