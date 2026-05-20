@@ -1363,24 +1363,66 @@ async function _runWibAiSearch(apiKey, userId, stateCodes) {
       const userContent = `Search the web and list ALL Local Workforce Development Boards in the state of ${stateName}. For each board return an object with these exact keys: board_name (the official board/area name ONLY — never a person), contact_name (director or main contact if known, else empty string), phone, email, website, type ("Local" or "Regional" or "State"). Return ONLY a JSON array, no other text. Example: [{"board_name":"Workforce Solutions Greater Dallas","contact_name":"","phone":"214-555-0100","email":"info@example.org","website":"https://example.org","type":"Local"}]`
 
       let rawText = ''
+      let apiErr = null
       const MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001']
       for (let mi = 0; mi < MODELS.length; mi++) {
-        const r = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-          body: JSON.stringify({
-            model: MODELS[mi],
-            max_tokens: 4000,
-            system: SYSTEM,
-            tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
-            messages: [{ role: 'user', content: userContent }],
-          }),
-        })
-        const d = await r.json()
-        if (r.status === 529 && mi === 0) { continue }
-        // Concatenate all text blocks (web_search responses are multi-block)
-        rawText = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
-        break
+        let d
+        try {
+          const r = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+            body: JSON.stringify({
+              model: MODELS[mi],
+              max_tokens: 4000,
+              system: SYSTEM,
+              tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+              messages: [{ role: 'user', content: userContent }],
+            }),
+          })
+          d = await r.json()
+          if (r.status === 529 && mi === 0) { console.warn('[wib-ai] 529 overloaded, trying haiku'); continue }
+          if (!r.ok || d.error) {
+            // API rejected the request — capture the real reason instead of
+            // silently producing "0 added".
+            apiErr = (d.error && d.error.message) || ('HTTP ' + r.status)
+            console.error('[wib-ai] ' + stateName + ' API error:', apiErr)
+            // If the web_search tool isn't enabled on the account, retry once
+            // WITHOUT the tool so the user at least gets model-knowledge results.
+            if (mi === 0 && /tool|web_search|not.*enabled|unsupported/i.test(apiErr)) {
+              const r2 = await fetch('https://api.anthropic.com/v1/messages', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+                body: JSON.stringify({
+                  model: MODELS[mi], max_tokens: 4000, system: SYSTEM,
+                  messages: [{ role: 'user', content: userContent }],
+                }),
+              })
+              const d2 = await r2.json()
+              if (r2.ok && !d2.error) {
+                rawText = (d2.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
+                apiErr = null
+                console.warn('[wib-ai] ' + stateName + ': web_search unavailable, used model knowledge instead')
+                break
+              }
+            }
+            continue // try next model
+          }
+          // Success — concatenate all text blocks (web_search responses are multi-block)
+          rawText = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
+          apiErr = null
+          break
+        } catch (fetchErr) {
+          apiErr = fetchErr.message
+          console.error('[wib-ai] ' + stateName + ' fetch failed:', fetchErr.message)
+          continue
+        }
+      }
+      if (apiErr && !rawText) {
+        // All attempts failed for this state — record it visibly, don't silently skip
+        job.errors.push(`${stateName}: ${apiErr}`)
+        job.failedStates.push(stateName)
+        job.savedThisState = 0
+        continue
       }
 
       // Extract the JSON array from the response
@@ -1399,26 +1441,44 @@ async function _runWibAiSearch(apiKey, userId, stateCodes) {
         if (existingKeys.has(key)) { job.duplicates++; continue }
         existingKeys.add(key) // prevent dupes within this run too
 
-        // Save — contact_name goes into metadata/notes, NEVER the wib_name column
+        // Save — contact_name goes into notes, NEVER the wib_name column.
+        // Insert is kept minimal & defensive: only columns we know exist on the
+        // manual WIB POST whitelist. If a status value trips a CHECK constraint
+        // we retry with a safe fallback so one bad enum doesn't kill the batch.
         const contactNote = clean.contact_name
           ? `[AI Search] Contact: ${clean.contact_name}`
           : '[AI Search] Imported via AI Directory Search'
+        const baseRow = {
+          wib_name:   clean.wib_name,
+          state:      clean.state,
+          wib_phone:  clean.wib_phone || null,
+          wib_email:  clean.wib_email || null,
+          website:    clean.website || null,
+          wib_type:   clean.wib_type || 'Local',
+          source_url: clean.source_url || 'https://www.careeronestop.org',
+          notes:      contactNote,
+        }
         try {
-          const { error } = await supabase.from('wib_records').insert({
-            wib_name:   clean.wib_name,
-            state:      clean.state,
-            wib_phone:  clean.wib_phone,
-            wib_email:  clean.wib_email,
-            website:    clean.website,
-            wib_type:   clean.wib_type,
-            source_url: clean.source_url,
-            status:     clean.status,
-            notes:      contactNote,
-            owner_id:   userId,
-            call_priority_score: 0,
+          // Attempt 1 — full row including status + owner_id
+          let { error } = await supabase.from('wib_records').insert({
+            ...baseRow, status: clean.status, owner_id: userId,
           })
-          if (error) { job.errors.push(`${clean.wib_name}: ${error.message}`) }
-          else { job.created++; job.savedThisState++ }
+          // Attempt 2 — if status enum/constraint failed, retry without status
+          if (error && /status|enum|constraint|invalid input/i.test(error.message)) {
+            const retry = await supabase.from('wib_records').insert({ ...baseRow, owner_id: userId })
+            error = retry.error
+          }
+          // Attempt 3 — if owner_id failed, retry with neither
+          if (error && /owner_id|uuid|foreign key/i.test(error.message)) {
+            const retry2 = await supabase.from('wib_records').insert(baseRow)
+            error = retry2.error
+          }
+          if (error) {
+            // Capture the FULL error so the cause is visible, not hidden
+            job.errors.push(`${clean.wib_name}: ${error.message}${error.hint ? ' (hint: ' + error.hint + ')' : ''}${error.code ? ' [' + error.code + ']' : ''}`)
+          } else {
+            job.created++; job.savedThisState++
+          }
         } catch (e) {
           job.errors.push(`${clean.wib_name}: ${e.message}`)
         }
