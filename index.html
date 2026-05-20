@@ -2236,10 +2236,12 @@ async function pageWibs(){
         <div class="ie-sep"></div>
         <div class="ie-group-label" style="color:var(--blue-t)">Batch & AI</div>
         <div class="ie-item" onclick="closeAllIE();openWibBatchHistory()" style="color:var(--blue-t)"><span class="ie-icon">🗂</span>WIB Import Batch History<span class="ie-item-hint">Rollback</span></div>
-        <div class="ie-item" onclick="closeAllIE();openAiSystemUpdate()" style="color:var(--blue-t)"><span class="ie-icon">🤖</span>AI Search & System Update<span class="ie-item-hint">Verify WIB data</span></div>
+        <div class="ie-item" onclick="closeAllIE();openAiSystemUpdate()" style="color:var(--blue-t)"><span class="ie-icon">🤖</span>AI Search & System Update<span class="ie-item-hint">Verify one WIB</span></div>
+        <div class="ie-item" onclick="closeAllIE();openWibAiSearch()" style="color:var(--blue-t)"><span class="ie-icon">🌎</span>AI Search All 51 States<span class="ie-item-hint">Build national directory</span></div>
         `:''}
       </div>
     </div>
+    ${(currentUser?.role==='super_admin'||currentUser?.role==='admin')?`<button class="btn" style="background:#0B1E3C;color:#fff;border-color:#0B1E3C" onclick="openWibAiSearch()">🌎 AI Search All States</button>`:''}
     <button class="btn btn-primary" onclick="openWibModal()">+ New Workforce Board</button>`)
 
   setViewbar([
@@ -6471,6 +6473,114 @@ async function rollbackWibBatch(batchId, expectedCount) {
    2. Review proposals → POST again with {wib_id, apply:true, proposed_updates} to commit
    The server route enforces a 5/hour rate limit and whitelists writable fields.
 ═══════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════
+   AI WIB DIRECTORY SEARCH — all 51 states
+   Admin clicks → picks states → server runs a background job that web-searches
+   each state's workforce boards via Claude, validates them (contact names never
+   become WIB names), skips duplicates, and saves cleanly to wib_records.
+   The modal polls /api/admin/wib-ai-search/status for live progress.
+═══════════════════════════════════════════════════ */
+const _US_STATES_LIST = [
+  ['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],['CA','California'],
+  ['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],['FL','Florida'],['GA','Georgia'],
+  ['HI','Hawaii'],['ID','Idaho'],['IL','Illinois'],['IN','Indiana'],['IA','Iowa'],
+  ['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],['ME','Maine'],['MD','Maryland'],
+  ['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],['MS','Mississippi'],['MO','Missouri'],
+  ['MT','Montana'],['NE','Nebraska'],['NV','Nevada'],['NH','New Hampshire'],['NJ','New Jersey'],
+  ['NM','New Mexico'],['NY','New York'],['NC','North Carolina'],['ND','North Dakota'],['OH','Ohio'],
+  ['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],['SC','South Carolina'],
+  ['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],['VT','Vermont'],
+  ['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming'],
+  ['DC','District of Columbia'],
+]
+window._wibAiPoll = null
+
+function openWibAiSearch() {
+  const stateBoxes = _US_STATES_LIST.map(([code,name]) =>
+    `<label style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:3px 7px;border:0.5px solid var(--border1);border-radius:6px;cursor:pointer;background:var(--bg2)">
+      <input type="checkbox" class="wibai-state" value="${code}" checked> ${name}
+    </label>`).join('')
+
+  showModal('🌎 AI Search — National WIB Directory', `
+    <div class="alert alert-info" style="margin-bottom:12px;font-size:12px;line-height:1.6">
+      Claude will web-search each selected state for its Local Workforce Development Boards and save them
+      to the Workforce Boards tab. <strong>Records are validated before saving</strong> — a person's name
+      will never be placed in the board-name field. <strong>Duplicates are skipped automatically.</strong><br>
+      <span style="color:var(--text3)">This runs as a background job and takes several minutes for all 51 states.
+      AI-sourced data should be spot-checked — phone numbers and contacts may need verification.</span>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <button class="btn btn-xs" onclick="document.querySelectorAll('.wibai-state').forEach(c=>c.checked=true)">Select All</button>
+      <button class="btn btn-xs" onclick="document.querySelectorAll('.wibai-state').forEach(c=>c.checked=false)">Clear All</button>
+      <span style="font-size:11px;color:var(--text3);align-self:center">51 states + DC</span>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:5px;max-height:220px;overflow-y:auto;padding:8px;border:0.5px solid var(--border1);border-radius:8px;background:var(--bg1)">
+      ${stateBoxes}
+    </div>
+    <div id="wibai-progress" style="margin-top:12px"></div>
+  `, async () => {
+    const codes = Array.from(document.querySelectorAll('.wibai-state:checked')).map(c => c.value)
+    if (!codes.length) { showToast('Select at least one state', 'error'); return false }
+    const progressEl = document.getElementById('wibai-progress')
+    if (progressEl) progressEl.innerHTML = '<div style="font-size:12px;color:var(--text3)">⏳ Starting search...</div>'
+    try {
+      await api('/api/admin/wib-ai-search', 'POST', { states: codes })
+      _startWibAiPolling()
+      // Hide the Start button now that the job is running — progress UI takes over
+      const okBtn = document.getElementById('modal-ok-btn')
+      if (okBtn) okBtn.style.display = 'none'
+      return false
+    } catch (e) {
+      showToast('Could not start search: ' + e.message, 'error')
+      return false
+    }
+  }, 'modal-lg', 'Start Search')
+}
+
+function _startWibAiPolling() {
+  if (window._wibAiPoll) clearInterval(window._wibAiPoll)
+  const tick = async () => {
+    let job
+    try { job = await api('/api/admin/wib-ai-search/status') } catch (_) { return }
+    const el = document.getElementById('wibai-progress')
+    if (!el) { clearInterval(window._wibAiPoll); return }
+    if (!job || job.status === 'idle') return
+
+    const pct = job.totalStates ? Math.round((job.statesDone / job.totalStates) * 100) : 0
+    const done = job.status === 'complete' || job.status === 'cancelled' || job.status === 'error'
+
+    el.innerHTML = `
+      <div style="background:var(--bg2);border:0.5px solid var(--border1);border-radius:8px;padding:12px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:6px">
+          <strong>${done ? (job.status === 'complete' ? '✅ Search complete' : job.status === 'cancelled' ? '⏹ Cancelled' : '⚠️ Finished with errors') : '🔎 Searching: ' + (job.currentState || '...')}</strong>
+          <span>${job.statesDone} / ${job.totalStates} states</span>
+        </div>
+        <div style="height:8px;background:var(--bg1);border-radius:4px;overflow:hidden;margin-bottom:8px">
+          <div style="height:100%;width:${pct}%;background:${done?'#16a34a':'#185FA5'};transition:width .3s"></div>
+        </div>
+        <div style="display:flex;gap:14px;font-size:11.5px;color:var(--text2);flex-wrap:wrap">
+          <span>✅ <strong>${job.created}</strong> added</span>
+          <span>⊘ <strong>${job.duplicates}</strong> duplicates skipped</span>
+          <span>🚫 <strong>${job.rejected}</strong> rejected (bad data)</span>
+          ${job.errors && job.errors.length ? `<span style="color:var(--red-t)">⚠️ ${job.errors.length} errors</span>` : ''}
+        </div>
+        ${done ? `<div style="margin-top:10px;display:flex;gap:8px">
+          <button class="btn btn-sm btn-primary" onclick="closeModal();loadPage('wibs')">View ${job.created} New WIBs</button>
+        </div>` : `<div style="margin-top:10px"><button class="btn btn-xs" onclick="_cancelWibAiSearch()">Stop Search</button></div>`}
+        ${done && job.failedStates && job.failedStates.length ? `<div style="margin-top:8px;font-size:11px;color:var(--yellow-t)">States that failed (retry later): ${job.failedStates.join(', ')}</div>` : ''}
+      </div>`
+
+    if (done) { clearInterval(window._wibAiPoll); window._wibAiPoll = null }
+  }
+  tick()
+  window._wibAiPoll = setInterval(tick, 2500)
+}
+
+async function _cancelWibAiSearch() {
+  try { await api('/api/admin/wib-ai-search/cancel', 'POST', {}) } catch (_) {}
+  showToast('Stopping search after current state...', 'info')
+}
+
 async function openAiSystemUpdate() {
   // Build the picker UI from the WIBs currently loaded in window._wibs
   const wibs = (window._wibs || []).slice(0, 500)
