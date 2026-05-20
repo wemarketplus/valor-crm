@@ -1581,6 +1581,76 @@ function isAircallNote(n){
   try{const p=JSON.parse(n.details||'{}');return!!(p.is_aircall||p.note_type==='Aircall')}catch{return false}
 }
 
+// Normalize an activity_log row into { id, created_at, metadata } regardless of
+// whether the server returned metadata as a JSONB object or stringified JSON in
+// the details column. Used by pages that store records inside activity_log
+// (invoices, training providers, agreements, contracts, etc.).
+function parseLogRow(r){
+  if (!r || typeof r !== 'object') return { id:'', created_at:null, metadata:{} }
+  // If metadata is already a parsed object, use it as-is.
+  let metadata = {}
+  if (r.metadata && typeof r.metadata === 'object') {
+    metadata = r.metadata
+  } else if (typeof r.details === 'string' && r.details.trim().startsWith('{')) {
+    // Fallback: details column holds stringified JSON.
+    try { metadata = JSON.parse(r.details) } catch { metadata = { title: r.details } }
+  } else if (r.details) {
+    metadata = { title: r.details }
+  }
+  // Preserve any top-level fields the row already has (id, created_at, action, user_id, etc.)
+  // but normalize metadata into an object for consistent downstream access.
+  return Object.assign({}, r, { metadata })
+}
+
+// Load SheetJS (XLSX library) from any working CDN. Tries cdnjs → jsdelivr → unpkg
+// in sequence so that one blocked CDN doesn't break the whole feature. Resolves
+// when window.XLSX is available, rejects only if ALL CDNs fail.
+window._loadXLSX = async function _loadXLSX(){
+  if (window.XLSX) return window.XLSX
+  if (window._xlsxLoading) return window._xlsxLoading
+  const CDNS = [
+    'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
+    'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
+  ]
+  window._xlsxLoading = (async () => {
+    const errors = []
+    for (const url of CDNS) {
+      try {
+        await new Promise((res, rej) => {
+          const s = document.createElement('script')
+          s.src = url
+          s.async = true
+          s.onload = () => res()
+          s.onerror = () => rej(new Error('network/blocked'))
+          // 10-second per-CDN timeout so a hung CDN doesn't stall the whole chain.
+          const tid = setTimeout(() => {
+            s.onerror = null; s.onload = null
+            rej(new Error('timeout'))
+          }, 10000)
+          s.addEventListener('load', () => clearTimeout(tid), { once: true })
+          document.head.appendChild(s)
+        })
+        if (window.XLSX) return window.XLSX
+        errors.push(url + ': loaded but XLSX global missing')
+      } catch (e) {
+        errors.push(url + ': ' + (e.message || 'failed'))
+      }
+    }
+    window._xlsxLoading = null
+    throw new Error(
+      'Failed to load the Excel parser from all 3 CDNs (cdnjs, jsdelivr, unpkg). ' +
+      'This is almost always caused by an ad blocker, browser extension, or ' +
+      'corporate network policy blocking script CDNs. ' +
+      'Try (1) disabling ad blockers and extensions for this site, ' +
+      '(2) using an incognito/private window, or ' +
+      '(3) saving the file as .csv and re-importing.\n\n' +
+      'Details: ' + errors.join(' | ')
+    )
+  })()
+  return window._xlsxLoading
+}
+
 function callPriority(n){
   if(!n)return'<span class="cell-dim">—</span>'
   const score=Number(n)
@@ -3947,6 +4017,20 @@ async function pageNotifications(){
   } catch(e) {
     area.innerHTML = '<div class="alert alert-error">Could not load notifications: ' + escHtml(e.message) + '</div>'
     return
+  }
+
+  // Phantom badge guard: if the server claims unread > 0 but returned an empty
+  // notifications array (which means the unread rows were soft-deleted, filtered
+  // out, or otherwise unreachable), reconcile by calling mark-all-read so the
+  // badge stops lying. This is safe: the user is looking AT the notifications
+  // page and sees nothing — clearing the badge matches what they see.
+  if (unread > 0 && notifs.length === 0) {
+    console.warn('[notifications] Phantom badge detected: server claims ' + unread + ' unread but data array is empty. Auto-reconciling.')
+    try { await api('/api/notifications/mark-all-read', 'POST', {}) } catch(_) {}
+    unread = 0
+    window._notifUnread = 0
+    const badge = document.getElementById('notif-badge')
+    if (badge) { badge.textContent = ''; badge.style.display = 'none' }
   }
 
   const requests  = notifs.filter(n => n.type === 'access_request')
@@ -9497,18 +9581,9 @@ async function processImportFile(input,type){
     preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📊 Loading Excel reader...</div>'
     try{
       if(!window.XLSX){
-        // Load SheetJS dynamically. The cdnjs CDN sometimes gets blocked by ad blockers,
-        // strict CSP, or corporate networks — emit a clear, actionable error message
-        // instead of "undefined" when that happens.
-        await new Promise((res,rej)=>{
-          const s=document.createElement('script')
-          s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
-          s.onload=()=>res()
-          s.onerror=()=>rej(new Error('Failed to load the Excel parser library from cdnjs.cloudflare.com. This is usually caused by an ad blocker, browser extension, or corporate network policy blocking the CDN. Try (1) disabling ad blockers for this site, (2) using an incognito window, or (3) saving the file as .csv instead.'))
-          // Hard timeout — if the request hangs (slow/blocked CDN), surface the failure within 12s
-          setTimeout(()=>{if(!window.XLSX)rej(new Error('Excel parser library failed to load within 12 seconds. CDN may be blocked. Try saving the file as .csv and importing again.'))},12000)
-          document.head.appendChild(s)
-        })
+        // Multi-CDN loader — tries cdnjs, jsdelivr, then unpkg. As long as one
+        // works the import succeeds. Throws a descriptive error only if ALL fail.
+        await window._loadXLSX()
       }
       const buf=await file.arrayBuffer()
       const wb=XLSX.read(buf,{type:'array'})
@@ -10019,7 +10094,7 @@ async function exportCSV(type){
 async function exportExcel(type){
   closeAllIE();showToast('Preparing Excel export...','info')
   try{
-    if(!window.XLSX){await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=res;s.onerror=()=>rej(new Error('Failed to load Excel library'));document.head.appendChild(s)})}
+    if(!window.XLSX){ await window._loadXLSX() }
     // Try API, fall back to client-side data
     let csvText=null
     try{
