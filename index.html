@@ -530,7 +530,14 @@ app.get('/api/companies', auth, async (req, res) => {
   const { data, error, count } = await q; if (error) return res.status(400).json({ error: error.message }); res.json({ data, count })
 })
 app.post('/api/companies', auth, async (req, res) => {
-  const A = ['company_name','company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes','rating','is_25_pct_operator','supported_by']
+  // Whitelist matches the real `companies` table columns exactly.
+  // NOTE: 'is_25_plus' is the actual column name — the frontend may send
+  // 'is_25_pct_operator'; that alias is normalized below before filtering.
+  const A = ['company_name','company_type','status','fein','industry','naics_code','domain','website','employee_count_total','employee_count_ft','employee_count_pt','avg_hourly_wage','primary_contact_name','primary_contact_title','primary_contact_email','primary_contact_phone','hr_contact_name','hr_contact_email','hr_contact_phone','training_needs','current_training_providers','turnover_challenges','notes','rating','is_25_plus','supported_by','source_url']
+  // Normalize legacy/alias field names from the frontend to real column names
+  if (req.body.is_25_pct_operator !== undefined && req.body.is_25_plus === undefined) {
+    req.body.is_25_plus = req.body.is_25_pct_operator
+  }
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => A.includes(k)))
   if (!body.company_name?.trim()) return res.status(400).json({ error: 'Company name required' })
   const nameClean = body.company_name.trim().toLowerCase()
@@ -609,7 +616,11 @@ app.post('/api/companies', auth, async (req, res) => {
   res.json(data)
 })
 app.put('/api/companies/:id', auth, async (req, res) => {
-  const A = ['company_name','company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes','rating']
+  // Whitelist matches the POST route and the real `companies` columns.
+  const A = ['company_name','company_type','status','fein','industry','naics_code','domain','website','employee_count_total','employee_count_ft','employee_count_pt','avg_hourly_wage','primary_contact_name','primary_contact_title','primary_contact_email','primary_contact_phone','hr_contact_name','hr_contact_email','hr_contact_phone','training_needs','current_training_providers','turnover_challenges','notes','rating','is_25_plus','supported_by','source_url']
+  if (req.body.is_25_pct_operator !== undefined && req.body.is_25_plus === undefined) {
+    req.body.is_25_plus = req.body.is_25_pct_operator
+  }
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => A.includes(k)))
   const { data, error } = await supabase.from('companies').update(body).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message }); res.json(data)
