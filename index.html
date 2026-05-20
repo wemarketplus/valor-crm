@@ -4575,24 +4575,39 @@ window._WIB_STATE_DATA = [
 
 /* ═══ IMPORT SYNONYM TABLE — maps external platform headers to CRM fields ═══ */
 window._IMPORT_SYNONYM_TABLE={
-  'name':{'companies':'company_name','wibs':'wib_name','locations':'location_name','funding':'opportunity_name','applications':'company_name'},
-  'organization':'company_name','organization name':'company_name','account name':'company_name','account':'company_name',
-  'company':{'companies':'company_name','locations':'parent_company_name','applications':'company_name'},
-  'company name':'company_name','employer':'company_name','employer name':'company_name','business name':'company_name',
+  'name':{'companies':'company_name','wibs':'wib_name','locations':'location_name','funding':'opportunity_name','applications':'company_name','training_providers':'name','agreements':'agreement_name','invoices':'invoice_number'},
+  'organization':{'companies':'company_name','wibs':'wib_name','training_providers':'name'},'organization name':{'companies':'company_name','wibs':'wib_name','training_providers':'name'},'account name':'company_name','account':'company_name',
+  'company':{'companies':'company_name','locations':'parent_company_name','applications':'company_name','training_providers':'name','agreements':'company_name','invoices':'company_name','wibs':'wib_name'},
+  'company name':{'companies':'company_name','wibs':'wib_name','training_providers':'name','agreements':'company_name','applications':'company_name','invoices':'company_name','locations':'parent_company_name'},
+  'employer':'company_name','employer name':'company_name','business name':'company_name',
+  'provider':{'training_providers':'name'},'provider name':{'training_providers':'name'},'training provider':{'training_providers':'name'},'training provider name':{'training_providers':'name'},
+  'institution':{'training_providers':'name'},'institution name':{'training_providers':'name'},'school':{'training_providers':'name'},'school name':{'training_providers':'name'},
+  'vendor':{'training_providers':'name'},'vendor name':{'training_providers':'name'},
+  'agreement':{'agreements':'agreement_name'},'agreement name':{'agreements':'agreement_name'},'agreement title':{'agreements':'agreement_name'},
+  'contract':{'agreements':'agreement_name'},'contract name':{'agreements':'agreement_name'},'contract title':{'agreements':'agreement_name'},
+  'counterparty':{'agreements':'company_name'},
+  'effective date':{'agreements':'effective_date'},'start date':{'agreements':'effective_date'},
+  'expiration date':{'agreements':'expiration_date'},'expiry date':{'agreements':'expiration_date'},'end date':{'agreements':'expiration_date'},
+  'value':{'agreements':'value','invoices':'amount'},'contract value':{'agreements':'value'},
+  'invoice':{'invoices':'invoice_number'},'invoice number':{'invoices':'invoice_number'},'invoice #':{'invoices':'invoice_number'},
+  'amount':{'invoices':'amount','agreements':'value'},'due date':{'invoices':'due_date'},'invoice type':{'invoices':'fee_model'},'fee model':{'invoices':'fee_model'},
+  'programs':{'training_providers':'programs'},'programs offered':{'training_providers':'programs'},'curricula':{'training_providers':'programs'},'courses':{'training_providers':'programs'},
+  'provider type':{'training_providers':'provider_type'},
+  'department or contact':{'training_providers':'__skip'},'department':{'training_providers':'__skip'},
   'status':'status','lifecycle stage':'status','deal stage':'status','lead status':'status',
   'state':'state','st':'state','city':'city','county':'county',
   'address':'address','street address':'address','mailing address':'address','zip':'zip','zip code':'zip','postal code':'zip',
   'notes':'notes','description':'notes','comments':'notes','update':'notes','latest update':'notes','lastest update':'notes',
   'tags':'tags','labels':'tags','categories':'tags',
-  'contact name':'primary_contact_name','contact':'primary_contact_name','full name':'primary_contact_name','primary contact':'primary_contact_name','poc':'primary_contact_name',
+  'contact name':{'companies':'primary_contact_name','training_providers':'__skip'},'contact':'primary_contact_name','full name':'primary_contact_name','primary contact':'primary_contact_name','poc':'primary_contact_name',
   'owner':'owner','assigned to':'owner','account owner':'owner','rep':'owner',
-  'email':{'companies':'primary_contact_email','wibs':'wib_email'},'email address':{'companies':'primary_contact_email','wibs':'wib_email'},
-  'contact email':'primary_contact_email','work email':'primary_contact_email','business email':'primary_contact_email',
-  'phone':{'companies':'primary_contact_phone','wibs':'wib_phone'},'phone number':{'companies':'primary_contact_phone','wibs':'wib_phone'},
-  'contact phone':'primary_contact_phone','mobile':'primary_contact_phone','cell':'primary_contact_phone','work phone':'primary_contact_phone',
+  'email':{'companies':'primary_contact_email','wibs':'wib_email','training_providers':'contact_email'},'email address':{'companies':'primary_contact_email','wibs':'wib_email','training_providers':'contact_email'},
+  'contact email':{'companies':'primary_contact_email','wibs':'wib_email','training_providers':'contact_email'},'work email':'primary_contact_email','business email':'primary_contact_email',
+  'phone':{'companies':'primary_contact_phone','wibs':'wib_phone','training_providers':'contact_phone'},'phone number':{'companies':'primary_contact_phone','wibs':'wib_phone','training_providers':'contact_phone'},
+  'contact phone':{'companies':'primary_contact_phone','wibs':'wib_phone','training_providers':'contact_phone'},'mobile':'primary_contact_phone','cell':'primary_contact_phone','work phone':'primary_contact_phone',
   'contact type':'contact_type','title':'contact_type','job title':'contact_type','position':'contact_type','role':'contact_type',
-  'domain':{'companies':'domain','wibs':'source_url'},'website':{'companies':'domain','wibs':'source_url'},'web site':{'companies':'domain','wibs':'source_url'},
-  'url':{'companies':'domain','wibs':'source_url'},'company url':'domain','company website':'domain',
+  'domain':{'companies':'domain','wibs':'source_url'},'website':{'companies':'domain','wibs':'source_url','training_providers':'website'},'web site':{'companies':'domain','wibs':'source_url','training_providers':'website'},
+  'url':{'companies':'domain','wibs':'source_url','training_providers':'website'},'company url':'domain','company website':'domain','website url':{'wibs':'source_url','training_providers':'website'},
   'fein':'fein','tax id':'fein','ein':'fein','federal tax id':'fein','tin':'fein',
   'rating':'rating','score':'rating',
   'call priority':{'companies':'call_priority','wibs':'call_priority'},'call priority score':{'companies':'call_priority','wibs':'call_priority'},'priority':{'companies':'call_priority','wibs':'call_priority'},
@@ -4665,7 +4680,10 @@ function _loadAllMappings(type, sourceHeaders){
   const out={}
   sourceHeaders.forEach(h=>{
     const v=_loadMapping(type,h)
-    if(v) out[h]=v
+    // Ignore a stale '__skip' — earlier app versions auto-saved columns as
+    // '__skip' when field-defs were missing; honoring that would permanently
+    // block the column. Only carry forward real saved field keys.
+    if(v && v!=='__skip') out[h]=v
   })
   return out
 }
@@ -4747,9 +4765,11 @@ function _resolveRelationalHeader(header, type, fieldDefs){
 function resolveImportHeader(header, type, fieldDefs){
   if(!header) return '__skip'
 
-  /* 1. Saved mapping */
+  /* 1. Saved mapping — but IGNORE a stale '__skip'. Earlier app versions with
+        missing field-defs auto-saved columns as '__skip', which would then
+        permanently block them. Only honor a saved REAL field key. */
   const saved = _loadMapping(type, header)
-  if(saved) return saved
+  if(saved && saved !== '__skip') return saved
 
   const h = header.toLowerCase().trim().replace(/[_\-]+/g,' ').replace(/[^a-z0-9 >]/g,'').trim()
   const hClean = h.replace(/[^a-z0-9]/g,'')
@@ -10863,10 +10883,16 @@ function _smartKeywordScore(words, fieldKey) {
 }
 function smartMatch(header, type) {
   if (!header) return '__skip'
-  /* 0. Saved mapping from localStorage (user\'s own past choice — highest priority) */
+  /* 0. Saved mapping from localStorage (user's own past choice).
+     IMPORTANT FIX: a saved value of '__skip' must NOT override a real match.
+     Earlier versions of this app had missing field-defs for some import types,
+     which caused columns to be auto-saved as '__skip'. Those stale skips would
+     then permanently block the column from ever mapping. So: honor a saved
+     value ONLY if it's a real field key, not '__skip'. If it's '__skip',
+     fall through and recompute from the synonym map / scorers below. */
   try {
     var saved = localStorage.getItem('valorMappingV1:' + type + ':' + header.toLowerCase().trim())
-    if (saved) return saved
+    if (saved && saved !== '__skip') return saved
   } catch(_) {}
   /* Normalise: lower, collapse separators to spaces */
   var h = header.toLowerCase().trim().replace(/[_\-\./\\]+/g,' ').replace(/\s+/g,' ')
