@@ -10121,7 +10121,21 @@ async function runFullImport(){
     window._importRows=null
 
     if(totalCreated>0){
-      setTimeout(()=>{closeModal();if(['companies','wibs','locations','funding','applications'].includes(currentPage)){loadPage(currentPage)}else{loadPage(type)}},totalErrors.length>0?3000:1500)
+      // Map the import type to the page route that displays it. Import types
+      // and page routes don't always match 1:1 (e.g. type 'training_providers'
+      // is shown by page 'training'). Reload the correct page after import.
+      const _typeToPage = {
+        companies:'companies', wibs:'wibs', locations:'locations',
+        funding:'funding', applications:'applications',
+        training_providers:'training', invoices:'revenue', agreements:'agreements',
+      }
+      const _reloadPage = _typeToPage[type]
+        || (['companies','wibs','locations','funding','applications'].includes(currentPage) ? currentPage : null)
+      setTimeout(()=>{
+        closeModal()
+        if(_reloadPage){ loadPage(_reloadPage) }
+        else if(currentPage){ loadPage(currentPage) }
+      }, totalErrors.length>0?3000:1500)
     }else{
       if(preview&&totalErrors.length){
         // Strip internal DEBUG prefix from error messages before showing to user
