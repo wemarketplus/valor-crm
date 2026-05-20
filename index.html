@@ -2182,8 +2182,10 @@ async function pageDashboard(){
 ═══════════════════════════════════════════════════ */
 async function pageWibs(){
   // Load WIBs, territories, and user's saved view pref in parallel
+  // limit=5000 ensures the full WIB list loads (was 1000 — fine today but
+  // headroom for growth; server caps at 5000 anyway)
   const [data, terrData, viewPref] = await Promise.all([
-    api('/api/wibs?limit=1000'),
+    api('/api/wibs?limit=5000'),
     api('/api/territories').catch(()=>({data:[]})),
     api('/api/me/wib-view').catch(()=>({view_mode:'all',territories:[]}))
   ])
@@ -4995,7 +4997,7 @@ async function pageTerritories(){
   // Pre-fetch WIBs if not yet cached so the local boards panel can populate
   // when a state is clicked, even if the Workforce Boards page hasn't been visited.
   if(!window._wibs || !window._wibs.length){
-    api('/api/wibs?limit=1000').then(r=>{ window._wibs=r.data||[] }).catch(()=>{})
+    api('/api/wibs?limit=5000').then(r=>{ window._wibs=r.data||[] }).catch(()=>{})
   }
 
   // Load territories list (async — runs after map is already painted)
@@ -5003,7 +5005,7 @@ async function pageTerritories(){
     const [terrRes,usersRes,wibsRes]=await Promise.all([
       api('/api/territories'),
       api('/api/users').catch(()=>({data:[]})),
-      api('/api/wibs?limit=1000').catch(()=>({data:[]}))
+      api('/api/wibs?limit=5000').catch(()=>({data:[]}))
     ])
     const territories=terrRes.data||[]
     const users=usersRes.data||[]
