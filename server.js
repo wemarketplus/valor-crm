@@ -154,40 +154,55 @@ app.use(express.static(path.join(__dirname, 'public'), { index: false, dotfiles:
 // reach out to cdnjs/jsdelivr/unpkg (which can be blocked by ad blockers,
 // browser extensions, or corporate network policies).
 //
-// SETUP: download SheetJS from https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
-// (or https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js if you
-// prefer the older mainstream version) and save it to your repo at:
+// SETUP: download SheetJS from https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js
+// and commit it to your repo. The route below auto-discovers it in any of
+// these locations (whichever matches your repo layout):
 //
-//     src/public/static/xlsx.full.min.js
+//   xlsx.full.min.js                  (repo root — works for flat repos)
+//   static/xlsx.full.min.js           (repo root /static/)
+//   public/xlsx.full.min.js           (public folder)
+//   public/static/xlsx.full.min.js    (public/static folder)
 //
-// Then commit + push. Render will redeploy and the file becomes available at
-// both /static/xlsx.full.min.js (via express.static above) and at
-// /api/static/xlsx.full.min.js (via this explicit route). The frontend's
-// _loadXLSX() tries the /api/static path first.
+// Once placed and pushed, Render redeploys and the file is reachable at
+// /api/static/xlsx.full.min.js (this route) AND at /static/xlsx.full.min.js
+// or wherever express.static finds it.
 app.get('/api/static/xlsx.full.min.js', (req, res) => {
-  const xlsxPath = path.join(__dirname, 'public', 'static', 'xlsx.full.min.js')
-  // fs is already required at the top of this file
-  fs.access(xlsxPath, fs.constants.R_OK, (err) => {
-    if (err) {
-      // File not on disk — return 503 with actionable instructions in the body.
-      // The frontend will surface this to the user via the import error banner.
-      res.status(503).type('application/javascript').send(
-        '/* SheetJS not installed on the server.\n' +
-        ' * Download xlsx.full.min.js from:\n' +
-        ' *   https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js\n' +
-        ' * and commit it to your repo at:\n' +
-        ' *   src/public/static/xlsx.full.min.js\n' +
-        ' * Then redeploy. */\n' +
-        'console.error("[xlsx] not installed on server — see src/public/static/README");\n'
-      )
-      return
-    }
-    // Long cache — the file is versioned by content, never changes per request
-    res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
-    res.setHeader('Cache-Control', 'public, max-age=604800, immutable') // 7 days
-    res.setHeader('X-Content-Type-Options', 'nosniff')
-    res.sendFile(xlsxPath)
-  })
+  // Search candidate paths in order. First match wins.
+  const candidates = [
+    path.join(__dirname, 'xlsx.full.min.js'),
+    path.join(__dirname, 'static', 'xlsx.full.min.js'),
+    path.join(__dirname, 'public', 'xlsx.full.min.js'),
+    path.join(__dirname, 'public', 'static', 'xlsx.full.min.js'),
+  ]
+  let found = null
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) { found = p; break } } catch (_) {}
+  }
+  if (!found) {
+    // File not on disk — return 503 with actionable instructions in the body.
+    // The frontend surfaces this to the user via the import error banner.
+    res.status(503).type('application/javascript').send(
+      '/* SheetJS not installed on the server.\n' +
+      ' *\n' +
+      ' * Download xlsx.full.min.js from:\n' +
+      ' *   https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js\n' +
+      ' *\n' +
+      ' * Then commit it to your repo at ANY of these paths:\n' +
+      ' *   xlsx.full.min.js                  (root)\n' +
+      ' *   static/xlsx.full.min.js\n' +
+      ' *   public/xlsx.full.min.js\n' +
+      ' *   public/static/xlsx.full.min.js\n' +
+      ' *\n' +
+      ' * Push to GitHub, wait ~2 min for Render to redeploy, then retry. */\n' +
+      'console.error("[xlsx] not installed on server — drop xlsx.full.min.js into the repo");\n'
+    )
+    return
+  }
+  // Long cache — the file is versioned by content, never changes per request
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
+  res.setHeader('Cache-Control', 'public, max-age=604800, immutable') // 7 days
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.sendFile(found)
 })
 
 // ─── GLOBAL RATE LIMITER MOUNT (SEC-5) ────────────────────────────────────────
