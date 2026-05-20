@@ -1790,6 +1790,72 @@ app.post('/api/import/:type', async (req, res) => {
           results.errors.push(`"${name}": ${e.message}`)
         }
       }
+
+    // ═════════════ TRAINING PROVIDERS ═════════════════════════════════════════
+    // Stored in activity_log with action='TRAINING_PROVIDER'. Maps the 9-field
+    // schema. Accepts both snake_case and Title Case column keys.
+    } else if (type === 'training_providers') {
+      for (const row of rows) {
+        const name = String(row.name || row.Name || row.provider_name || row['Provider Name'] || row.company_name || row['Company Name'] || '').trim()
+        if (!name) { results.errors.push('Skipped — no provider name'); continue }
+        const metadata = {
+          name,
+          provider_type: row.provider_type || row['Provider Type'] || row.type || row.Type || '',
+          state:         row.state         || row.State         || '',
+          website:       row.website       || row.Website       || row.url || row.URL || '',
+          contact_email: row.contact_email || row['Contact Email'] || row.email || row.Email || '',
+          contact_phone: row.contact_phone || row['Contact Phone'] || row.phone || row.Phone || '',
+          programs:      row.programs      || row.Programs      || row.description || '',
+          status:        row.status        || row.Status        || 'active',
+          notes:         row.notes         || row.Notes         || '',
+          created_at:    new Date().toISOString(),
+        }
+        try {
+          await safeInsertLog({
+            user_id:     importUser.id,
+            action:      'TRAINING_PROVIDER',
+            record_type: 'training_provider',
+            details:     name,
+            metadata,
+          })
+          results.created++
+        } catch (e) {
+          results.errors.push(`"${name}": ${e.message}`)
+        }
+      }
+
+    // ═════════════ INVOICES ═══════════════════════════════════════════════════
+    // Stored in activity_log with action='INVOICE'.
+    } else if (type === 'invoices') {
+      for (const row of rows) {
+        const invNum = String(row.invoice_number || row['Invoice Number'] || '').trim()
+                       || `INV-${Date.now().toString().slice(-6)}-${results.created}`
+        const companyName = String(row.company_name || row['Company Name'] || '').trim()
+        const amountRaw = row.amount || row.Amount || row.value || row.Value || ''
+        const amount = amountRaw !== '' ? (parseFloat(String(amountRaw).replace(/[$,\s]/g, '')) || null) : null
+        const metadata = {
+          invoice_number: invNum,
+          company_name:   companyName || null,
+          amount:         amount,
+          fee_model:      row.fee_model || row['Invoice Type'] || '',
+          status:         row.status || row.Status || 'draft',
+          due_date:       row.due_date || row['Due Date'] || '',
+          notes:          row.notes || row.Notes || '',
+          created_at:     new Date().toISOString(),
+        }
+        try {
+          await safeInsertLog({
+            user_id:     importUser.id,
+            action:      'INVOICE',
+            record_type: 'invoice',
+            details:     invNum,
+            metadata,
+          })
+          results.created++
+        } catch (e) {
+          results.errors.push(`"${invNum}": ${e.message}`)
+        }
+      }
     } else {
       return res.status(400).json({ error: `Import not supported for type: ${type}` })
     }
