@@ -149,6 +149,47 @@ app.use((req, res, next) => {
 
 app.use(express.static(path.join(__dirname, 'public'), { index: false, dotfiles: 'deny' }))
 
+// ─── PHASE 1: ZERO-CDN SHEETJS LIBRARY SERVER ─────────────────────────────────
+// Serves xlsx.full.min.js from this same origin so the frontend never has to
+// reach out to cdnjs/jsdelivr/unpkg (which can be blocked by ad blockers,
+// browser extensions, or corporate network policies).
+//
+// SETUP: download SheetJS from https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js
+// (or https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js if you
+// prefer the older mainstream version) and save it to your repo at:
+//
+//     src/public/static/xlsx.full.min.js
+//
+// Then commit + push. Render will redeploy and the file becomes available at
+// both /static/xlsx.full.min.js (via express.static above) and at
+// /api/static/xlsx.full.min.js (via this explicit route). The frontend's
+// _loadXLSX() tries the /api/static path first.
+app.get('/api/static/xlsx.full.min.js', (req, res) => {
+  const xlsxPath = path.join(__dirname, 'public', 'static', 'xlsx.full.min.js')
+  // fs is already required at the top of this file
+  fs.access(xlsxPath, fs.constants.R_OK, (err) => {
+    if (err) {
+      // File not on disk — return 503 with actionable instructions in the body.
+      // The frontend will surface this to the user via the import error banner.
+      res.status(503).type('application/javascript').send(
+        '/* SheetJS not installed on the server.\n' +
+        ' * Download xlsx.full.min.js from:\n' +
+        ' *   https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js\n' +
+        ' * and commit it to your repo at:\n' +
+        ' *   src/public/static/xlsx.full.min.js\n' +
+        ' * Then redeploy. */\n' +
+        'console.error("[xlsx] not installed on server — see src/public/static/README");\n'
+      )
+      return
+    }
+    // Long cache — the file is versioned by content, never changes per request
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8')
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable') // 7 days
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.sendFile(xlsxPath)
+  })
+})
+
 // ─── GLOBAL RATE LIMITER MOUNT (SEC-5) ────────────────────────────────────────
 if (_rateLimit) {
   app.use(_rateLimit({
@@ -873,6 +914,95 @@ app.delete('/api/contracts/:id', auth, requireAdmin, async (req,res)=>{
   if (error) return res.status(400).json({error:error.message}); res.json({success:true})
 })
 
+// ─── AGREEMENTS (PHASE 1) ─────────────────────────────────────────────────────
+// Agreements live in activity_log with action='AGREEMENT'. Metadata schema:
+//   { agreement_name, company_name, status, effective_date, expiration_date,
+//     value, notes, ... }
+// Frontend reads via /api/agreements, mutates via POST/PUT, deletes via DELETE.
+app.get('/api/agreements', auth, async (req,res)=>{
+  const { limit=500, status } = req.query
+  let q = supabase.from('activity_log')
+    .select('*, user:user_profiles!user_id(full_name)')
+    .eq('action','AGREEMENT')
+    .order('created_at',{ascending:false})
+    .limit(Math.min(+limit,1000))
+  if (status) q = q.contains('metadata', { status })
+  const { data, error } = await q
+  if (error) return res.status(400).json({error:error.message})
+  res.json({data: data || []})
+})
+
+app.get('/api/agreements/stats', auth, async (req,res)=>{
+  // Lightweight stats card — counts by status
+  try {
+    const { data, error } = await supabase.from('activity_log')
+      .select('metadata').eq('action','AGREEMENT').limit(2000)
+    if (error) return res.status(400).json({error:error.message})
+    const by_status = { draft:0, pending_signature:0, signed:0, active:0, expired:0, terminated:0 }
+    let active = 0, pending_signature = 0, total_value = 0
+    for (const row of (data || [])) {
+      const m = row.metadata || {}
+      const s = m.status || 'draft'
+      by_status[s] = (by_status[s] || 0) + 1
+      if (s === 'active' || s === 'signed') active++
+      if (s === 'pending_signature') pending_signature++
+      const v = parseFloat(m.value || m.amount || 0)
+      if (Number.isFinite(v)) total_value += v
+    }
+    res.json({ by_status, active, pending_signature, total_value, total: (data || []).length })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/agreements', auth, async (req,res)=>{
+  const { agreement_name, title, company_name, counterparty, status='draft',
+          effective_date, expiration_date, value, amount, notes,
+          agreement_type } = req.body || {}
+  const name = (agreement_name || title || '').toString().trim()
+  if (!name) return res.status(400).json({error:'Agreement name required'})
+  const metadata = {
+    agreement_name:   name,
+    title:            name, // back-compat
+    company_name:     company_name || counterparty || null,
+    counterparty:     counterparty || company_name || null,
+    status:           status || 'draft',
+    effective_date:   effective_date || null,
+    expiration_date:  expiration_date || null,
+    value:            value != null ? parseFloat(value) || null : (amount != null ? parseFloat(amount) || null : null),
+    notes:            notes || null,
+    agreement_type:   agreement_type || null,
+    created_at:       new Date().toISOString(),
+  }
+  try {
+    const inserted = await safeInsertLog({
+      user_id:     req.user.id,
+      action:      'AGREEMENT',
+      record_type: 'agreement',
+      details:     name,
+      metadata,
+    })
+    res.json(inserted || { id: null, action:'AGREEMENT', metadata, created_at: metadata.created_at })
+  } catch (e) { res.status(400).json({ error: e.message }) }
+})
+
+app.put('/api/agreements/:id', auth, async (req,res)=>{
+  const { data:ex } = await supabase.from('activity_log')
+    .select(global._safeActivityCols||'id,action,created_at,metadata,details')
+    .eq('id',req.params.id).single()
+  if (!ex) return res.status(404).json({ error: 'Agreement not found' })
+  const existing = ex.metadata || (() => { try { return JSON.parse(ex.details || '{}') } catch { return {} } })()
+  const merged = { ...existing, ...req.body, updated_at: new Date().toISOString() }
+  const ud = global._hasMetadata ? { metadata: merged } : { details: JSON.stringify(merged) }
+  const { data, error } = await supabase.from('activity_log').update(ud).eq('id',req.params.id).select().single()
+  if (error) return res.status(400).json({ error:error.message })
+  res.json(data)
+})
+
+app.delete('/api/agreements/:id', auth, requireAdmin, async (req,res)=>{
+  const { error } = await supabase.from('activity_log').delete().eq('id',req.params.id).eq('action','AGREEMENT')
+  if (error) return res.status(400).json({error:error.message})
+  res.json({success:true})
+})
+
 app.get('/api/grant-awards', auth, async (req,res)=>{
   const { data, error } = await supabase.from('applications').select('*, company:companies(company_name), wib:wib_records(wib_name,state), funding_opportunity:funding_opportunities(opportunity_name), revenue:revenue_records(fee_model,calculated_success_fee,invoice_status,payment_received_date)').in('status',['awarded','active','completed','closed']).order('created_at',{ascending:false})
   if (error) return res.status(400).json({error:error.message}); res.json({data})
@@ -1517,6 +1647,75 @@ app.post('/api/import/:type', async (req, res) => {
         if (error) { results.errors.push(`"${companyName}": ${error.message}`); if (results.errors.length===1) console.error('First app import error:',error.code,error.message,JSON.stringify(ir)) }
         else results.created++
       }
+
+    // ═════════════ AGREEMENTS (PHASE 1) ═══════════════════════════════════════
+    // Stored in activity_log with action='AGREEMENT'. Maps the 7-field schema
+    // from the frontend's IMPORT_FIELD_DEFS.agreements straight into metadata.
+    } else if (type === 'agreements') {
+      // Normalize known status synonyms onto canonical values
+      const statusMap = {
+        'draft':'draft','new':'draft',
+        'pending':'pending_signature','pending signature':'pending_signature','pending_signature':'pending_signature','out for signature':'pending_signature',
+        'signed':'signed','executed':'signed',
+        'active':'active','in force':'active',
+        'expired':'expired','lapsed':'expired',
+        'terminated':'terminated','cancelled':'terminated','canceled':'terminated','void':'terminated',
+      }
+      const parseMoney = (v) => {
+        if (v === null || v === undefined || v === '') return null
+        const n = parseFloat(String(v).replace(/[$,\s]/g, ''))
+        return Number.isFinite(n) ? n : null
+      }
+      const parseDate = (v) => {
+        if (!v) return null
+        const s = String(v).trim()
+        if (!s) return null
+        // Accept YYYY-MM-DD, MM/DD/YYYY, M/D/YY etc.
+        try {
+          const d = new Date(s)
+          if (isNaN(d.getTime())) return null
+          return d.toISOString().slice(0, 10)
+        } catch (_) { return null }
+      }
+      for (const row of rows) {
+        // Required: agreement_name. Skip with error logged if missing.
+        const name = (row.agreement_name || row['Agreement Name'] || row['Agreement Title'] || row.title || row.name || '').toString().trim()
+        if (!name) { results.errors.push('Skipped — no agreement_name'); continue }
+
+        const company  = (row.company_name || row['Company Name'] || row.counterparty || row['Counterparty'] || '').toString().trim() || null
+        const rawSt    = (row.status || row['Status'] || '').toString().toLowerCase().trim()
+        const status   = statusMap[rawSt] || 'draft'
+        const effDate  = parseDate(row.effective_date  || row['Effective Date']  || row.start_date  || row['Start Date'])
+        const expDate  = parseDate(row.expiration_date || row['Expiration Date'] || row.end_date    || row['End Date'])
+        const value    = parseMoney(row.value || row['Value'] || row.contract_value || row['Contract Value'] || row.amount || row['Amount'])
+        const notes    = (row.notes || row['Notes'] || '').toString().trim() || null
+
+        const metadata = {
+          agreement_name:  name,
+          company_name:    company,
+          status:          status,
+          effective_date:  effDate,
+          expiration_date: expDate,
+          value:           value,
+          notes:           notes,
+          imported_at:     new Date().toISOString(),
+        }
+
+        // Use safeInsertLog so schema-cache flags handle metadata vs details fallback
+        try {
+          await safeInsertLog({
+            user_id:     importUser.id,
+            action:      'AGREEMENT',
+            record_type: 'agreement',
+            record_id:   null,
+            details:     name,
+            metadata:    metadata,
+          })
+          results.created++
+        } catch (e) {
+          results.errors.push(`"${name}": ${e.message}`)
+        }
+      }
     } else {
       return res.status(400).json({ error: `Import not supported for type: ${type}` })
     }
@@ -1592,6 +1791,39 @@ app.get('/api/export/:type', auth, async (req, res) => {
     res.setHeader('Content-Type','text/csv')
     res.setHeader('Content-Disposition', `attachment; filename="valor-audit-${new Date().toISOString().split('T')[0]}.csv"`)
     return res.send([h.map(esc).join(','), ...r.map(r => r.map(esc).join(','))].join('\n'))
+  }
+  // ─── AGREEMENTS (PHASE 1) — stored in activity_log with action='AGREEMENT' ──
+  // Mirrors the import schema: agreement_name, company_name, status,
+  // effective_date, expiration_date, value, notes (+ created_at for context).
+  if (type === 'agreements') {
+    const cols = 'id,created_at,details' + (global._hasMetadata !== false ? ',metadata' : '')
+    const { data, error } = await supabase
+      .from('activity_log')
+      .select(cols)
+      .eq('action', 'AGREEMENT')
+      .order('created_at', { ascending: false })
+      .limit(5000)
+    if (error) return res.status(400).json({ error: error.message })
+    const h = ['Agreement Name','Company Name','Status','Effective Date','Expiration Date','Value','Notes','Created']
+    const r = (data || []).map(row => {
+      const m = row.metadata || (() => {
+        try { return JSON.parse(row.details || '{}') } catch { return {} }
+      })()
+      return [
+        m.agreement_name || row.details || '',
+        m.company_name || m.counterparty || '',
+        m.status || 'draft',
+        m.effective_date || m.start_date || '',
+        m.expiration_date || m.end_date || '',
+        m.value != null ? m.value : (m.amount || ''),
+        (m.notes || '').replace(/[\r\n]+/g, ' '),
+        row.created_at ? row.created_at.slice(0,10) : '',
+      ]
+    })
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="valor-agreements-${new Date().toISOString().split('T')[0]}.csv"`)
+    safeInsertLog({ user_id: req.user.id, action: 'EXPORT', details: `Exported agreements — ${r.length} records` }).catch(() => {})
+    return res.send([h.map(esc).join(','), ...r.map(row => row.map(esc).join(','))].join('\n'))
   }
 
   const config = EXPORT_CONFIG[type]
@@ -3481,28 +3713,11 @@ app.get('/api/health/detailed', auth, requireAdmin, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.get('/api/admin/cron/daily', async (req, res) => {
-  // Auth: accept EITHER a valid x-cron-secret header (for Render Cron / external scheduler)
-  // OR a valid admin session (for manual button click from the UI).
   const cronSecret = process.env.CRON_SECRET
   const provided   = req.headers['x-cron-secret'] || req.query.secret
-  const secretOK   = cronSecret && provided === cronSecret
 
-  if (!secretOK) {
-    // Fall back to admin auth
-    try {
-      const rawToken = (req.headers.authorization || '').replace('Bearer ', '').trim()
-      if (!rawToken || rawToken.length < 10) {
-        return res.status(403).json({ error: 'Unauthorized — provide x-cron-secret header or admin Bearer token' })
-      }
-      const { data: { user }, error: authErr } = await authClient.auth.getUser(rawToken)
-      if (authErr || !user) return res.status(401).json({ error: 'Session expired' })
-      const { data: profile } = await supabase.from('user_profiles').select('role,is_active').eq('id', user.id).single()
-      if (!profile || profile.is_active === false || !['super_admin','admin'].includes(profile.role)) {
-        return res.status(403).json({ error: 'Admin access required' })
-      }
-    } catch (e) {
-      return res.status(403).json({ error: 'Authentication failed: ' + e.message })
-    }
+  if (!cronSecret || provided !== cronSecret) {
+    return res.status(403).json({ error: 'Unauthorized — set CRON_SECRET in Render environment variables' })
   }
 
   const results = { ran_at: new Date().toISOString(), tasks: {} }
@@ -3532,161 +3747,6 @@ app.get('/api/admin/cron/daily', async (req, res) => {
       ? { status: 'error', message: error.message }
       : { status: 'ok', count: (overdue || []).length }
   } catch (e) { results.tasks.overdue_invoices_flagged = { status: 'error', message: e.message } }
-
-  // Task 5: Overdue invoice notifications (activity_log INVOICE entries)
-  // - Finds all INVOICE rows whose metadata.due_date < today and status is not paid/cancelled
-  // - Flips metadata.status to 'overdue' (the frontend banner reads this)
-  // - Creates a notification to the user who owns the invoice (idempotent: 24h dedupe)
-  try {
-    const today = new Date().toISOString().split('T')[0]
-    const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
-    const { data: invs } = await supabase
-      .from('activity_log')
-      .select('id, user_id, details, metadata')
-      .eq('action', 'INVOICE')
-      .order('created_at', { ascending: false })
-      .limit(3000)
-    let flipped = 0, notified = 0
-    for (const inv of (invs || [])) {
-      const m = inv.metadata || {}
-      if (!m.due_date) continue
-      const status = (m.status || '').toLowerCase()
-      if (['paid','cancelled','voided','void'].includes(status)) continue
-      if (m.due_date >= today) continue
-      // Flip to overdue if not already
-      if (status !== 'overdue') {
-        try { await supabase.from('activity_log').update({ metadata: { ...m, status: 'overdue' } }).eq('id', inv.id); flipped++ } catch (_) {}
-      }
-      if (!inv.user_id) continue
-      // 24h dedupe — skip if a recent overdue notification exists for this invoice
-      const { data: existing } = await supabase
-        .from('notifications').select('id')
-        .eq('recipient_id', inv.user_id).eq('type', 'invoice_overdue').eq('record_id', inv.id)
-        .gte('created_at', yesterday).limit(1)
-      if (existing && existing.length) continue
-      const daysOverdue = Math.floor((Date.now() - new Date(m.due_date).getTime()) / (24 * 3600 * 1000))
-      try {
-        await createNotification({
-          recipientId: inv.user_id, type: 'invoice_overdue',
-          title: `Invoice ${m.invoice_number || inv.details} is overdue`,
-          body: `${m.company_name || 'Client'} — $${m.amount || '?'} — ${daysOverdue} day${daysOverdue === 1 ? '' : 's'} past due (due ${m.due_date})`,
-          recordType: 'invoices', recordId: inv.id,
-        })
-        notified++
-      } catch (_) {}
-    }
-    results.tasks.notify_overdue_invoices = { status: 'ok', flipped, notified }
-  } catch (e) { results.tasks.notify_overdue_invoices = { status: 'error', message: e.message } }
-
-  // Task 6: Missing employer agreement notifications
-  // - For every active/in-progress/submitted application, check if the company has a
-  //   signed/active 'employer' AGREEMENT. If not, notify the application owner.
-  // - 24h dedupe per (recipient, application).
-  try {
-    const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
-    const { data: apps } = await supabase
-      .from('applications')
-      .select('id, company_id, owner_id, status')
-      .in('status', ['awarded','active','in_progress','submitted','under_review'])
-      .limit(3000)
-    const { data: agreements } = await supabase
-      .from('activity_log')
-      .select('id, record_id, metadata')
-      .eq('action', 'AGREEMENT')
-      .limit(5000)
-    const haveEmployerAgreement = new Set()
-    for (const a of (agreements || [])) {
-      const m = a.metadata || {}
-      if (m.agreement_type !== 'employer') continue
-      if (!['signed','active'].includes(m.status)) continue
-      if (m.company_id) haveEmployerAgreement.add(m.company_id)
-      if (a.record_id)  haveEmployerAgreement.add(a.record_id)
-    }
-    let notified = 0
-    for (const app of (apps || [])) {
-      if (!app.company_id || !app.owner_id) continue
-      if (haveEmployerAgreement.has(app.company_id)) continue
-      const { data: existing } = await supabase
-        .from('notifications').select('id')
-        .eq('recipient_id', app.owner_id).eq('type', 'agreement_missing').eq('record_id', app.id)
-        .gte('created_at', yesterday).limit(1)
-      if (existing && existing.length) continue
-      try {
-        await createNotification({
-          recipientId: app.owner_id, type: 'agreement_missing',
-          title: 'Active application has no signed employer agreement',
-          body: `Application ${String(app.id).slice(0,8)} (${app.status}) — no signed employer agreement on file. Create one in the Agreements tab.`,
-          recordType: 'applications', recordId: app.id,
-        })
-        notified++
-      } catch (_) {}
-    }
-    results.tasks.notify_missing_agreements = { status: 'ok', notified }
-  } catch (e) { results.tasks.notify_missing_agreements = { status: 'error', message: e.message } }
-
-  // Task 7: Stage 10 — 90-day renewal task auto-creation
-  // - For every funding_opportunity with application_deadline ≈ 90 days from today
-  //   (±1 day window), create a TASK in activity_log assigned to a super_admin.
-  // - 7-day dedupe — won't recreate if a renewal task for the same funding was
-  //   created in the last 7 days.
-  try {
-    const ninety = new Date(Date.now() + 90 * 24 * 3600 * 1000)
-    const minus1 = new Date(ninety.getTime() - 24 * 3600 * 1000).toISOString().split('T')[0]
-    const plus1  = new Date(ninety.getTime() + 24 * 3600 * 1000).toISOString().split('T')[0]
-    const target = ninety.toISOString().split('T')[0]
-    const { data: funding } = await supabase
-      .from('funding_opportunities')
-      .select('id, opportunity_name, application_deadline, wib_id, status')
-      .in('status', ['open','pending','pending_employer'])
-      .gte('application_deadline', minus1).lte('application_deadline', plus1)
-      .limit(500)
-    const { data: admins } = await supabase
-      .from('user_profiles').select('id').eq('role','super_admin').eq('is_active', true)
-      .order('created_at', { ascending: true }).limit(1)
-    const assigneeId = admins && admins[0] ? admins[0].id : null
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString()
-    let created = 0
-    for (const f of (funding || [])) {
-      const { data: existing } = await supabase
-        .from('activity_log')
-        .select('id, metadata')
-        .eq('action', 'TASK').eq('record_id', f.id)
-        .gte('created_at', sevenDaysAgo).limit(20)
-      const dupes = (existing || []).some(t => (t.metadata?.title || '').toLowerCase().includes('renewal'))
-      if (dupes) continue
-      const { error } = await supabase.from('activity_log').insert({
-        user_id: assigneeId,
-        action: 'TASK',
-        record_type: 'funding_opportunities',
-        record_id: f.id,
-        details: `90-day renewal: ${f.opportunity_name}`,
-        metadata: {
-          title: `90-day renewal: ${f.opportunity_name}`,
-          due_date: target,
-          priority: 'high',
-          done: false,
-          assigned_to: assigneeId,
-          notes: `Auto-created by daily cron. Funding deadline is ${f.application_deadline}. Reach out to WIB to identify renewal or successor funding.`,
-          source: 'cron_renewal',
-          auto_created: true,
-        },
-      })
-      if (!error) {
-        created++
-        if (assigneeId) {
-          try {
-            await createNotification({
-              recipientId: assigneeId, type: 'renewal_task',
-              title: `Renewal task: ${f.opportunity_name}`,
-              body: `Funding deadline in ~90 days (${f.application_deadline}). Renewal task created.`,
-              recordType: 'funding_opportunities', recordId: f.id,
-            })
-          } catch (_) {}
-        }
-      }
-    }
-    results.tasks.renewal_tasks_created = { status: 'ok', created }
-  } catch (e) { results.tasks.renewal_tasks_created = { status: 'error', message: e.message } }
 
   // Task 4: Log the cron run to activity log
   try {
@@ -4238,415 +4298,6 @@ app.get('/api/training-providers/export/xlsx', auth, async (req, res) => {
   res.send(buffer)
 })
 
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// WIB IMPORT BATCH SYSTEM — Batch-tagged imports + rollback (FUTURE imports only)
-// ═══════════════════════════════════════════════════════════════════════════════
-// The existing /api/import/wibs and /api/import/wibs/csv endpoints are
-// intentionally LEFT UNTOUCHED. Past imports cannot be rolled back because
-// they were never tagged. From this point forward, the frontend can opt
-// into batch-tracked imports by posting to /api/import/wibs/batch.
-//
-// Storage: batches are tracked as activity_log rows with action='WIB_IMPORT_BATCH'.
-// Each created WIB record has its notes field prefixed with [batch:<batch_id>]
-// on the first line — rollback uses LIKE 'notes' '[batch:<id>]%' to find them.
-//
-// To opt into batch tracking, change importCSV('wibs') in the frontend to
-// importCSV('wibs/batch'). Existing import paths keep working unchanged.
-
-app.post('/api/import/wibs/batch', async (req, res) => {
-  // Lightweight JWT-decode auth — matches the pattern used by the existing
-  // /api/import/:type so long imports don't 401 mid-batch.
-  let userProfile
-  try {
-    const rawToken = (req.headers.authorization || '').replace('Bearer ', '').trim()
-    if (!rawToken || rawToken.length < 10) return res.status(401).json({ error: 'Authentication required' })
-    let userId
-    try {
-      const payload = JSON.parse(Buffer.from(rawToken.split('.')[1], 'base64url').toString('utf8'))
-      userId = payload?.sub
-    } catch (_) {}
-    if (!userId) return res.status(401).json({ error: 'Invalid token' })
-    const { data: profile } = await supabase.from('user_profiles').select('*').eq('id', userId).single()
-    if (!profile) return res.status(401).json({ error: 'User not found' })
-    if (profile.is_active === false) return res.status(403).json({ error: 'Account disabled' })
-    userProfile = profile
-  } catch (e) {
-    return res.status(401).json({ error: 'Auth failed' })
-  }
-
-  const { rows, batch: batchNumber, totalBatches, batch_id: existingBatchId, filename } = req.body || {}
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return res.status(400).json({ error: 'No rows provided' })
-  }
-
-  // First chunk creates the batch tracker row; subsequent chunks reuse the
-  // batch_id passed back from the first response.
-  let batchId = existingBatchId
-  if (!batchId) {
-    const { data: batchRow, error: batchErr } = await supabase
-      .from('activity_log').insert({
-        user_id: userProfile.id,
-        action: 'WIB_IMPORT_BATCH',
-        details: filename || ('WIB import ' + new Date().toISOString()),
-        metadata: {
-          filename: filename || null,
-          started_at: new Date().toISOString(),
-          total_rows_expected: rows.length * (totalBatches || 1),
-          status: 'in_progress',
-        },
-      }).select('id').single()
-    if (batchErr || !batchRow) {
-      return res.status(500).json({ error: 'Could not create batch record: ' + (batchErr?.message || 'unknown') })
-    }
-    batchId = batchRow.id
-  }
-
-  const results = { created: 0, errors: [], batch_id: batchId, batch: batchNumber || 1, totalBatches: totalBatches || 1 }
-
-  const wibStatusMap = {
-    'funding available':'funding_available','funding_available':'funding_available','open':'funding_available','active':'funding_available',
-    'follow up needed':'follow_up_needed','follow_up_needed':'follow_up_needed','follow up':'follow_up_needed',
-    'pending employer':'pending_employer','pending_employer':'pending_employer','pending':'pending_employer',
-    'no reachout completed':'no_reachout_complete','no reachout complete':'no_reachout_complete','no_reachout_complete':'no_reachout_complete','new':'no_reachout_complete','not contacted':'no_reachout_complete',
-    'funding not available':'funding_not_available','funding_not_available':'funding_not_available','closed':'funding_not_available','not applicable':'no_reachout_complete',
-    'stop applications':'stop_applications','stop_applications':'stop_applications',
-  }
-
-  const stateAbbr = {
-    'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA',
-    'colorado':'CO','connecticut':'CT','delaware':'DE','florida':'FL','georgia':'GA',
-    'hawaii':'HI','idaho':'ID','illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS',
-    'kentucky':'KY','louisiana':'LA','maine':'ME','maryland':'MD','massachusetts':'MA',
-    'michigan':'MI','minnesota':'MN','mississippi':'MS','missouri':'MO','montana':'MT',
-    'nebraska':'NE','nevada':'NV','new hampshire':'NH','new jersey':'NJ','new mexico':'NM',
-    'new york':'NY','north carolina':'NC','north dakota':'ND','ohio':'OH','oklahoma':'OK',
-    'oregon':'OR','pennsylvania':'PA','rhode island':'RI','south carolina':'SC',
-    'south dakota':'SD','tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT',
-    'virginia':'VA','washington':'WA','west virginia':'WV','wisconsin':'WI','wyoming':'WY',
-    'district of columbia':'DC','puerto rico':'PR',
-  }
-
-  const getField = (row, ...keys) => {
-    for (const k of keys) {
-      const v = row[k] ?? row[k.toLowerCase()] ?? row[k.toUpperCase()]
-      if (v !== undefined && String(v).trim() !== '' && String(v).trim() !== 'Not applicable') return String(v).trim()
-    }
-    for (const k of keys) {
-      const found = Object.keys(row).find(rk => rk.toLowerCase().replace(/[^a-z]/g,'').includes(k.toLowerCase().replace(/[^a-z]/g,'')))
-      if (found && String(row[found]).trim() && String(row[found]).trim() !== 'Not applicable') return String(row[found]).trim()
-    }
-    return null
-  }
-
-  const valid = []
-  for (const row of rows) {
-    // CRITICAL ANTI-CONTAMINATION: WIB Board Name comes from board-name columns ONLY.
-    // Contact-name columns (First Name, Last Name, Contact Name, etc.) are
-    // explicitly EXCLUDED here and folded into the contacts note below.
-    const name = getField(row, 'wib_name', 'Workforce Board', 'WIB Name', 'WIB', 'Board Name', 'Company_Name', 'Workforce Investment Board')
-    if (!name?.trim()) { results.errors.push('Skipped — no WIB board name'); continue }
-
-    const rawStatus = (getField(row, 'Status', 'WIB Status', 'Funding Status') || '').toLowerCase().trim()
-    const status = wibStatusMap[rawStatus] || 'no_reachout_complete'
-    const website = getField(row, 'Website', 'URL', 'Web', 'Homepage')
-    const domain = website ? website.replace(/^https?:\/\/(www\.)?/, '').split('/')[0] : null
-    const stateFromName = (name.match(/^([A-Z]{2})\s*-\s*/) || [])[1] || null
-    const rawState = getField(row, 'State', 'Region', 'State/Province')
-    const stateValue = stateFromName
-      || (rawState && rawState.length === 2 ? rawState.toUpperCase() : null)
-      || (rawState ? stateAbbr[rawState.toLowerCase()] : null)
-      || 'US'
-
-    // Contact names fold into notes, NOT into wib_name
-    const contactCols = Object.entries(row).filter(([k, v]) =>
-      /first[_\s]*name|last[_\s]*name|contact.*name|contacts.*name|primary[_\s]*contact/i.test(k)
-      && v && String(v).trim() && String(v).trim() !== 'Not applicable'
-    )
-    const noteParts = []
-    // Batch tag MUST be the first line for rollback search
-    noteParts.push(`[batch:${batchId}]`)
-    if (contactCols.length) {
-      noteParts.push('Contacts: ' + contactCols.map(([k, v]) => `${k}: ${String(v).trim()}`).join('; '))
-    }
-    const wibTypeVal = getField(row, 'Type', 'WIB Type', 'Board Type')
-    if (wibTypeVal) noteParts.push('WIB Type: ' + wibTypeVal)
-    const description = getField(row, 'Description', 'Notes', 'Comments')
-    if (description) noteParts.push(description)
-
-    valid.push({
-      wib_name: name,
-      short_name: getField(row, 'Short Name', 'Short', 'Abbreviation') || null,
-      state: stateValue,
-      status,
-      wib_email: getField(row, 'WIB Email Address', 'Email Address', 'Email', 'Contact Email') || null,
-      wib_phone: getField(row, 'Phone', 'WIB Phone', 'Contact Phone', 'Phone Number') || null,
-      website: domain || null,
-      source_url: website || 'https://careerOneStop.org',
-      notes: noteParts.join('\n'),
-      independent_creation_logged: true,
-      owner_id: userProfile.id,
-      last_verified_date: new Date().toISOString().split('T')[0],
-    })
-  }
-
-  // Bulk insert in chunks of 100, row-by-row fallback on chunk error
-  for (let i = 0; i < valid.length; i += 100) {
-    const chunk = valid.slice(i, i + 100)
-    const { data, error } = await supabase.from('wib_records').insert(chunk).select('id')
-    if (error) {
-      for (const rec of chunk) {
-        const { error: e2 } = await supabase.from('wib_records').insert(rec)
-        if (e2) results.errors.push(`"${rec.wib_name}": ${e2.message}`)
-        else results.created++
-      }
-    } else {
-      results.created += (data || chunk).length
-    }
-  }
-
-  // Update batch progress
-  try {
-    const { data: bRow } = await supabase.from('activity_log').select('metadata').eq('id', batchId).single()
-    const bMeta = (bRow && bRow.metadata) || {}
-    const newCreated = (bMeta.records_created || 0) + results.created
-    const isFinal = !batchNumber || batchNumber === totalBatches
-    await supabase.from('activity_log').update({
-      metadata: {
-        ...bMeta,
-        records_created: newCreated,
-        status: isFinal ? 'complete' : 'in_progress',
-        completed_at: isFinal ? new Date().toISOString() : null,
-      },
-    }).eq('id', batchId)
-  } catch (e) { console.warn('[wib-batch] could not update batch metadata:', e.message) }
-
-  res.json({
-    created: results.created,
-    errors: results.errors.slice(0, 20),
-    error_count: results.errors.length,
-    truncated: results.errors.length > 20,
-    total: rows.length,
-    batch: results.batch,
-    totalBatches: results.totalBatches,
-    batch_id: batchId,
-  })
-})
-
-// List all WIB import batches (most recent first) — admin only
-app.get('/api/admin/wib-import-batches', auth, requireAdmin, async (req, res) => {
-  const { data, error } = await supabase
-    .from('activity_log')
-    .select('id, user_id, details, metadata, created_at, user:user_profiles!user_id(full_name,email)')
-    .eq('action', 'WIB_IMPORT_BATCH')
-    .order('created_at', { ascending: false })
-    .limit(200)
-  if (error) return res.status(400).json({ error: error.message })
-  res.json({ data: data || [] })
-})
-
-// Roll back a specific batch — deletes every WIB whose notes starts with [batch:<id>],
-// marks the batch as rolled_back. Confirmation required via body { confirm:true }.
-app.post('/api/admin/wib-import-batches/:id/rollback', auth, requireAdmin, async (req, res) => {
-  const batchId = req.params.id
-  if (!req.body || req.body.confirm !== true) {
-    return res.status(400).json({ error: 'Send { "confirm": true } in the request body to execute rollback' })
-  }
-  const { data: batchRow } = await supabase
-    .from('activity_log').select('id, metadata, details')
-    .eq('id', batchId).eq('action', 'WIB_IMPORT_BATCH').single()
-  if (!batchRow) return res.status(404).json({ error: 'Batch not found' })
-  if ((batchRow.metadata || {}).status === 'rolled_back') {
-    return res.status(400).json({ error: 'Batch already rolled back' })
-  }
-
-  const tag = `[batch:${batchId}]`
-  const { data: tagged, error: searchErr } = await supabase
-    .from('wib_records').select('id, wib_name')
-    .like('notes', `${tag}%`).limit(5000)
-  if (searchErr) return res.status(500).json({ error: 'Search failed: ' + searchErr.message })
-
-  let deleted = 0
-  if (tagged && tagged.length) {
-    const ids = tagged.map(t => t.id)
-    for (let i = 0; i < ids.length; i += 100) {
-      const chunk = ids.slice(i, i + 100)
-      const { error: delErr } = await supabase.from('wib_records').delete().in('id', chunk)
-      if (!delErr) deleted += chunk.length
-      else console.warn('[wib-rollback] chunk delete failed:', delErr.message)
-    }
-  }
-
-  const oldMeta = batchRow.metadata || {}
-  await supabase.from('activity_log').update({
-    metadata: {
-      ...oldMeta,
-      status: 'rolled_back',
-      rolled_back_at: new Date().toISOString(),
-      rolled_back_by: req.user.id,
-      records_deleted: deleted,
-    },
-  }).eq('id', batchId)
-
-  try {
-    await supabase.from('activity_log').insert({
-      user_id: req.user.id,
-      action: 'WIB_BATCH_ROLLBACK',
-      record_type: 'activity_log',
-      record_id: batchId,
-      details: `Rolled back batch ${batchId} — deleted ${deleted} WIB records`,
-    })
-  } catch (_) {}
-
-  res.json({
-    success: true,
-    batch_id: batchId,
-    deleted,
-    message: `Rolled back batch. Deleted ${deleted} WIB records.`,
-  })
-})
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// AI SEARCH & SYSTEM UPDATE — Admin tool to refresh WIB info via web search
-// ═══════════════════════════════════════════════════════════════════════════════
-// Two-step flow to avoid silently overwriting verified data with AI hallucinations:
-//   1. POST { wib_id }              -> returns proposed updates for admin review
-//   2. POST { wib_id, apply:true,
-//             proposed_updates:{} } -> writes whitelisted fields to wib_records
-// Rate-limited to 5 calls per admin per hour.
-
-app.post('/api/admin/ai-system-update', auth, requireAdmin, async (req, res) => {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) {
-    return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured in environment variables.' })
-  }
-
-  const { wib_id, apply = false, proposed_updates } = req.body || {}
-
-  // Rate limit — 5 calls per admin per hour
-  const oneHourAgo = new Date(Date.now() - 3600 * 1000).toISOString()
-  const { count } = await supabase.from('activity_log')
-    .select('id', { count: 'exact', head: true })
-    .eq('user_id', req.user.id)
-    .eq('action', 'AI_SYSTEM_UPDATE')
-    .gte('created_at', oneHourAgo)
-  if ((count || 0) >= 5) {
-    return res.status(429).json({ error: 'AI System Update rate limit reached (5/hour). Try again later.' })
-  }
-
-  // APPLY path — write reviewed updates to the WIB record
-  if (apply && proposed_updates && wib_id) {
-    const allowedFields = ['wib_email', 'wib_phone', 'website', 'source_url', 'status', 'notes']
-    const patch = {}
-    for (const [k, v] of Object.entries(proposed_updates)) {
-      if (allowedFields.includes(k) && v !== null && v !== undefined && String(v).trim() !== '') {
-        patch[k] = v
-      }
-    }
-    if (Object.keys(patch).length === 0) {
-      return res.status(400).json({ error: 'No valid fields in proposed_updates. Allowed: ' + allowedFields.join(', ') })
-    }
-    patch.last_verified_date = new Date().toISOString().split('T')[0]
-    const { data, error } = await supabase.from('wib_records').update(patch).eq('id', wib_id).select().single()
-    if (error) return res.status(400).json({ error: error.message })
-    try {
-      await supabase.from('activity_log').insert({
-        user_id: req.user.id,
-        action: 'AI_SYSTEM_UPDATE',
-        record_type: 'wib_records',
-        record_id: wib_id,
-        details: `Applied AI-proposed updates: ${Object.keys(patch).join(', ')}`,
-        metadata: { applied: patch },
-      })
-    } catch (_) {}
-    return res.json({ success: true, applied: patch, wib: data })
-  }
-
-  // SEARCH path — research the WIB and return proposed updates
-  if (!wib_id) return res.status(400).json({ error: 'wib_id required' })
-  const { data: wib, error: wibErr } = await supabase.from('wib_records').select('*').eq('id', wib_id).single()
-  if (wibErr || !wib) return res.status(404).json({ error: 'WIB not found' })
-
-  const systemPrompt = 'You are a research assistant for Valor Workforce Funding LLC. ' +
-    'Find CURRENT, verifiable information about a specific Workforce Investment Board (WIB) ' +
-    'using web search. Return ONLY a JSON object with these fields if found (omit any you cannot verify): ' +
-    '{ "wib_email": "...", "wib_phone": "...", "website": "https://...", "source_url": "https://...", ' +
-    '"notes": "Brief summary of current programs/funding status", "confidence": "high|medium|low", ' +
-    '"sources": ["url1","url2"] }. ' +
-    'Only include fields you found from an official government or WIB source. ' +
-    'Never invent contact info. If you cannot find verified info, return {"confidence":"none","reason":"..."}.'
-
-  const userPrompt = `Find current contact info and program status for this Workforce Investment Board:\n\n` +
-    `Name: ${wib.wib_name}\n` +
-    `State: ${wib.state}\n` +
-    `Current website on file: ${wib.website || '(none)'}\n` +
-    `Current email on file: ${wib.wib_email || '(none)'}\n` +
-    `Current phone on file: ${wib.wib_phone || '(none)'}\n\n` +
-    `Search the web for the official WIB site, verify the contact info is current, and check whether their IWT/WIOA training funding programs are currently accepting applications. Return JSON only.`
-
-  try {
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        system: systemPrompt,
-        tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
-    })
-    const data = await r.json()
-    if (data.error) {
-      return res.status(500).json({ error: 'AI error: ' + data.error.message })
-    }
-
-    let finalText = ''
-    for (const block of (data.content || [])) {
-      if (block.type === 'text') finalText += block.text
-    }
-
-    let proposed = null
-    try {
-      const jsonMatch = finalText.match(/\{[\s\S]*\}/)
-      if (jsonMatch) proposed = JSON.parse(jsonMatch[0])
-    } catch (e) {
-      proposed = { raw: finalText, parse_error: e.message }
-    }
-
-    try {
-      await supabase.from('activity_log').insert({
-        user_id: req.user.id,
-        action: 'AI_SYSTEM_UPDATE',
-        record_type: 'wib_records',
-        record_id: wib_id,
-        details: `Searched for ${wib.wib_name}`,
-        metadata: { proposed, confidence: proposed?.confidence || 'unknown' },
-      })
-    } catch (_) {}
-
-    res.json({
-      wib: { id: wib.id, name: wib.wib_name, state: wib.state },
-      current: {
-        wib_email: wib.wib_email,
-        wib_phone: wib.wib_phone,
-        website: wib.website,
-        source_url: wib.source_url,
-      },
-      proposed,
-      raw_response: finalText.substring(0, 2000),
-      applied: false,
-      next_step: 'Review proposed updates, then POST again with {wib_id, apply:true, proposed_updates:{...}} to commit.',
-    })
-  } catch (e) {
-    console.error('[ai-system-update] error:', e)
-    res.status(500).json({ error: 'AI request failed: ' + e.message })
-  }
-})
 
 let _htmlPath=null
 function findHtmlPath() {
