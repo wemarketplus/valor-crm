@@ -1720,6 +1720,7 @@ function renderApp(){
         <div class="sb-divider"></div>
         ${sbi('revenue','💵','Revenue Tracker')}
         ${sbi('compliance','🛡','Compliance')}
+        ${sbi('training','🎓','Training Providers')}
         ${sbi('agreements','📄','Agreements')}
         ${sbi('ai','🤖','AI Assistant')}
           ${sbi('drive','📁','Files & Drive')}
@@ -6439,6 +6440,8 @@ function renderAgreementsPage(stats) {
     { id: 'referral',         label: 'Referral',             icon: '🤝' },
     { id: 'compliance',       label: 'Compliance',           icon: '🛡' },
     { id: 'consulting',       label: 'Consulting',           icon: '⚙' },
+    { id: 'builder',          label: 'Builder',              icon: '✨' },
+    { id: 'nonprofit',        label: 'Nonprofit Strategy',   icon: '💛' },
   ]
 
   pa.innerHTML = `
@@ -6480,8 +6483,8 @@ function renderAgreementsPage(stats) {
       style="padding:6px 12px;font-size:12px;border:0.5px solid var(--border1);border-radius:8px;background:var(--bg2);color:var(--text1);width:200px">
   </div>
 
-  <!-- TABLE -->
-  ${rows.length === 0 ? `
+  <!-- TABLE / BUILDER / NONPROFIT — depending on selected tab -->
+  ${agrFilter === 'builder' ? renderAgreementBuilder() : agrFilter === 'nonprofit' ? renderAgreementNonprofitStrategy() : (rows.length === 0 ? `
     <div class="empty-state">
       <div class="empty-icon">📄</div>
       <div class="empty-text">No agreements yet</div>
@@ -6526,13 +6529,249 @@ function renderAgreementsPage(stats) {
         }).join('')}
       </tbody>
     </table>
-  </div>`}
+  </div>`)}
   `
 }
 
 function setAgrFilter(f) {
   agrFilter = f
   renderAgreementsPage({})
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AGREEMENT BUILDER — 6 types with expandable critical clauses + AI draft gen.
+// Clauses include fillable [brackets]; click "Generate complete draft" to call
+// Claude (POST /api/ai) and view the result in a modal with copy/download.
+// ═════════════════════════════════════════════════════════════════════════════
+window._AGR_BUILDER_CLAUSES = {
+  employer: [
+    { num:1, name:'Scope of services',           critical:false, text:'Valor Workforce Funding LLC ("Consultant") agrees to provide the following services to <span class="agr-fill">[Employer Name]</span> ("Client"): (a) identification and qualification of workforce development funding opportunities; (b) preparation and submission of grant applications; (c) coordination with Workforce Investment Board staff; (d) compliance support and reimbursement tracking.' },
+    { num:2, name:'Fee structure — hybrid model', critical:true,  text:'Client shall pay Consultant: (a) a non-refundable Engagement Fee of <span class="agr-fill">$[Amount]</span> due upon execution of this Agreement; (b) a Success Fee equal to <span class="agr-fill">[X]%</span> of the total grant award amount actually received by Client. The Engagement Fee is earned upon execution and is not contingent on funding outcome.' },
+    { num:3, name:'Critical payment trigger',     critical:true,  text:'The Success Fee described in Section 2(b) becomes immediately due and payable upon the earliest of: (a) written notice of grant approval; (b) receipt of any reimbursement payment by Client from any Workforce Investment Board; or (c) receipt by Client of any funds secured under programs identified by Consultant. Client shall notify Consultant within 3 business days of any such event.' },
+    { num:4, name:'Intellectual property',        critical:false, text:'All methodologies, databases, CRM systems, scoring models, and workflow processes used or developed by Consultant in performing services remain the exclusive property of Consultant. Client acquires no right, title, or interest in any Consultant tools or systems. Client data and records remain the property of Client.' },
+    { num:5, name:'Non-solicitation',             critical:false, text:'During the term and for 24 months thereafter, Client agrees not to directly solicit, hire, or engage any Consultant employee or contractor who was involved in providing services under this Agreement. Client also agrees not to approach identified Workforce Investment Boards or funding opportunities directly to circumvent Consultant\'s role.' },
+    { num:6, name:'Term and termination',         critical:false, text:'This Agreement commences on <span class="agr-fill">[Start Date]</span> and continues for a period of <span class="agr-fill">[12] months</span>, unless earlier terminated. Either party may terminate upon 30 days written notice. Termination does not relieve Client of payment obligations for funding opportunities identified or applications submitted prior to termination date.' },
+  ],
+  training: [
+    { num:1, name:'Training delivery obligation',  critical:true,  text:'Training Provider agrees to deliver the following approved training program(s) to employees of <span class="agr-fill">[Employer Name]</span>: <span class="agr-fill">[Program Name]</span>. Training shall be delivered on the schedule specified in Exhibit A and shall meet all WIB curriculum requirements.' },
+    { num:2, name:'Documentation requirements',    critical:true,  text:'Training Provider shall collect and maintain original sign-in sheets for every training session, including trainee full name, date, and duration. Provider shall submit copies to Valor within 5 business days of each session. Failure to maintain compliant attendance records may result in denial of reimbursement to the employer.' },
+    { num:3, name:'Invoice requirements',          critical:false, text:'Provider shall issue itemized invoices conforming to WIB reimbursement request formats, including course name, dates, number of trainees, per-trainee cost, and total amount. Invoices shall be submitted to Valor within 10 business days of program completion.' },
+    { num:4, name:'Completion certificates',       critical:false, text:'Provider shall issue completion certificates to all trainees who successfully complete the program, and shall provide a cohort completion report to Valor within 15 days of program end.' },
+    { num:5, name:'Audit cooperation',             critical:true,  text:'Provider agrees to cooperate fully with any audit or review by the Workforce Investment Board or its designees. Provider shall produce all requested records within 5 business days. Provider acknowledges that failure to cooperate may result in reimbursement clawback affecting the employer.' },
+    { num:6, name:'Non-solicitation',              critical:false, text:'For a period of 18 months following this Agreement, Provider agrees not to directly solicit or contract with <span class="agr-fill">[Employer Name]</span> for training services without Valor\'s written consent.' },
+  ],
+  iwt: [
+    { num:1, name:'Approved trainees and wages', critical:true,  text:'The following employees are approved for reimbursement under this IWT agreement: <span class="agr-fill">[Trainee List — Exhibit A]</span>. Employer certifies that each trainee is currently employed at a wage of no less than <span class="agr-fill">$[Wage]</span> per hour and will be retained for a minimum of 90 days post-training.' },
+    { num:2, name:'Reimbursement terms',         critical:true,  text:'WIB agrees to reimburse Employer for <span class="agr-fill">[X]%</span> of approved training costs, not to exceed <span class="agr-fill">$[Max Award]</span> per Employer Identification Number. Reimbursement is contingent on satisfactory completion of training and submission of all required documentation.' },
+    { num:3, name:'Training period and reporting', critical:false, text:'Approved training shall commence no earlier than <span class="agr-fill">[Start Date]</span> and shall be completed by <span class="agr-fill">[End Date]</span>. Employer shall submit interim progress reports and a final report within 30 days of training completion.' },
+    { num:4, name:'Retention requirement',       critical:true,  text:'Employer agrees to retain all trained employees for a minimum of 90 days following completion of their training program. WIB reserves the right to audit payroll records to verify retention. Failure to retain may result in partial or full repayment of reimbursed amounts.' },
+    { num:5, name:'Audit and record retention',  critical:false, text:'Employer shall retain all training records, payroll records, invoices, and attendance documentation for a minimum of 3 years following the end of the program. Records shall be made available to WIB upon request within 10 business days.' },
+  ],
+  referral: [
+    { num:1, name:'Referral fee structure',       critical:true,  text:'Referring Party shall receive a fee equal to <span class="agr-fill">[X]%</span> of the net revenue received by Valor from any Referred Client during the first <span class="agr-fill">[24] months</span> following the initial engagement. Referral fees are paid within 30 days of Valor receiving payment from the Referred Client.' },
+    { num:2, name:'Qualified referral definition', critical:false, text:'A "Qualified Referral" means an introduction to an employer that (a) has not previously been in Valor\'s pipeline, (b) executes an Employer Service Agreement within 90 days of introduction, and (c) generates at least one reimbursement event.' },
+    { num:3, name:'Revenue share limitations',    critical:false, text:'Referral fees shall not exceed <span class="agr-fill">$[Cap]</span> per referred client. Referring Party acknowledges that Valor\'s fee arrangements with clients are confidential and may not be disclosed to third parties.' },
+  ],
+  compliance: [
+    { num:1, name:'Required document schedule',     critical:true,  text:'Employer agrees to collect and provide to Valor the following documents on the schedule specified: (a) original trainee sign-in sheets within 5 days of each session; (b) training provider invoices within 10 days of receipt; (c) proof of payment within 10 days of payment; (d) retention verification 30 days after the 90-day retention period.' },
+    { num:2, name:'Consequences of non-compliance', critical:true,  text:'Employer acknowledges that failure to provide required documentation may result in denial or reduction of reimbursement by the WIB. Employer agrees that Valor shall not be liable for any lost reimbursement amounts caused by Employer\'s failure to collect or timely submit required documentation.' },
+    { num:3, name:'Audit preparation',              critical:false, text:'In the event of a WIB audit, Employer agrees to notify Valor within 24 hours of receiving audit notice, and to cooperate fully with Valor\'s preparation of audit response. Employer shall not communicate directly with WIB auditors without Valor\'s knowledge and consent.' },
+    { num:4, name:'Record retention',               critical:false, text:'Employer shall maintain copies of all submitted documentation for a minimum of 3 years following the close of each program year. Valor shall maintain a secure digital copy of all submitted documents.' },
+  ],
+  consulting: [
+    { num:1, name:'Independent contractor status', critical:false, text:'Consultant is an independent contractor and not an employee of Client. Consultant retains sole control over the manner and means of providing services. Nothing in this Agreement creates an employment, partnership, or joint venture relationship.' },
+    { num:2, name:'IP ownership',                  critical:true,  text:'All pre-existing IP, tools, methodologies, databases, CRM systems, and workflow processes owned by Consultant prior to or independent of this Agreement remain Consultant\'s exclusive property. Work product created specifically for Client under this Agreement is licensed (not transferred) to Client for internal use only.' },
+    { num:3, name:'Confidentiality',               critical:false, text:'Both parties agree to maintain the confidentiality of the other party\'s proprietary information, client lists, financial terms, and business strategies. This obligation survives termination for a period of 3 years.' },
+    { num:4, name:'Non-compete limitation',        critical:false, text:'Client agrees not to use Consultant\'s proprietary methodologies, WIB relationships, or funding strategies to establish or assist any competing workforce funding consulting operation during the term and for 24 months thereafter.' },
+    { num:5, name:'Liability limitation',          critical:false, text:'Consultant\'s total liability under this Agreement shall not exceed the fees paid in the 3 months preceding the claim. Consultant is not liable for indirect, consequential, or punitive damages, including lost funding opportunities or reimbursement denials outside Consultant\'s reasonable control.' },
+  ],
+}
+window._AGR_BUILDER_TITLES = {
+  employer:   'Employer Service Agreement',
+  training:   'Training Provider Agreement',
+  iwt:        'IWT / Cost Reimbursement Agreement',
+  referral:   'Referral & Revenue Share Agreement',
+  compliance: 'Compliance & Document Collection Agreement',
+  consulting: 'Independent Contractor / Consulting Agreement',
+}
+window._agrBuilderType = window._agrBuilderType || 'employer'
+
+function renderAgreementBuilder() {
+  const items = ['employer','training','iwt','referral','compliance','consulting']
+  const optional = { referral: true }
+  const currentType = window._agrBuilderType
+  return `
+  <style>
+    .agr-builder-wrap{background:var(--bg2);border:0.5px solid var(--border1);border-radius:10px;padding:14px;margin-bottom:14px}
+    .agr-builder-grid{display:grid;grid-template-columns:220px 1fr;gap:14px}
+    @media (max-width:780px){.agr-builder-grid{grid-template-columns:1fr}}
+    .agr-builder-list{display:flex;flex-direction:column;gap:5px}
+    .agr-builder-item{padding:9px 11px;border:0.5px solid var(--border1);border-radius:7px;cursor:pointer;display:flex;align-items:center;gap:8px;font-size:12.5px;background:var(--bg1);color:var(--text1);transition:all .12s}
+    .agr-builder-item:hover{border-color:var(--gd);background:var(--bg2)}
+    .agr-builder-item.active{background:#0B1E3C;color:#fff;border-color:#0B1E3C}
+    .agr-builder-item .agr-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+    .agr-dot-employer{background:#2563eb}.agr-dot-training{background:#16a34a}
+    .agr-dot-iwt{background:#7c3aed}.agr-dot-referral{background:#ea580c}
+    .agr-dot-compliance{background:#0d9488}.agr-dot-consulting{background:#dc2626}
+    .agr-type-tag{font-size:9.5px;padding:1px 6px;border-radius:8px;background:var(--border1);color:var(--text3);margin-left:auto;font-weight:500}
+    .agr-builder-item.active .agr-type-tag{background:rgba(255,255,255,.2);color:#fff}
+    .agr-builder-main{background:var(--bg1);border:0.5px solid var(--border1);border-radius:9px;overflow:hidden;display:flex;flex-direction:column;min-height:300px}
+    .agr-builder-head{padding:11px 14px;background:var(--bg2);border-bottom:0.5px solid var(--border1);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:13px;color:var(--text1);font-weight:600}
+    .agr-builder-body{padding:12px;flex:1;display:flex;flex-direction:column;gap:6px}
+    .agr-clause{background:var(--bg1);border:0.5px solid var(--border1);border-radius:7px;overflow:hidden}
+    .agr-clause-hd{width:100%;padding:9px 12px;display:flex;align-items:center;gap:9px;cursor:pointer;background:var(--bg1);color:var(--text1);border:0;font-size:12.5px;text-align:left}
+    .agr-clause-hd:hover{background:var(--bg2)}
+    .agr-clause-num{background:#0B1E3C;color:#fff;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;flex-shrink:0}
+    .agr-clause-name{flex:1;font-weight:500}
+    .agr-clause-critical{font-size:9px;padding:2px 7px;background:rgba(220,38,38,.12);color:var(--red-t);border-radius:9px;font-weight:600;letter-spacing:.4px;text-transform:uppercase}
+    .agr-clause-chev{color:var(--text3);font-size:11px;transition:transform .15s}
+    .agr-clause.open .agr-clause-chev{transform:rotate(180deg)}
+    .agr-clause-body{max-height:0;overflow:hidden;transition:max-height .2s ease-out}
+    .agr-clause.open .agr-clause-body{max-height:600px}
+    .agr-clause-text{padding:10px 14px 13px;font-size:12px;line-height:1.65;color:var(--text2);border-top:0.5px solid var(--border1);background:var(--bg2)}
+    .agr-fill{background:rgba(201,168,76,.18);color:var(--text1);padding:1px 5px;border-radius:3px;font-weight:600;font-family:'SF Mono',Consolas,monospace;font-size:11px}
+    .agr-generate-bar{background:#0B1E3C;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;border-radius:9px;margin-top:14px}
+    .agr-generate-bar .agr-gen-info{font-size:12.5px;line-height:1.5;flex:1;min-width:200px}
+    .agr-generate-bar strong{color:#E8C96A}
+    .agr-generate-btn{background:#C9A84C;color:#0B1E3C;border:0;padding:9px 16px;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+    .agr-generate-btn:hover{background:#E8C96A}
+    .agr-generate-btn:disabled{opacity:.5;cursor:wait}
+  </style>
+  <div class="agr-builder-wrap">
+    <div style="font-size:12.5px;color:var(--text2);margin-bottom:10px;line-height:1.6">
+      Pick an agreement type to see its critical clauses. Click any clause to expand the legal language with fillable <span class="agr-fill">[brackets]</span>. When ready, click <strong>Generate complete draft</strong> to get a ready-to-send template via Claude.
+    </div>
+    <div class="agr-builder-grid">
+      <div class="agr-builder-list">
+        ${items.map(t => `
+          <button class="agr-builder-item${currentType===t?' active':''}" id="agr-bt-${t}" onclick="selectAgrBuilder('${t}')">
+            <span class="agr-dot agr-dot-${t}"></span>
+            <span>${(window._AGR_BUILDER_TITLES[t] || t).split(' /')[0].split(' & ')[0]}</span>
+            ${optional[t] ? '<span class="agr-type-tag">Optional</span>' : ''}
+          </button>`).join('')}
+      </div>
+      <div class="agr-builder-main">
+        <div class="agr-builder-head">
+          <span id="agr-builder-title">${window._AGR_BUILDER_TITLES[currentType] || ''} — clauses</span>
+          <span style="font-size:10.5px;color:var(--text3);font-weight:400">Click clauses to expand</span>
+        </div>
+        <div class="agr-builder-body">
+          <div id="agr-clause-list">${_agrRenderClausesHtml(currentType)}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="agr-generate-bar">
+    <div class="agr-gen-info"><strong id="agr-gen-type">${window._AGR_BUILDER_TITLES[currentType] || ''}</strong> — select clauses above, then generate a complete draft via Claude.</div>
+    <button class="agr-generate-btn" id="agr-gen-btn" onclick="generateAgreementDraft()">✨ Generate complete draft ↗</button>
+  </div>`
+}
+
+function selectAgrBuilder(type) {
+  window._agrBuilderType = type
+  for (const t of Object.keys(window._AGR_BUILDER_TITLES)) {
+    const el = document.getElementById('agr-bt-' + t)
+    if (el) el.classList.toggle('active', t === type)
+  }
+  const ttl = document.getElementById('agr-builder-title')
+  const gtt = document.getElementById('agr-gen-type')
+  if (ttl) ttl.textContent = (window._AGR_BUILDER_TITLES[type] || type) + ' — clauses'
+  if (gtt) gtt.textContent = (window._AGR_BUILDER_TITLES[type] || type)
+  const list = document.getElementById('agr-clause-list')
+  if (list) list.innerHTML = _agrRenderClausesHtml(type)
+}
+
+function _agrRenderClausesHtml(type) {
+  const items = (window._AGR_BUILDER_CLAUSES || {})[type] || []
+  if (!items.length) return '<div style="font-size:12px;color:var(--text3);padding:14px">No clauses available for this type.</div>'
+  return items.map(c => `
+    <div class="agr-clause">
+      <button class="agr-clause-hd" onclick="toggleAgrClause(this)">
+        <span class="agr-clause-num">${c.num}</span>
+        <span class="agr-clause-name">${escHtml(c.name)}</span>
+        ${c.critical ? '<span class="agr-clause-critical">Critical</span>' : ''}
+        <span class="agr-clause-chev">▼</span>
+      </button>
+      <div class="agr-clause-body"><div class="agr-clause-text">${c.text}</div></div>
+    </div>`).join('')
+}
+
+function toggleAgrClause(btn) {
+  const item = btn.parentElement
+  if (item) item.classList.toggle('open')
+}
+
+async function generateAgreementDraft() {
+  const type = window._agrBuilderType
+  const title = window._AGR_BUILDER_TITLES[type] || type
+  const btn = document.getElementById('agr-gen-btn')
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Drafting...' }
+  showToast('Generating ' + title + '...', 'info')
+  try {
+    const prompt = 'Generate a complete, ready-to-use ' + title + ' template for Valor Workforce Funding LLC. Include all critical clauses with fillable placeholder fields in [brackets], signature blocks, exhibit references, and any necessary recitals. Make it professional, enforceable, and formatted for immediate use. Output only the agreement text — no preamble or explanation.'
+    const r = await api('/api/ai', 'POST', { prompt, context: 'agreement_template:' + type })
+    const text = r.text || r.response || r.content || 'No response from AI.'
+    showModal(title + ' — Draft', `
+      <div style="margin-bottom:10px;font-size:11.5px;color:var(--text3)">Review the draft below. Copy to clipboard, paste into your editor of choice, then fill in the <span class="agr-fill">[bracketed]</span> placeholders.</div>
+      <textarea id="agr-draft-out" style="width:100%;height:480px;font-family:'SF Mono',Consolas,monospace;font-size:12px;line-height:1.6;padding:14px;border:0.5px solid var(--border1);border-radius:8px;background:var(--bg2);color:var(--text1);resize:vertical">${escHtml(text)}</textarea>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn btn-primary" onclick="navigator.clipboard.writeText(document.getElementById('agr-draft-out').value).then(()=>showToast('Copied to clipboard','success'))">📋 Copy to clipboard</button>
+        <button class="btn btn-ghost" onclick="(function(){const t=document.getElementById('agr-draft-out').value;const b=new Blob([t],{type:'text/plain'});const u=URL.createObjectURL(b);const a=document.createElement('a');a.href=u;a.download='${type}_agreement_'+new Date().toISOString().slice(0,10)+'.txt';a.click();URL.revokeObjectURL(u)})()">⬇ Download .txt</button>
+      </div>`, null, 'modal-lg')
+  } catch (e) {
+    showToast('Generation failed: ' + e.message, 'error')
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '✨ Generate complete draft ↗' }
+  }
+}
+
+function renderAgreementNonprofitStrategy() {
+  const cards = [
+    { ico:'🏛', color:'#185FA5', title:'Credibility with WIBs', points:[
+      'WIBs are more comfortable partnering with a 501(c)(3) than a for-profit consultant',
+      'Looks less "salesy" — mission-driven framing resonates with boards',
+      'Easier to get on approved provider lists',
+      'Opens doors to direct grant partnerships',
+    ]},
+    { ico:'💰', color:'#3B6D11', title:'Funding access', points:[
+      'Can receive workforce development grants directly',
+      'Eligible for DOL, WIOA, and state workforce funding',
+      'Can act as fiscal agent for smaller employers',
+      'May qualify for philanthropic + foundation grants',
+    ]},
+    { ico:'🛡', color:'#854F0B', title:'IP & business protection', points:[
+      'Keep CRM, workflows, and database in for-profit entity',
+      'Nonprofit licenses methodology from for-profit (your IP stays protected)',
+      'Dual-entity structure separates mission from revenue',
+      'Non-solicitation clause covers staff and clients',
+    ]},
+    { ico:'🤝', color:'#993556', title:'Partnership advantages', points:[
+      'Board members become advocates and connectors',
+      'Training providers more willing to formalize agreements',
+      'Employers view relationship as community investment, not just vendor',
+      'Future SaaS can spin out separately with clean IP chain',
+    ]},
+  ]
+  return `
+  <style>
+    .agr-np-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+    .agr-np-card{background:var(--bg2);border:0.5px solid var(--border1);border-radius:9px;padding:14px}
+    .agr-np-card h4{font-size:12.5px;color:var(--text1);margin-bottom:8px;display:flex;align-items:center;gap:6px;font-weight:600}
+    .agr-np-point{font-size:11.5px;color:var(--text2);margin-bottom:5px;padding-left:14px;position:relative;line-height:1.5}
+    .agr-np-point::before{content:'•';color:#C9A84C;position:absolute;left:4px;font-weight:700}
+  </style>
+  <p style="font-size:12.5px;color:var(--text2);margin-bottom:14px;line-height:1.6">Structuring under or alongside a nonprofit gives you significant advantages with WIBs and workforce boards. Here's why it matters and what it unlocks.</p>
+  <div class="agr-np-grid">
+    ${cards.map(c => `
+      <div class="agr-np-card">
+        <h4><span style="font-size:16px;color:${c.color}">${c.ico}</span>${escHtml(c.title)}</h4>
+        ${c.points.map(p => `<div class="agr-np-point">${escHtml(p)}</div>`).join('')}
+      </div>`).join('')}
+  </div>
+  <div style="background:#0B1E3C;color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;border-radius:9px;margin-top:14px">
+    <div style="font-size:12.5px;line-height:1.5;flex:1;min-width:200px">Ready to map out your dual-entity structure or draft a consulting / IC agreement?</div>
+    <button style="background:#C9A84C;color:#0B1E3C;border:0;padding:9px 16px;border-radius:7px;font-size:12.5px;font-weight:600;cursor:pointer" onclick="window._agrBuilderType='consulting';setAgrFilter('builder')">📐 Open Consulting Builder ↗</button>
+  </div>`
 }
 
 // ── Agreement Detail Modal ────────────────────────────────────────────────────
@@ -9257,7 +9496,20 @@ async function processImportFile(input,type){
   if(isExcel){
     preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📊 Loading Excel reader...</div>'
     try{
-      if(!window.XLSX){await new Promise((res,rej)=>{const s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=res;s.onerror=rej;document.head.appendChild(s)})}
+      if(!window.XLSX){
+        // Load SheetJS dynamically. The cdnjs CDN sometimes gets blocked by ad blockers,
+        // strict CSP, or corporate networks — emit a clear, actionable error message
+        // instead of "undefined" when that happens.
+        await new Promise((res,rej)=>{
+          const s=document.createElement('script')
+          s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js'
+          s.onload=()=>res()
+          s.onerror=()=>rej(new Error('Failed to load the Excel parser library from cdnjs.cloudflare.com. This is usually caused by an ad blocker, browser extension, or corporate network policy blocking the CDN. Try (1) disabling ad blockers for this site, (2) using an incognito window, or (3) saving the file as .csv instead.'))
+          // Hard timeout — if the request hangs (slow/blocked CDN), surface the failure within 12s
+          setTimeout(()=>{if(!window.XLSX)rej(new Error('Excel parser library failed to load within 12 seconds. CDN may be blocked. Try saving the file as .csv and importing again.'))},12000)
+          document.head.appendChild(s)
+        })
+      }
       const buf=await file.arrayBuffer()
       const wb=XLSX.read(buf,{type:'array'})
       const ws=wb.Sheets[wb.SheetNames[0]]
@@ -11226,6 +11478,31 @@ function _vcConnectSSE() {
   if (_vc.sseSource) {
     try { _vc.sseSource.close() } catch (_) {}
   }
+  // ── Notification sound: short data-URI ping so we don't depend on hosted audio.
+  // Synthesized 880 Hz → 660 Hz two-tone, ~150ms. Stored once on the _vc object so
+  // we don't recreate it on every message. Honors user's tab focus + chat-open state.
+  if (!_vc.notifyAudio) {
+    try {
+      // Tiny WAV — 8kHz, 16-bit mono, two-tone (E5→A4) ~150ms — base64-encoded.
+      // Quiet by design (~30% amplitude) so it doesn't startle on speakers.
+      _vc.notifyAudio = new Audio('data:audio/wav;base64,UklGRiQGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAGAACAk6Ovv8nQ09LMxLqwppyXkpKVm6Ouucbu+Pn08PHy8/Px7Obg2NDIvLawpaCalpaXmqGsuMTM09bV0srBuK2hl5GLh4WGiYqOl6CttsLP3OXr8/Pw7+/x8/T08/Tz7+ji29HJv7avp52YlJSWmqCowMnQ0M3IwLevpJqRiYJ+e3p6fH+EipKap7e+xtDX3ePm6+/x8vT08/Hu6ePc1MzCtaqgmJKMioqMjpKWnaSrtbzDydDV2N3g4+Xn6Onq6+rq6Ofl4t/c2dXSzsrFv7mzraefnJqYl5eYmpyfo6antLm9wsfM0NXY3ODi5OXm5+jp6urq6unp6Ofm5OPg3tzZ19TSzs3MysjGxMG/vbu5t7Wzs7Gxr66tra2srKytrq6vsLGzs7W2t7m6vL2/wMLDxcbHycrMzM7P0NLT1NXX2Nna3Nzd3+Hi4+Tl5ufo6err6uvr6uvr7Ozs7ezr7Ozs6+vr6urp6Ojo5ubl5OPi4eDg39/e3dvb2tnX1tXU0tHQzs3My8nIxsbExMLBwL+9vLu6ubi3trW0s7KysbCwsK+vrq6urq6vrq+vsLCwsbGysrOzs7S0tbW2tre3uLm5urq7u7y8vb29vb6+vr+/v7+/wMDAwMDAwMC/v7+/v76+vr29vby8u7u6urm5uLi3t7a2tbW0s7Ozs7KysbGxsLCwr6+vr66urq6urq6urq6urq6vr6+vsLCwsLCxsbGysrKzs7O0tLW1tba2t7e3uLi5ubq6u7u7vLy9vb29vr6+v7+/wMDAwMDAwMHBwcHBwcHBwcHBwcHBwcHBwcHAwMDAwMDAv7+/v76+vr29vby8u7u6urm5uLi3t7a2tbW0tLOzsrKxsbCwsLCvr6+vrq6urq6urq6urq6urq6urq6urq+vr6+wsLCxsbGysrKzs7O0tLW1tba2t7e4uLm5urq7u7y8vb29vr6/v7/AwMDBwcHCwsLDw8PExMTFxcXGxsbHx8jIyMnJycrKy8vLzMzMzc3Nzs7Ozs7Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pzs7Ozs7Ozc3Nzc3MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzc3Nzc3Nzc3Nzs7Ozs7Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pzs7Ozs7Ozc3Nzc3MzMzMy8vLysrKycnIyMjHx8fGxsbFxcXEw8PCwsHBwcDAv7+/vr69vby8u7u6urm5uLi3t7a2tbW0tLOzs7KysrGxsbGwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsbGxsbGysrKys7O0tLS1tbW2tra3t7i4ubm6uru7vLy9vb6+v7+/wMDBwcLCw8PExMTFxcbGxsfHyMjIycnJysrKy8vLzMzMzc3Nzc3Ozs7Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pzs7Ozs7Ozc3Nzc3NzMzMy8vLysrJycnIyMjHx8bGxsXFxMTDw8LCwcG/v76+vby8u7u6urm5uLe3trW1tLOzs7KysbGxsLCwr6+vr6+vrq6urq6urq6urq6urq6urq+vr7CwsLCxsbGys7O0tLW1tra3uLi5urq7vLy9vr/AwcLDxMXGx8jJysvMzc7P0NHT1NXX2Nna3N3f4eLj5OXn6Onq6uvr7O3t7e3u7u7u7u7u7e3t7Ozr6+rq6unp6Ojn5+bm5eXk5OPj4uLh4eHg4ODf397e3t3d3dzc3Nvb29ra2tnZ2dnY2NjY2NfX19fX19fX19fX19fX19fX19jY2NjY2NjZ2dnZ2trb29zc3d7e3+Dh4uLj5OXl5ufo6err7Ozt7u7v7+/v8PDw8PDw8PDw7+/v7+7u7e3s7Ovq6unp6Ofm5eTj4uHg397d29rZ2NfV1NPSz87OzcvKyMfGxcPCwL++vbu6uba1tLKxsK6trKuqqairp6Wlo6OhoaCgn5+enp6dnZ2dnZ2dnp6en6CgoaKkpKaorbCxs7e5u7/AxsfL0dPV3uHi6+7w+Pn7//79/Pv9+/3w7+3l5OHe287KyMC7tbWqp6Whn52Ym5eVlpKVl5WZm5edpaitsLW6vsHGzM3T2dvf5+nq8PT09vn49/X29PHv7Ojl4drYzMfFv7q3sa2sp6KhnZqVlJKQjI6OkJOTl5qfo6mvtLi9wsfMz9TY3eDi5+rs8PLz9vb19/f4+Pf39vXz8e/u6+nm5OLg3djX1NHOy8jGxMC9u7m1srGvrayqp6alpKKfn52cnJqamZeXl5aWlpaWlpaWl5eXl5eYmZmZmpqbm5ydnp+goKChoqKjpKWlpqeoqaqrrK2vsLGys7S2t7m6u7y9v8DBw8TFx8jJysvMzc7Pz9DR0tLT1NTV1dXW1tbX19fY2NjY2NjY2NjY2NjY2NjY2NjY19fX19fW1tbV1dXU1NTT0tLR0dDQz87OzczMy8vKycnIyMfGxsXExMPDwsLBwcDAv7+/vr6+vb29vLy7u7u6urq6ubm5ubm5uLi4uLi4uLi4uLi4uLi4ubm5ubm5urq6uru7u7y8vL29vb6+vr+/v8DAwMDBwcHCwsLDw8PExMTFxcbGxsfHyMjIycnJysrKy8vLzMzMzM3Nzc3Ozs7Ozs/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz8/Pz87Ozs7Ozs7Ozs3Nzc3NzMzMzMzLy8vLysrKycnJyMjIx8fHxsbGxcXFxMTEw8PDwsLCwcHBwMDAvw==')
+      _vc.notifyAudio.volume = 0.35
+      _vc.notifyAudio.preload = 'auto'
+    } catch (_) { _vc.notifyAudio = null }
+  }
+  // Helper: play the ping if the message warrants attention (sender is someone else,
+  // and either chat panel is closed or user is on a different tab/conversation).
+  if (!_vc.playNotify) {
+    _vc.playNotify = function () {
+      try {
+        if (!_vc.notifyAudio) return
+        // Some browsers refuse autoplay until first user interaction. Catch and ignore.
+        _vc.notifyAudio.currentTime = 0
+        const p = _vc.notifyAudio.play()
+        if (p && typeof p.catch === 'function') p.catch(() => {})
+      } catch (_) {}
+    }
+  }
   const src = new EventSource(`/api/chat/stream?token=${encodeURIComponent(token)}`)
   _vc.sseSource = src
 
@@ -11257,6 +11534,8 @@ function _vcConnectSSE() {
       if (msg.sender_id !== currentUser.id) {
         _vc.unreadGlobal++
         _vcUpdateBadge()
+        // Play notification sound — chat panel is closed or user is on a different tab
+        _vc.playNotify()
       }
     }
   })
@@ -11281,6 +11560,8 @@ function _vcConnectSSE() {
         _vcUpdateBadge()
         _vcRenderUserList()  // refresh badge in DM list
         showToast(`💬 ${msg.sender_name || 'Someone'}: ${msg.content.slice(0, 60)}`, 'info')
+        // Play notification sound — chat panel is closed or user is on a different conversation
+        _vc.playNotify()
       }
     }
   })
