@@ -530,7 +530,14 @@ app.get('/api/companies', auth, async (req, res) => {
   const { data, error, count } = await q; if (error) return res.status(400).json({ error: error.message }); res.json({ data, count })
 })
 app.post('/api/companies', auth, async (req, res) => {
-  const A = ['company_name','company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes','rating','is_25_pct_operator','supported_by']
+  // Whitelist matches the real `companies` table columns exactly.
+  // NOTE: 'is_25_plus' is the actual column name — the frontend may send
+  // 'is_25_pct_operator'; that alias is normalized below before filtering.
+  const A = ['company_name','company_type','status','fein','industry','naics_code','domain','website','employee_count_total','employee_count_ft','employee_count_pt','avg_hourly_wage','primary_contact_name','primary_contact_title','primary_contact_email','primary_contact_phone','hr_contact_name','hr_contact_email','hr_contact_phone','training_needs','current_training_providers','turnover_challenges','notes','rating','is_25_plus','supported_by','source_url']
+  // Normalize legacy/alias field names from the frontend to real column names
+  if (req.body.is_25_pct_operator !== undefined && req.body.is_25_plus === undefined) {
+    req.body.is_25_plus = req.body.is_25_pct_operator
+  }
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => A.includes(k)))
   if (!body.company_name?.trim()) return res.status(400).json({ error: 'Company name required' })
   const nameClean = body.company_name.trim().toLowerCase()
@@ -609,7 +616,11 @@ app.post('/api/companies', auth, async (req, res) => {
   res.json(data)
 })
 app.put('/api/companies/:id', auth, async (req, res) => {
-  const A = ['company_name','company_type','status','fein','domain','employee_count_total','avg_hourly_wage','primary_contact_name','primary_contact_email','primary_contact_phone','training_needs','notes','rating']
+  // Whitelist matches the POST route and the real `companies` columns.
+  const A = ['company_name','company_type','status','fein','industry','naics_code','domain','website','employee_count_total','employee_count_ft','employee_count_pt','avg_hourly_wage','primary_contact_name','primary_contact_title','primary_contact_email','primary_contact_phone','hr_contact_name','hr_contact_email','hr_contact_phone','training_needs','current_training_providers','turnover_challenges','notes','rating','is_25_plus','supported_by','source_url']
+  if (req.body.is_25_pct_operator !== undefined && req.body.is_25_plus === undefined) {
+    req.body.is_25_plus = req.body.is_25_pct_operator
+  }
   const body = Object.fromEntries(Object.entries(req.body).filter(([k]) => A.includes(k)))
   const { data, error } = await supabase.from('companies').update(body).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message }); res.json(data)
@@ -2221,14 +2232,23 @@ app.post('/api/import/:type', async (req, res) => {
           created_at:    new Date().toISOString(),
         }
         try {
-          await safeInsertLog({
+          // safeInsertLog RETURNS { data, error } — it does not throw on a
+          // failed DB insert. The error must be checked explicitly, otherwise
+          // a failed insert is silently counted as a success (the false
+          // "Imported N records" bug). Only count a row as created when the
+          // insert genuinely succeeded with no error.
+          const { error: insErr } = await safeInsertLog({
             user_id:     importUser.id,
             action:      'TRAINING_PROVIDER',
             record_type: 'training_provider',
             details:     name,
             metadata,
           })
-          results.created++
+          if (insErr) {
+            results.errors.push(`"${name}": ${insErr.message}`)
+          } else {
+            results.created++
+          }
         } catch (e) {
           results.errors.push(`"${name}": ${e.message}`)
         }
@@ -2980,6 +3000,135 @@ app.put('/api/territories/:id', auth, requireAdmin, async (req,res)=>{
   if (error) return res.status(400).json({error:error.message}); res.json(data)
 })
 app.delete('/api/territories/:id', auth, requireAdmin, async (req,res)=>{ const { error }=await supabase.from('territories').delete().eq('id',req.params.id); if (error) return res.status(400).json({error:error.message}); res.json({success:true}) })
+
+// ─── COMPLIANCE ALERT ENGINE ──────────────────────────────────────────────────
+// GET /api/compliance/check-alerts
+// Scans for two classes of business risk and returns an array of alert objects
+// the frontend can render as warning badges/banners.
+//   (1) Compliance reports overdue or due soon — from the v_compliance_alerts
+//       view, which already computes days_until_final_due / days_until_interim_due.
+//   (2) Overdue unpaid invoices — from revenue_records, where invoice_status is
+//       'sent' (an invoice was issued) but no payment_received_date is recorded
+//       and the invoice is older than the configurable overdue window.
+// Read-only. Touches no data. Safe to call as often as the UI needs.
+app.get('/api/compliance/check-alerts', auth, async (req, res) => {
+  const alerts = []
+  try {
+    // ── (1) Overdue / imminent compliance reports ───────────────────────────
+    const { data: compRows, error: compErr } = await supabase
+      .from('v_compliance_alerts')
+      .select('*')
+    if (compErr) {
+      console.warn('[compliance/check-alerts] v_compliance_alerts query failed:', compErr.message)
+    } else {
+      for (const r of (compRows || [])) {
+        // Final report: overdue if past due and not submitted
+        if (r.final_report_submitted === false && r.final_report_due != null && r.days_until_final_due != null) {
+          if (r.days_until_final_due < 0) {
+            alerts.push({
+              type: 'compliance_report_overdue',
+              severity: 'high',
+              record_type: 'application',
+              record_id: r.application_id,
+              company_name: r.company_name || 'Unknown company',
+              application_number: r.application_number || null,
+              message: `Final compliance report is ${Math.abs(r.days_until_final_due)} day(s) overdue`,
+              days_overdue: Math.abs(r.days_until_final_due),
+              due_date: r.final_report_due,
+            })
+          } else if (r.days_until_final_due <= 14) {
+            alerts.push({
+              type: 'compliance_report_due_soon',
+              severity: 'medium',
+              record_type: 'application',
+              record_id: r.application_id,
+              company_name: r.company_name || 'Unknown company',
+              application_number: r.application_number || null,
+              message: `Final compliance report due in ${r.days_until_final_due} day(s)`,
+              days_until_due: r.days_until_final_due,
+              due_date: r.final_report_due,
+            })
+          }
+        }
+        // Interim report: overdue if past due and not submitted
+        if (r.interim_report_submitted === false && r.interim_report_due != null && r.days_until_interim_due != null && r.days_until_interim_due < 0) {
+          alerts.push({
+            type: 'interim_report_overdue',
+            severity: 'high',
+            record_type: 'application',
+            record_id: r.application_id,
+            company_name: r.company_name || 'Unknown company',
+            application_number: r.application_number || null,
+            message: `Interim compliance report is ${Math.abs(r.days_until_interim_due)} day(s) overdue`,
+            days_overdue: Math.abs(r.days_until_interim_due),
+            due_date: r.interim_report_due,
+          })
+        }
+      }
+    }
+
+    // ── (2) Overdue unpaid invoices ─────────────────────────────────────────
+    // An invoice is considered overdue when it was sent (invoice_sent_date set,
+    // invoice_status is not 'paid') and the configured number of net days has
+    // elapsed since invoice_sent_date with no payment_received_date.
+    const NET_DAYS = 30
+    const { data: revRows, error: revErr } = await supabase
+      .from('revenue_records')
+      .select('id, application_id, company_id, fee_model, invoice_status, invoice_sent_date, payment_received_date, calculated_success_fee, flat_fee_amount, retainer_monthly_amount, company:companies(company_name)')
+    if (revErr) {
+      console.warn('[compliance/check-alerts] revenue_records query failed:', revErr.message)
+    } else {
+      const now = Date.now()
+      for (const r of (revRows || [])) {
+        if (r.invoice_status === 'paid') continue
+        if (r.payment_received_date) continue
+        if (!r.invoice_sent_date) continue
+        const sentMs   = new Date(r.invoice_sent_date).getTime()
+        if (Number.isNaN(sentMs)) continue
+        const daysSince = Math.floor((now - sentMs) / 86400000)
+        if (daysSince <= NET_DAYS) continue
+        // Pick the most relevant outstanding amount for this fee model
+        const amount =
+          (r.calculated_success_fee && Number(r.calculated_success_fee)) ||
+          (r.flat_fee_amount       && Number(r.flat_fee_amount))       ||
+          (r.retainer_monthly_amount && Number(r.retainer_monthly_amount)) ||
+          null
+        alerts.push({
+          type: 'invoice_overdue',
+          severity: 'high',
+          record_type: 'revenue_record',
+          record_id: r.id,
+          company_name: r.company?.company_name || 'Unknown company',
+          fee_model: r.fee_model || null,
+          message: `Invoice unpaid ${daysSince} day(s) after being sent (net ${NET_DAYS})`,
+          days_overdue: daysSince - NET_DAYS,
+          outstanding_amount: amount,
+          invoice_sent_date: r.invoice_sent_date,
+        })
+      }
+    }
+
+    // Sort: highest severity first, then most overdue
+    const sevRank = { high: 0, medium: 1, low: 2 }
+    alerts.sort((a, b) =>
+      (sevRank[a.severity] ?? 3) - (sevRank[b.severity] ?? 3) ||
+      (b.days_overdue || 0) - (a.days_overdue || 0)
+    )
+
+    res.json({
+      generated_at: new Date().toISOString(),
+      total: alerts.length,
+      counts: {
+        high:   alerts.filter(a => a.severity === 'high').length,
+        medium: alerts.filter(a => a.severity === 'medium').length,
+      },
+      alerts,
+    })
+  } catch (e) {
+    console.error('[compliance/check-alerts] error:', e.message)
+    res.status(500).json({ error: e.message })
+  }
+})
 app.get('/api/users/:id/territories', auth, requireAdmin, async (req,res)=>{ const { data, error }=await supabase.from('user_territory_assignments').select('territory_id, territories(id,name,states,description)').eq('user_id',req.params.id); if (error) return res.status(400).json({error:error.message}); res.json({data:(data||[]).map(r=>r.territories)}) })
 app.put('/api/users/:id/territories', auth, requireAdmin, async (req,res)=>{
   const { territory_ids=[] }=req.body; if (!Array.isArray(territory_ids)) return res.status(400).json({error:'territory_ids must be an array'})
