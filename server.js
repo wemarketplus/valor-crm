@@ -1181,6 +1181,140 @@ app.get('/api/admin/purge-broken-imports', auth, requireAdmin, async (req, res) 
 })
 
 // ─── WIB DECONTAMINATION ENDPOINT ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// WIB COLUMN REPAIR — fixes records where an email address was wrongly placed in
+// the wib_name field. The clean identifier is in short_name; the email is already
+// correctly in wib_email. This rebuilds wib_name as:
+//   "[STATE] - [Short Name] Workforce Development Board"
+//
+// SAFE BY DESIGN:
+//   - Only touches rows where wib_name contains '@' (an email — clearly wrong)
+//   - Rows with a correct name (no '@') are skipped, never modified
+//   - dry_run mode (default) returns a PREVIEW of every proposed change, writes nothing
+//   - Real run requires { dry_run:false } and updates wib_name ONLY (in place)
+//   - Nothing is deleted; record IDs and all other fields preserved
+//
+// Routes:
+//   POST /api/admin/repair-wib-names   { dry_run:true }  → preview
+//   POST /api/admin/repair-wib-names   { dry_run:false }  → apply
+// ═══════════════════════════════════════════════════════════════════════════════
+const _STATE_FROM_NAME = {
+  'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR','california':'CA','colorado':'CO',
+  'connecticut':'CT','delaware':'DE','florida':'FL','georgia':'GA','hawaii':'HI','idaho':'ID',
+  'illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS','kentucky':'KY','louisiana':'LA',
+  'maine':'ME','maryland':'MD','massachusetts':'MA','michigan':'MI','minnesota':'MN','mississippi':'MS',
+  'missouri':'MO','montana':'MT','nebraska':'NE','nevada':'NV','new hampshire':'NH','new jersey':'NJ',
+  'new mexico':'NM','new york':'NY','north carolina':'NC','north dakota':'ND','ohio':'OH','oklahoma':'OK',
+  'oregon':'OR','pennsylvania':'PA','rhode island':'RI','south carolina':'SC','south dakota':'SD',
+  'tennessee':'TN','texas':'TX','utah':'UT','vermont':'VT','virginia':'VA','washington':'WA',
+  'west virginia':'WV','wisconsin':'WI','wyoming':'WY','district of columbia':'DC',
+}
+// Derive a 2-letter state code from an email domain like "twic.mail@gov.texas.gov"
+function _stateFromEmail(email) {
+  if (!email) return null
+  const dom = String(email).split('@')[1] || ''
+  const lower = dom.toLowerCase()
+  for (const [name, abbr] of Object.entries(_STATE_FROM_NAME)) {
+    if (lower.includes(name.replace(/ /g, ''))) return abbr
+  }
+  // Try ".XX.gov" or ".XX.us" style
+  const m = lower.match(/\.([a-z]{2})\.(gov|us)$/)
+  if (m) return m[1].toUpperCase()
+  return null
+}
+// Build the corrected WIB name from short_name + best-available state
+function _buildWibName(shortName, stateAbbr) {
+  const sn = String(shortName || '').trim()
+  if (!sn) return null
+  // If short_name already looks like a full board name, keep it close to as-is
+  if (/workforce|development board|investment board|careersource|department of labor/i.test(sn)) {
+    return stateAbbr ? `${stateAbbr} - ${sn}` : sn
+  }
+  // Otherwise build the standard form
+  const base = `${sn} Workforce Development Board`
+  return stateAbbr ? `${stateAbbr} - ${base}` : base
+}
+
+app.post('/api/admin/repair-wib-names', auth, requireAdmin, async (req, res) => {
+  const { dry_run = true } = req.body
+  try {
+    // Pull every WIB record (in pages of 1000 to be safe)
+    let all = []
+    let from = 0
+    while (true) {
+      const { data, error } = await supabase
+        .from('wib_records')
+        .select('id, wib_name, short_name, wib_email, state')
+        .range(from, from + 999)
+      if (error) return res.status(400).json({ error: error.message })
+      if (!data || !data.length) break
+      all = all.concat(data)
+      if (data.length < 1000) break
+      from += 1000
+    }
+
+    // Find contaminated rows: wib_name contains '@' (it's an email)
+    const proposals = []
+    for (const w of all) {
+      const name = String(w.wib_name || '')
+      if (!name.includes('@')) continue // already correct — skip
+      // Email is the contaminated name OR the existing wib_email
+      const email = w.wib_email || name
+      const stateAbbr = (w.state && w.state.length === 2 && w.state !== 'US')
+        ? w.state.toUpperCase()
+        : (_stateFromEmail(email) || null)
+      const newName = _buildWibName(w.short_name, stateAbbr)
+      if (!newName) {
+        proposals.push({ id: w.id, old: name, new: null, skipped: 'no short_name to rebuild from' })
+        continue
+      }
+      proposals.push({
+        id: w.id, old: name, new: newName,
+        short_name: w.short_name, email_kept: email,
+      })
+    }
+
+    const fixable = proposals.filter(p => p.new)
+    const unfixable = proposals.filter(p => !p.new)
+
+    if (dry_run) {
+      return res.json({
+        dry_run: true,
+        total_records: all.length,
+        contaminated_found: proposals.length,
+        will_fix: fixable.length,
+        cannot_rebuild: unfixable.length,
+        preview: fixable.slice(0, 600).map(p => ({ id: p.id, from: p.old, to: p.new })),
+        unfixable: unfixable.slice(0, 50),
+      })
+    }
+
+    // REAL RUN — update wib_name in place, one row at a time, capture errors
+    let updated = 0
+    const errors = []
+    for (const p of fixable) {
+      const { error } = await supabase
+        .from('wib_records')
+        .update({ wib_name: p.new })
+        .eq('id', p.id)
+      if (error) errors.push(`${p.old}: ${error.message}`)
+      else updated++
+    }
+    try {
+      await safeInsertLog({ user_id: req.user.id, action: 'WIB_NAME_REPAIR',
+        details: `Repaired ${updated} WIB names (moved email out of name field)` })
+    } catch (_) {}
+    res.json({
+      dry_run: false, total_records: all.length,
+      updated, failed: errors.length, errors: errors.slice(0, 20),
+      cannot_rebuild: unfixable.length,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+
 // POST /api/admin/purge-wib-contamination
 // Removes records that were incorrectly imported as WIBs but are actually company/
 // employer records. Detects them by checking for patterns typical of CRM company
