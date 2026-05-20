@@ -2237,6 +2237,7 @@ async function pageWibs(){
         <div class="ie-group-label" style="color:var(--blue-t)">Batch & AI</div>
         <div class="ie-item" onclick="closeAllIE();openWibBatchHistory()" style="color:var(--blue-t)"><span class="ie-icon">🗂</span>WIB Import Batch History<span class="ie-item-hint">Rollback</span></div>
         <div class="ie-item" onclick="closeAllIE();openAiSystemUpdate()" style="color:var(--blue-t)"><span class="ie-icon">🤖</span>AI Search & System Update<span class="ie-item-hint">Verify one WIB</span></div>
+        <div class="ie-item" onclick="closeAllIE();openWibNameRepair()" style="color:var(--green-t)"><span class="ie-icon">🔧</span>Fix Board Name Columns<span class="ie-item-hint">Preview + apply</span></div>
         <div class="ie-item" onclick="closeAllIE();openWibAiSearch()" style="color:var(--blue-t)"><span class="ie-icon">🌎</span>AI Search All 51 States<span class="ie-item-hint">Build national directory</span></div>
         `:''}
       </div>
@@ -6494,6 +6495,88 @@ const _US_STATES_LIST = [
   ['DC','District of Columbia'],
 ]
 window._wibAiPoll = null
+
+/* ═══════════════════════════════════════════════════
+   WIB COLUMN REPAIR — fixes records where an email got placed in the board-name
+   field. Runs a preview (dry run) first, shows every proposed change, then the
+   admin clicks Apply to commit. Fixes in place — nothing deleted.
+═══════════════════════════════════════════════════ */
+async function openWibNameRepair() {
+  showModal('🔧 Fix Board Name Columns', `
+    <div class="alert alert-info" style="font-size:12px;line-height:1.6;margin-bottom:12px">
+      This finds WIB records where an <strong>email address</strong> was wrongly placed in the
+      board-name field, and rebuilds the proper name from the Short Name column.<br>
+      <span style="color:var(--text3)">It runs a preview first — nothing changes until you click Apply.
+      The email stays safely in the Email field. No records are deleted.</span>
+    </div>
+    <div id="wib-repair-body"><div style="text-align:center;padding:20px;color:var(--text3)">⏳ Scanning all WIB records...</div></div>
+  `, null, 'modal-lg')
+
+  // Run the dry-run preview immediately
+  try {
+    const r = await api('/api/admin/repair-wib-names', 'POST', { dry_run: true })
+    const body = document.getElementById('wib-repair-body')
+    if (!body) return
+    if (!r.will_fix) {
+      body.innerHTML = `<div class="alert alert-success">✅ No contaminated board names found — all ${r.total_records} records look correct.</div>`
+      return
+    }
+    const rows = (r.preview || []).map(p => `
+      <tr>
+        <td style="padding:4px 8px;font-size:11px;color:var(--red-t);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.from)}</td>
+        <td style="padding:4px 8px;font-size:11px;color:var(--green-t)">${escHtml(p.to)}</td>
+      </tr>`).join('')
+    body.innerHTML = `
+      <div style="display:flex;gap:14px;font-size:12px;margin-bottom:10px;flex-wrap:wrap">
+        <span>📊 <strong>${r.total_records}</strong> total records</span>
+        <span>⚠️ <strong>${r.contaminated_found}</strong> contaminated</span>
+        <span style="color:var(--green-t)">🔧 <strong>${r.will_fix}</strong> will be fixed</span>
+        ${r.cannot_rebuild ? `<span style="color:var(--yellow-t)">⊘ ${r.cannot_rebuild} cannot rebuild (no short name)</span>` : ''}
+      </div>
+      <div style="max-height:320px;overflow-y:auto;border:0.5px solid var(--border1);border-radius:8px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="position:sticky;top:0;background:var(--bg2)">
+            <th style="padding:6px 8px;text-align:left;font-size:10.5px;color:var(--text3)">CURRENT (wrong)</th>
+            <th style="padding:6px 8px;text-align:left;font-size:10.5px;color:var(--text3)">WILL BECOME</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div style="margin-top:8px;font-size:11px;color:var(--text3)">
+        Showing ${Math.min(r.preview.length, r.will_fix)} of ${r.will_fix} proposed fixes.
+        Some rebuilt names may need a manual touch-up afterward — that's normal.
+      </div>
+      <div style="margin-top:14px;display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-ghost" onclick="closeModal()">Cancel — change nothing</button>
+        <button class="btn btn-primary" id="wib-repair-apply" onclick="_applyWibNameRepair()">Apply ${r.will_fix} Fixes</button>
+      </div>`
+  } catch (e) {
+    const body = document.getElementById('wib-repair-body')
+    if (body) body.innerHTML = `<div class="alert alert-error">Preview failed: ${escHtml(e.message)}</div>`
+  }
+}
+
+async function _applyWibNameRepair() {
+  const btn = document.getElementById('wib-repair-apply')
+  if (btn) { btn.disabled = true; btn.textContent = 'Fixing...' }
+  try {
+    const r = await api('/api/admin/repair-wib-names', 'POST', { dry_run: false })
+    const body = document.getElementById('wib-repair-body')
+    if (body) body.innerHTML = `
+      <div class="alert alert-success" style="font-size:12px">
+        ✅ Fixed <strong>${r.updated}</strong> board names.
+        ${r.failed ? `<br>⚠️ ${r.failed} failed: ${(r.errors||[]).slice(0,3).map(escHtml).join('; ')}` : ''}
+        ${r.cannot_rebuild ? `<br>⊘ ${r.cannot_rebuild} could not be rebuilt (missing short name) — fix those manually.` : ''}
+      </div>
+      <div style="margin-top:12px;text-align:right">
+        <button class="btn btn-primary" onclick="closeModal();loadPage('wibs')">View Fixed WIBs</button>
+      </div>`
+    showToast(`✅ Repaired ${r.updated} WIB names`, 'success')
+  } catch (e) {
+    showToast('Repair failed: ' + e.message, 'error')
+    if (btn) { btn.disabled = false; btn.textContent = 'Apply Fixes' }
+  }
+}
 
 function openWibAiSearch() {
   const stateBoxes = _US_STATES_LIST.map(([code,name]) =>
