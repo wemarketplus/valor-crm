@@ -1602,54 +1602,57 @@ function parseLogRow(r){
   return Object.assign({}, r, { metadata })
 }
 
-// Load SheetJS (XLSX library) from any working CDN. Tries cdnjs → jsdelivr → unpkg
-// in sequence so that one blocked CDN doesn't break the whole feature. Resolves
-// when window.XLSX is available, rejects only if ALL CDNs fail.
+// Load SheetJS (XLSX library) — ZERO-CDN policy.
+// PHASE 1 mandate: never reach out to external CDNs. The library must be hosted
+// on this same origin so it bypasses ad blockers, browser extensions, and
+// corporate network policies blocking script CDNs.
+//
+// The server (server.js) exposes the library at TWO same-origin paths:
+//   /static/xlsx.full.min.js       — served by express.static from src/public/static/
+//   /api/static/xlsx.full.min.js   — served via explicit route with Cache-Control
+//
+// Either works. We try /api/static first (since the explicit route gives a
+// clearer 503 error message if the file isn't deployed yet) then fall back to
+// /static (in case the explicit route is missing on older server versions).
 window._loadXLSX = async function _loadXLSX(){
   if (window.XLSX) return window.XLSX
   if (window._xlsxLoading) return window._xlsxLoading
-  const CDNS = [
-    // Same-origin first: if you've placed xlsx.full.min.js in src/public/, this
-    // works regardless of CDN blocking, ad blockers, or corporate firewalls.
-    // Falls through to CDNs if the file isn't there.
-    '/xlsx.full.min.js',
-    'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
-    'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
-    'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
+  const SOURCES = [
+    '/api/static/xlsx.full.min.js',    // server route — finds the file in any common location
+    '/xlsx.full.min.js',               // repo root (flat layout)
+    '/static/xlsx.full.min.js',        // /static at root
+    '/public/xlsx.full.min.js',        // /public folder
+    '/public/static/xlsx.full.min.js', // /public/static folder
   ]
   window._xlsxLoading = (async () => {
     const errors = []
-    for (const url of CDNS) {
+    for (const url of SOURCES) {
       try {
         await new Promise((res, rej) => {
           const s = document.createElement('script')
           s.src = url
           s.async = true
           s.onload = () => res()
-          s.onerror = () => rej(new Error('network/blocked'))
-          // 10-second per-CDN timeout so a hung CDN doesn't stall the whole chain.
+          s.onerror = () => rej(new Error('not_served'))
+          // 8-second timeout — same-origin should be near-instant
           const tid = setTimeout(() => {
             s.onerror = null; s.onload = null
             rej(new Error('timeout'))
-          }, 10000)
+          }, 8000)
           s.addEventListener('load', () => clearTimeout(tid), { once: true })
           document.head.appendChild(s)
         })
         if (window.XLSX) return window.XLSX
-        errors.push(url + ': loaded but XLSX global missing')
+        errors.push(url + ': loaded but XLSX global missing (file may be empty or corrupt)')
       } catch (e) {
         errors.push(url + ': ' + (e.message || 'failed'))
       }
     }
     window._xlsxLoading = null
     throw new Error(
-      'Failed to load the Excel parser from all sources (self-hosted, cdnjs, jsdelivr, unpkg). ' +
-      'Your network/browser is blocking all script CDNs. ' +
+      'Excel parser library not available on this server. ' +
+      'An administrator needs to place the SheetJS library at src/public/static/xlsx.full.min.js in the repo and redeploy. ' +
       'IMMEDIATE WORKAROUND: open your file in Excel, "Save As" .csv, and re-import.\n\n' +
-      'PERMANENT FIX (for an admin): download SheetJS from ' +
-      'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js ' +
-      'and place it at src/public/xlsx.full.min.js in the repo, then redeploy. ' +
-      'It will then load from the same domain and bypass all blocking.\n\n' +
       'Details: ' + errors.join(' | ')
     )
   })()
@@ -1766,7 +1769,7 @@ function renderApp(){
       </div>
       <div class="sb-nav">
         ${sbi('dashboard','🏠','Home')}
-        ${sbi('notifications','🔔','Notifications',3,'red')}
+        ${sbi('notifications','🔔','Notifications',(window._notifUnread||0)>0?(window._notifUnread>99?'99+':String(window._notifUnread)):'','red')}
         ${sbi('tasks','☑','Tasks')}
         ${sbi('notes','📄','Notes')}
         ${sbi('emails','✉','Emails')}
@@ -1829,6 +1832,9 @@ function renderApp(){
   <div id="ie-overlay" onclick="closeAllIE()"></div>`
 
   loadPage('dashboard')
+  // Boot-time notification badge reconcile — phantom guard runs immediately so
+  // a stale "3" from a previous session is cleared the moment the app loads.
+  setTimeout(function(){ loadNotificationBadge() }, 200)
   setTimeout(function(){
     var nav=document.querySelector('.sb-nav')
     if(nav&&!document.getElementById('nav-chat')){
@@ -1844,10 +1850,12 @@ function renderApp(){
 }
 
 function sbi(page,icon,label,badge='',badgeColor=''){
+  // Notification badge gets a deterministic ID so _setNotifBadge() can update it.
+  const badgeId = (page === 'notifications') ? ' id="notif-badge"' : ''
   return`<div class="sb-item" id="nav-${page}" onclick="loadPage('${page}')">
     <span class="sb-item-icon">${icon}</span>
     <span class="sb-item-label">${label}</span>
-    ${badge?`<span class="sb-badge ${badgeColor}">${badge}</span>`:''}
+    <span class="sb-badge ${badgeColor||''}"${badgeId} style="${badge?'':'display:none'}">${badge||''}</span>
   </div>`
 }
 
@@ -3129,11 +3137,13 @@ function openWibModal(wib=null){
     <div class="form-row form-full"><div class="form-group"><label class="form-label">Application Process Notes</label><textarea id="wib-notes" rows="3">${escHtml(wib?.notes||'')}</textarea></div></div>
     <label class="chk-row"><input type="checkbox" id="wib-iwt"${wib?.iwt_program_active?' checked':''}> IWT Program Active</label>`,
   async()=>{
+    const newStatus = document.getElementById('wib-status')?.value || 'not_contacted'
+    const oldStatus = wib?.status || null
     const payload={
       wib_name:document.getElementById('wib-name').value.trim(),
       short_name:document.getElementById('wib-short')?.value||null,
       state:document.getElementById('wib-state')?.value||null,
-      status:document.getElementById('wib-status')?.value||'not_contacted',
+      status:newStatus,
       wib_email:document.getElementById('wib-email')?.value||null,
       wib_phone:document.getElementById('wib-phone')?.value||null,
       source_url:document.getElementById('wib-url')?.value||null,
@@ -3147,13 +3157,82 @@ function openWibModal(wib=null){
     }
     if(!payload.wib_name){showToast('WIB name is required','error');return false}
     try{
-      if(wib)await api('/api/wibs/'+wib.id,'PUT',payload)
-      else await api('/api/wibs','POST',payload)
+      let savedWibId = wib?.id
+      if(wib){
+        await api('/api/wibs/'+wib.id,'PUT',payload)
+      } else {
+        const created = await api('/api/wibs','POST',payload)
+        savedWibId = created?.id || created?.data?.id
+      }
       showToast(wib?'WIB updated':'WIB created','success')
+
+      // PHASE 1: Pipeline stage-shifting auto-note.
+      // When the status changes on an existing WIB (or is set for a new WIB to
+      // anything non-default), fire a system note to record the pipeline move.
+      if (savedWibId && wib && oldStatus !== newStatus) {
+        // Fire-and-forget — never block the modal close on note creation
+        _autoNoteWibStatusChange(savedWibId, oldStatus, newStatus).catch(err =>
+          console.warn('[wib-status] auto-note failed:', err?.message))
+      }
+
       if(currentPage==='wib-profile'&&wib){currentWib={...currentWib,...payload};renderWibProfile()}
       else loadPage('wibs')
     }catch(e){showToast(e.message,'error');return false}
   },'modal-lg')
+}
+
+// PHASE 1: WIB pipeline-stage-shifting automation.
+// When a WIB's status changes, write a structured system note to the
+// activity_log (record_type='wib_records', record_id=<wib_id>) so the change
+// is visible in both the WIB's own notes thread AND the global Notes timeline.
+//
+// Format mandated by Phase 1 spec:
+//   "[System / Status Change] Status updated to <new> - <next step> at <HH:MM AM/PM>, <MM/DD/YYYY>"
+const _WIB_STATUS_NEXT_STEPS = {
+  'not_contacted':         'Initial outreach required',
+  'no_reachout_complete':  'Initial outreach required',
+  'no_reachout_completed': 'Initial outreach required',
+  'contacted':             'Schedule discovery call',
+  'follow_up_needed':      'Follow up required',
+  'funding_available':     'Identify qualifying employers',
+  'funding_not_available': 'Monitor for next funding cycle',
+  'network_member':        'Maintain quarterly check-ins',
+  'pending_employer':      'Awaiting employer commitment',
+  'stop_applications':     'Hold all new submissions',
+}
+async function _autoNoteWibStatusChange(wibId, oldStatus, newStatus) {
+  if (!wibId || !newStatus) return
+  const now = new Date()
+  // Format time HH:MM AM/PM
+  const h12 = now.getHours() % 12 || 12
+  const mm = String(now.getMinutes()).padStart(2, '0')
+  const ampm = now.getHours() >= 12 ? 'PM' : 'AM'
+  const time = `${h12}:${mm} ${ampm}`
+  // Format date MM/DD/YYYY
+  const date = `${String(now.getMonth()+1).padStart(2,'0')}/${String(now.getDate()).padStart(2,'0')}/${now.getFullYear()}`
+  const nextStep = _WIB_STATUS_NEXT_STEPS[newStatus] || 'Follow up required'
+  const prettyNewStatus = String(newStatus).replace(/_/g, ' ')
+  const noteText = `[System / Status Change] Status updated to ${prettyNewStatus} - ${nextStep} at ${time}, ${date}`
+
+  // POST to /api/notes with record_type/record_id pointing at this WIB.
+  // Metadata carries the structured fields so the unified note schema can
+  // render this correctly later (Phase 2).
+  return api('/api/notes', 'POST', {
+    record_type: 'wib_records',
+    record_id:   wibId,
+    details:     noteText,
+    metadata: {
+      note_type:     'system_status_change',
+      channel:       'System',
+      author_name:   'System',
+      old_status:    oldStatus || null,
+      new_status:    newStatus,
+      next_step:     nextStep,
+      time_display:  time,
+      date_display:  date,
+      content:       noteText,
+    },
+  })
 }
 
 /* ═══════════════════════════════════════════════════
@@ -3935,22 +4014,57 @@ function showNotifPane(pane,btn){
   if(pane==='notifs'){body.innerHTML='<div style="padding:20px;text-align:center;color:var(--text3);font-size:12px">No notifications</div>'}
 }
 
-/* ─── NOTIFICATION HELPERS ─────────────────────────────────────────────────── */
-// Global unread count — updated by loadNotificationBadge()
+/* ─── NOTIFICATION HELPERS ─────────────────────────────────────────────────────
+   PHASE 1 mandate: the sidebar badge is the SINGLE SOURCE OF TRUTH for the
+   visible unread count. _setNotifBadge(count) is the only function allowed to
+   write to #notif-badge. Every other touchpoint calls it, never DOM directly.
+
+   Truth-sourcing rule: count comes from the actual notifications array length
+   returned by /api/notifications (filtered to is_read=false). If the server
+   sends a unread_count that disagrees with the array length, the array wins
+   and a phantom-reconcile is fired to clean up server state.
+─────────────────────────────────────────────────────────────────────────────── */
 window._notifUnread = 0
 
-// Fetch unread count and update sidebar badge
+// THE ONLY FUNCTION ALLOWED TO TOUCH #notif-badge. Every notification flow
+// calls this; nothing else writes to the badge DOM element.
+function _setNotifBadge(count) {
+  const n = Math.max(0, parseInt(count, 10) || 0)
+  window._notifUnread = n
+  const badge = document.getElementById('notif-badge')
+  if (badge) {
+    if (n > 0) {
+      badge.textContent = n > 99 ? '99+' : String(n)
+      badge.style.display = ''
+    } else {
+      badge.textContent = ''
+      badge.style.display = 'none'
+    }
+  }
+}
+
+// Fetch unread notifications and update sidebar badge from the ACTUAL array
+// length. If server unread_count disagrees with array length AND array is empty,
+// auto-reconcile by calling mark-all-read so the phantom badge is wiped.
 async function loadNotificationBadge(){
   try {
-    const data = await api('/api/notifications?limit=1&unread_only=true')
-    const count = data.unread_count || 0
-    window._notifUnread = count
-    const badge = document.getElementById('notif-badge')
-    if(badge){
-      badge.textContent = count > 0 ? (count > 99 ? '99+' : String(count)) : ''
-      badge.style.display = count > 0 ? 'inline-flex' : 'none'
+    const data = await api('/api/notifications?limit=50&unread_only=true')
+    const arr = Array.isArray(data?.data) ? data.data : []
+    const serverCount = parseInt(data?.unread_count, 10) || 0
+    // Truth-source: the array we actually got. Not the count field.
+    const actualUnread = arr.length
+
+    // Phantom detection — server says there are unread rows but it can't
+    // return any of them. Wipe server state so it stops lying.
+    if (serverCount > 0 && actualUnread === 0) {
+      console.warn('[notifications] Phantom badge: server claims '+serverCount+' unread but returned 0 rows. Calling mark-all-read to reconcile.')
+      try { await api('/api/notifications/mark-all-read', 'POST', {}) } catch(_) {}
     }
-  } catch(_) {}
+
+    _setNotifBadge(actualUnread)
+  } catch(_) {
+    // On API failure, leave badge alone — don't fabricate a count.
+  }
 }
 
 // Mark a single notification read then re-render
@@ -3973,6 +4087,8 @@ async function respondNotif(id, action){
 async function markAllNotifsRead(){
   try { await api('/api/notifications/mark-all-read', 'POST', {}) } catch(_) {}
   showToast('All marked read','success')
+  // Optimistic — immediately clear the badge before page reload
+  _setNotifBadge(0)
   pageNotifications()
   loadNotificationBadge()
 }
@@ -3989,13 +4105,8 @@ function subscribeToNotifications(){
       table: 'notifications',
       filter: 'recipient_id=eq.' + currentUser?.id
     }, payload => {
-      // Update badge without page reload
-      window._notifUnread = (window._notifUnread || 0) + 1
-      const badge = document.getElementById('notif-badge')
-      if(badge){
-        badge.textContent = window._notifUnread > 99 ? '99+' : String(window._notifUnread)
-        badge.style.display = 'inline-flex'
-      }
+      // Re-fetch from server so we stay truth-sourced rather than incrementing locally
+      loadNotificationBadge()
       // If currently on notifications page, refresh it
       if(currentPage === 'notifications') pageNotifications()
       // Show a toast so user knows something arrived
@@ -4033,9 +4144,10 @@ async function pageNotifications(){
     console.warn('[notifications] Phantom badge detected: server claims ' + unread + ' unread but data array is empty. Auto-reconciling.')
     try { await api('/api/notifications/mark-all-read', 'POST', {}) } catch(_) {}
     unread = 0
-    window._notifUnread = 0
-    const badge = document.getElementById('notif-badge')
-    if (badge) { badge.textContent = ''; badge.style.display = 'none' }
+    _setNotifBadge(0)
+  } else {
+    // Truth-source the badge from what's actually in the array (filtered to unread)
+    _setNotifBadge(notifs.filter(n => !n.is_read).length)
   }
 
   const requests  = notifs.filter(n => n.type === 'access_request')
@@ -6489,7 +6601,8 @@ async function applyAiSystemUpdate(wibId, expectedDiffs) {
 async function pageAgreements() {
   setTopbar('Agreements & Contracts', '', `
     <button class="btn btn-primary" onclick="openNewAgreementModal()">＋ New Agreement</button>
-    <button class="btn btn-ghost" style="margin-left:6px" onclick="exportCSV('agreements')" title="Export">⬇ Export</button>
+    <button class="btn btn-ghost" style="margin-left:6px" onclick="importCSV('agreements')" title="Import from CSV or Excel">⬆ Import</button>
+    <button class="btn btn-ghost" style="margin-left:6px" onclick="exportCSV('agreements')" title="Export to CSV">⬇ Export</button>
   `)
 
   document.getElementById('page-area').innerHTML = '<div class="loading">⏳ Loading agreements...</div>'
@@ -9527,6 +9640,15 @@ const IMPORT_FIELD_DEFS={
     {key:'due_date',label:'Due Date (YYYY-MM-DD)'},
     {key:'notes',label:'Notes'},
   ],
+  agreements:[
+    {key:'agreement_name',label:'Agreement Name / Title',required:true},
+    {key:'company_name',label:'Company / Counterparty Name'},
+    {key:'status',label:'Status (draft/pending_signature/signed/active/expired/terminated)'},
+    {key:'effective_date',label:'Effective Date (YYYY-MM-DD)'},
+    {key:'expiration_date',label:'Expiration Date (YYYY-MM-DD)'},
+    {key:'value',label:'Contract Value ($)'},
+    {key:'notes',label:'Notes / Key Terms'},
+  ],
 }
 
 function importCSV(type){
@@ -9543,6 +9665,7 @@ function importCSV(type){
     applications:'Required: Company Name. Company must already exist in the system.',
     training_providers:'Required: Provider Name. Supports type, contact info, state, programs, agreements, and insurance docs.',
     invoices:'Required: Invoice Number + Amount. Supports invoice type (success fee / flat fee / retainer), due dates, and status tracking.',
+    agreements:'Required: Agreement Name. Supports company/counterparty, status, effective/expiration dates, contract value, and notes for tracking employer service agreements, training provider contracts, IWT agreements, and more.',
   }
   showModal(`📥 Import ${type.charAt(0).toUpperCase()+type.slice(1)} — ${fieldDefs.length} Supported Fields`,`
     <div class="wizard-steps">
@@ -9609,28 +9732,37 @@ async function processImportFile(input,type){
   preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📂 Reading file...</div>'
   const isExcel=file.name.match(/\.xlsx?$/i)
   if(isExcel){
-    // Server-side parsing — no CDN needed. Send the file to /api/parse-xlsx which
-    // uses Node's xlsx package (no browser extension can block this). This works
-    // even on networks where ad blockers / corporate policies block script CDNs.
-    preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📊 Parsing Excel file on server...</div>'
+    // Client-side parsing via SheetJS (loaded from same-origin — no CDN dependency).
+    // window._loadXLSX() tries multiple same-origin paths so it works regardless of
+    // whether the file is at /xlsx.full.min.js, /static/xlsx.full.min.js, etc.
+    preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📊 Loading Excel parser...</div>'
     try{
-      const formData = new FormData()
-      formData.append('file', file)
-      const resp = await fetch('/api/parse-xlsx', {
-        method: 'POST',
-        headers: { 'Authorization': 'Bearer ' + token },
-        body: formData,
-      })
-      const json = await resp.json()
-      if (!resp.ok) throw new Error(json.error || 'Server returned status ' + resp.status)
-      const dataRows = json.rows || []
+      await window._loadXLSX()
+      preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📊 Parsing Excel file...</div>'
+      const buf = await file.arrayBuffer()
+      const wb  = XLSX.read(buf, { type: 'array' })
+      const ws  = wb.Sheets[wb.SheetNames[0]]
+      // Smart header detection: skip 1-3 title/subtitle rows above the real headers
+      const rawAoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+      let headerRowIdx = 0
+      for (let i = 0; i < Math.min(rawAoa.length, 5); i++) {
+        const row = rawAoa[i]
+        const nonEmpty = row.filter(c => String(c || '').trim().length > 0)
+        const looksLikeHeader = nonEmpty.length >= 3 && nonEmpty.every(c => String(c).length < 80)
+        const isTitleRow = nonEmpty.length <= 2 && nonEmpty.some(c => String(c).length > 40)
+        if (looksLikeHeader && !isTitleRow) { headerRowIdx = i; break }
+      }
+      const headers = rawAoa[headerRowIdx].map(h => String(h || '').trim()).filter(Boolean)
+      const dataRows = rawAoa.slice(headerRowIdx + 1)
+        .filter(row => row.some(c => String(c || '').trim()))
+        .map(row => { const obj = {}; headers.forEach((h, i) => { obj[h] = row[i] === undefined ? '' : row[i] }); return obj })
       if (!dataRows.length) {
-        preview.innerHTML = '<div class="alert alert-error">No data rows found in Excel file. The server detected headers at row ' + (json.header_row_index || 1) + ' but found no data below them.</div>'
+        preview.innerHTML = '<div class="alert alert-error">No data rows found in Excel file (detected headers at row ' + (headerRowIdx + 1) + ').</div>'
         return
       }
       renderImportPreviewAndMap(dataRows, type, preview, file.name)
     } catch(err) {
-      preview.innerHTML = `<div class="alert alert-error">Failed to parse Excel on server: ${escHtml(err.message)}. As a workaround you can save the file as .csv and re-import.</div>`
+      preview.innerHTML = `<div class="alert alert-error">Failed to read Excel: ${escHtml(err?.message || String(err) || 'unknown error')}</div>`
     }
     return
   }
@@ -10022,7 +10154,8 @@ function _getLocalData(type){
     users:     window._users,
     audit:     window._auditLogs,
     training_providers: window._trainingData || [],
-    invoices:  window._invoiceData || []
+    invoices:  window._invoiceData || [],
+    agreements: (typeof agrData !== 'undefined' ? agrData : (window._agreements || [])),
   }
   return map[type]||null
 }
@@ -10055,6 +10188,21 @@ function _buildCSVFromData(type){
       const m=r.metadata||{}
       lines.push([m.invoice_number||'',m.company_name||'',m.fee_model||'',
         m.amount||'',m.status||'draft',m.due_date||'',m.notes||'',
+        r.created_at?r.created_at.slice(0,10):''
+      ].map(v=>esc(v)).join(','))
+    })
+    return lines.join('\n')
+  }
+  // ── Agreements: extract from metadata ──
+  if(type==='agreements'){
+    const HEADERS='Agreement Name,Company Name,Status,Effective Date,Expiration Date,Value,Notes,Created'
+    const lines=[HEADERS]
+    rows.forEach(r=>{
+      const m=r.metadata||{}
+      const name=m.agreement_name||m.title||m.contract_name||r.details||''
+      lines.push([name,m.company_name||m.counterparty||'',m.status||'draft',
+        m.effective_date||m.start_date||'',m.expiration_date||m.end_date||'',
+        m.value||m.amount||'',(m.notes||'').replace(/\n/g,' '),
         r.created_at?r.created_at.slice(0,10):''
       ].map(v=>esc(v)).join(','))
     })
@@ -10291,6 +10439,38 @@ var IMPORT_FIELDS = {
     {key:'ai_summary',label:'AI Summary / Research Data'},
     {key:'__skip',label:'— Skip this column —'},
   ],
+  training_providers: [
+    {key:'name',label:'Provider Name',required:true},
+    {key:'provider_type',label:'Provider Type (University/Community College/Online/Vocational/Corporate)'},
+    {key:'state',label:'State (2-letter)'},
+    {key:'website',label:'Website'},
+    {key:'contact_email',label:'Contact Email'},
+    {key:'contact_phone',label:'Contact Phone'},
+    {key:'programs',label:'Programs / Curricula Offered'},
+    {key:'status',label:'Status (active/inactive)'},
+    {key:'notes',label:'Notes (Agreements, insurance docs, completion reports)'},
+    {key:'__skip',label:'— Skip this column —'},
+  ],
+  agreements: [
+    {key:'agreement_name',label:'Agreement Name / Title',required:true},
+    {key:'company_name',label:'Company / Counterparty Name'},
+    {key:'status',label:'Status (draft/pending_signature/signed/active/expired/terminated)'},
+    {key:'effective_date',label:'Effective Date (YYYY-MM-DD)'},
+    {key:'expiration_date',label:'Expiration Date (YYYY-MM-DD)'},
+    {key:'value',label:'Contract Value ($)'},
+    {key:'notes',label:'Notes / Key Terms'},
+    {key:'__skip',label:'— Skip this column —'},
+  ],
+  invoices: [
+    {key:'invoice_number',label:'Invoice Number',required:true},
+    {key:'company_name',label:'Company Name'},
+    {key:'fee_model',label:'Invoice Type (success_fee/flat_fee/retainer/other)'},
+    {key:'amount',label:'Amount ($)',required:true},
+    {key:'status',label:'Status (draft/sent/unpaid/paid/overdue/partially_paid)'},
+    {key:'due_date',label:'Due Date (YYYY-MM-DD)'},
+    {key:'notes',label:'Notes'},
+    {key:'__skip',label:'— Skip this column —'},
+  ],
 }
 
 /* ── SYNONYM MAP: maps Attio export column names → CRM field keys ── */
@@ -10412,7 +10592,58 @@ function smartAutoMatch(header, type) {
 
 var IMPORT_SYNONYMS_MAP = {
   /* ── UNIVERSAL ─────────────────────────────────── */
-  'name':                {locations:'location_name', companies:'company_name', wibs:'wib_name', funding:'opportunity_name', applications:'company_name'},
+  'name':                {locations:'location_name', companies:'company_name', wibs:'wib_name', funding:'opportunity_name', applications:'company_name', training_providers:'name', agreements:'agreement_name', invoices:'invoice_number'},
+  'company name':        {companies:'company_name', wibs:'wib_name', training_providers:'name', agreements:'company_name', applications:'company_name', invoices:'company_name'},
+  'company':             {companies:'company_name', wibs:'wib_name', training_providers:'name', agreements:'company_name', applications:'company_name', invoices:'company_name'},
+  'provider':            {training_providers:'name'},
+  'provider name':       {training_providers:'name'},
+  'training provider':   {training_providers:'name'},
+  'training provider name': {training_providers:'name'},
+  'organization':        {companies:'company_name', wibs:'wib_name', training_providers:'name'},
+  'organization name':   {companies:'company_name', wibs:'wib_name', training_providers:'name'},
+  'institution':         {training_providers:'name'},
+  'institution name':    {training_providers:'name'},
+  'school':              {training_providers:'name'},
+  'school name':         {training_providers:'name'},
+  'vendor':              {training_providers:'name'},
+  'vendor name':         {training_providers:'name'},
+  /* Agreements-specific */
+  'agreement':           {agreements:'agreement_name'},
+  'agreement name':      {agreements:'agreement_name'},
+  'agreement title':     {agreements:'agreement_name'},
+  'contract':            {agreements:'agreement_name'},
+  'contract name':       {agreements:'agreement_name'},
+  'contract title':      {agreements:'agreement_name'},
+  'counterparty':        {agreements:'company_name'},
+  'effective date':      {agreements:'effective_date'},
+  'start date':          {agreements:'effective_date'},
+  'expiration date':     {agreements:'expiration_date'},
+  'expiry date':         {agreements:'expiration_date'},
+  'end date':            {agreements:'expiration_date'},
+  'value':               {agreements:'value', invoices:'amount'},
+  'contract value':      {agreements:'value'},
+  /* Invoices-specific */
+  'invoice':             {invoices:'invoice_number'},
+  'invoice number':      {invoices:'invoice_number'},
+  'invoice #':           {invoices:'invoice_number'},
+  'amount':              {invoices:'amount', agreements:'value'},
+  'due date':            {invoices:'due_date'},
+  'invoice type':        {invoices:'fee_model'},
+  'fee model':           {invoices:'fee_model'},
+  /* Training Providers extras */
+  'department or contact': {training_providers:'__skip'},
+  'department':          {training_providers:'__skip'},
+  'contact name':        {training_providers:'__skip', companies:'primary_contact_name'},
+  'website':             {training_providers:'website', companies:'domain', wibs:'source_url'},
+  'website url':         {training_providers:'website', wibs:'source_url'},
+  'web':                 {training_providers:'website', wibs:'source_url'},
+  'url':                 {training_providers:'website', wibs:'source_url'},
+  'programs':            {training_providers:'programs'},
+  'programs offered':    {training_providers:'programs'},
+  'curricula':           {training_providers:'programs'},
+  'courses':             {training_providers:'programs'},
+  'provider type':       {training_providers:'provider_type'},
+  /* Existing entries below */
   'status':              'status',
   'lifecycle stage':     'status',
   'deal stage':          'status',
@@ -10431,11 +10662,13 @@ var IMPORT_SYNONYMS_MAP = {
   'latest update':       'notes',
   'lastest update':      'notes',
   'last update':         'notes',
-  'email':               {companies:'primary_contact_email', wibs:'wib_email'},
-  'email address':       {companies:'primary_contact_email', wibs:'wib_email'},
-  'phone':               {companies:'primary_contact_phone', wibs:'wib_phone'},
-  'phone number':        {companies:'primary_contact_phone', wibs:'wib_phone'},
-  'type':                {wibs:'wib_type', companies:'company_type'},
+  'email':               {companies:'primary_contact_email', wibs:'wib_email', training_providers:'contact_email'},
+  'email address':       {companies:'primary_contact_email', wibs:'wib_email', training_providers:'contact_email'},
+  'contact email':       {companies:'primary_contact_email', wibs:'wib_email', training_providers:'contact_email'},
+  'phone':               {companies:'primary_contact_phone', wibs:'wib_phone', training_providers:'contact_phone'},
+  'phone number':        {companies:'primary_contact_phone', wibs:'wib_phone', training_providers:'contact_phone'},
+  'contact phone':       {companies:'primary_contact_phone', wibs:'wib_phone', training_providers:'contact_phone'},
+  'type':                {wibs:'wib_type', companies:'company_type', training_providers:'provider_type'},
   'zip':                 '__skip',
   'zip code':            '__skip',
   'postal code':         '__skip',
