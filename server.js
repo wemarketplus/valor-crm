@@ -462,7 +462,10 @@ app.get('/api/wibs', auth, async (req, res) => {
     const s = `%${search}%`
     q = q.or(`wib_name.ilike.${s},wib_email.ilike.${s},wib_phone.ilike.${s},state.ilike.${s},notes.ilike.${s}`)
   }
-  q = q.order('call_priority_score', { ascending: false }).range(+offset, +offset + Math.min(+limit, 500) - 1)
+  // Cap raised to 5000 (was 500) so the full WIB list is returned. The earlier
+  // 500 cap silently truncated lists larger than 500 — e.g. a 570-WIB database
+  // would only show 500. count is still 'exact' so the true total is reported.
+  q = q.order('call_priority_score', { ascending: false }).range(+offset, +offset + Math.min(+limit, 5000) - 1)
   const { data, error, count } = await q; if (error) return res.status(400).json({ error: error.message }); res.json({ data, count })
 })
 app.get('/api/wibs/:id', auth, async (req, res) => {
