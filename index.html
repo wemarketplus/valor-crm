@@ -6568,6 +6568,9 @@ function _startWibAiPolling() {
           <button class="btn btn-sm btn-primary" onclick="closeModal();loadPage('wibs')">View ${job.created} New WIBs</button>
         </div>` : `<div style="margin-top:10px"><button class="btn btn-xs" onclick="_cancelWibAiSearch()">Stop Search</button></div>`}
         ${done && job.failedStates && job.failedStates.length ? `<div style="margin-top:8px;font-size:11px;color:var(--yellow-t)">States that failed (retry later): ${job.failedStates.join(', ')}</div>` : ''}
+        ${job.errors && job.errors.length ? `<div style="margin-top:8px;font-size:10.5px;color:var(--red-t);max-height:80px;overflow-y:auto;background:var(--bg1);border-radius:6px;padding:6px">
+          <strong>Error detail:</strong><br>${job.errors.slice(0,5).map(e=>escHtml(String(e))).join('<br>')}
+        </div>` : ''}
       </div>`
 
     if (done) { clearInterval(window._wibAiPoll); window._wibAiPoll = null }
