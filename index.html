@@ -1609,6 +1609,10 @@ window._loadXLSX = async function _loadXLSX(){
   if (window.XLSX) return window.XLSX
   if (window._xlsxLoading) return window._xlsxLoading
   const CDNS = [
+    // Same-origin first: if you've placed xlsx.full.min.js in src/public/, this
+    // works regardless of CDN blocking, ad blockers, or corporate firewalls.
+    // Falls through to CDNs if the file isn't there.
+    '/xlsx.full.min.js',
     'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
     'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js',
     'https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js',
@@ -1639,12 +1643,13 @@ window._loadXLSX = async function _loadXLSX(){
     }
     window._xlsxLoading = null
     throw new Error(
-      'Failed to load the Excel parser from all 3 CDNs (cdnjs, jsdelivr, unpkg). ' +
-      'This is almost always caused by an ad blocker, browser extension, or ' +
-      'corporate network policy blocking script CDNs. ' +
-      'Try (1) disabling ad blockers and extensions for this site, ' +
-      '(2) using an incognito/private window, or ' +
-      '(3) saving the file as .csv and re-importing.\n\n' +
+      'Failed to load the Excel parser from all sources (self-hosted, cdnjs, jsdelivr, unpkg). ' +
+      'Your network/browser is blocking all script CDNs. ' +
+      'IMMEDIATE WORKAROUND: open your file in Excel, "Save As" .csv, and re-import.\n\n' +
+      'PERMANENT FIX (for an admin): download SheetJS from ' +
+      'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js ' +
+      'and place it at src/public/xlsx.full.min.js in the repo, then redeploy. ' +
+      'It will then load from the same domain and bypass all blocking.\n\n' +
       'Details: ' + errors.join(' | ')
     )
   })()
@@ -5813,13 +5818,15 @@ let _invoiceData   = []
 async function pageInvoices() {
   setTopbar('Invoices', '', `
     <div style="display:flex;gap:6px;align-items:center">
-      <button class="btn ie-btn" onclick="toggleIEMenu('inv-ie')">⬆ Import / Export ∨</button>
-      <div class="ie-menu" id="inv-ie">
-        <div class="ie-menu-hd">Invoices Import & Export</div>
-        <div class="ie-item" onclick="closeAllIE();importCSV('invoices')"><span class="ie-icon">📥</span>Import from CSV / Excel</div>
-        <div class="ie-sep"></div>
-        <div class="ie-item" onclick="closeAllIE();exportCSV('invoices')"><span class="ie-icon">📤</span>Export as CSV</div>
-        <div class="ie-item" onclick="closeAllIE();exportExcel('invoices')"><span class="ie-icon">📊</span>Export as Excel</div>
+      <div class="ie-wrap">
+        <button class="btn ie-btn" onclick="toggleIEMenu('inv-ie')">⬆ Import / Export ∨</button>
+        <div class="ie-menu" id="inv-ie">
+          <div class="ie-menu-hd">Invoices Import & Export</div>
+          <div class="ie-item" onclick="closeAllIE();importCSV('invoices')"><span class="ie-icon">📥</span>Import from CSV / Excel</div>
+          <div class="ie-sep"></div>
+          <div class="ie-item" onclick="closeAllIE();exportCSV('invoices')"><span class="ie-icon">📤</span>Export as CSV</div>
+          <div class="ie-item" onclick="closeAllIE();exportExcel('invoices')"><span class="ie-icon">📊</span>Export as Excel</div>
+        </div>
       </div>
       <button class="btn btn-primary" onclick="openNewInvoiceModal()">+ New Invoice</button>
     </div>`)
@@ -7269,13 +7276,15 @@ let _trainingData = []
 async function pageTraining() {
   setTopbar('Training Providers', '', `
     <div style="display:flex;gap:6px;align-items:center">
-      <button class="btn ie-btn" onclick="toggleIEMenu('tp-ie')">⬆ Import / Export ∨</button>
-      <div class="ie-menu" id="tp-ie">
-        <div class="ie-menu-hd">Training Providers Import & Export</div>
-        <div class="ie-item" onclick="closeAllIE();importCSV('training_providers')"><span class="ie-icon">📥</span>Import from CSV / Excel</div>
-        <div class="ie-sep"></div>
-        <div class="ie-item" onclick="closeAllIE();exportCSV('training_providers')"><span class="ie-icon">📤</span>Export as CSV</div>
-        <div class="ie-item" onclick="closeAllIE();exportExcel('training_providers')"><span class="ie-icon">📊</span>Export as Excel</div>
+      <div class="ie-wrap">
+        <button class="btn ie-btn" onclick="toggleIEMenu('tp-ie')">⬆ Import / Export ∨</button>
+        <div class="ie-menu" id="tp-ie">
+          <div class="ie-menu-hd">Training Providers Import & Export</div>
+          <div class="ie-item" onclick="closeAllIE();importCSV('training_providers')"><span class="ie-icon">📥</span>Import from CSV / Excel</div>
+          <div class="ie-sep"></div>
+          <div class="ie-item" onclick="closeAllIE();exportCSV('training_providers')"><span class="ie-icon">📤</span>Export as CSV</div>
+          <div class="ie-item" onclick="closeAllIE();exportExcel('training_providers')"><span class="ie-icon">📊</span>Export as Excel</div>
+        </div>
       </div>
       <button class="btn btn-primary" onclick="openNewTrainingModal()">+ Add Provider</button>
     </div>`)
@@ -9497,7 +9506,27 @@ const IMPORT_FIELD_DEFS={
     {key:'tags',label:'Tags'},
     {key:'activity_history',label:'Activity History'},
     {key:'ai_summary',label:'AI Summary / Research Data'},
-  ]
+  ],
+  training_providers:[
+    {key:'name',label:'Provider Name',required:true},
+    {key:'provider_type',label:'Provider Type (University/Community College/Online/Vocational/Corporate)'},
+    {key:'state',label:'State (2-letter)'},
+    {key:'website',label:'Website'},
+    {key:'contact_email',label:'Contact Email'},
+    {key:'contact_phone',label:'Contact Phone'},
+    {key:'programs',label:'Programs / Curricula Offered'},
+    {key:'status',label:'Status (active/inactive)'},
+    {key:'notes',label:'Notes (Agreements, insurance docs, completion reports)'},
+  ],
+  invoices:[
+    {key:'invoice_number',label:'Invoice Number',required:true},
+    {key:'company_name',label:'Company Name'},
+    {key:'fee_model',label:'Invoice Type (success_fee/flat_fee/retainer/other)'},
+    {key:'amount',label:'Amount ($)',required:true},
+    {key:'status',label:'Status (draft/sent/unpaid/paid/overdue/partially_paid)'},
+    {key:'due_date',label:'Due Date (YYYY-MM-DD)'},
+    {key:'notes',label:'Notes'},
+  ],
 }
 
 function importCSV(type){
@@ -9512,6 +9541,8 @@ function importCSV(type){
     locations:'Required: Location Name + State. Supports parent company linking by name.',
     funding:'Required: Opportunity Name. Imports all funding details and WIB linking.',
     applications:'Required: Company Name. Company must already exist in the system.',
+    training_providers:'Required: Provider Name. Supports type, contact info, state, programs, agreements, and insurance docs.',
+    invoices:'Required: Invoice Number + Amount. Supports invoice type (success fee / flat fee / retainer), due dates, and status tracking.',
   }
   showModal(`📥 Import ${type.charAt(0).toUpperCase()+type.slice(1)} — ${fieldDefs.length} Supported Fields`,`
     <div class="wizard-steps">
@@ -9578,36 +9609,29 @@ async function processImportFile(input,type){
   preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📂 Reading file...</div>'
   const isExcel=file.name.match(/\.xlsx?$/i)
   if(isExcel){
-    preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📊 Loading Excel reader...</div>'
+    // Server-side parsing — no CDN needed. Send the file to /api/parse-xlsx which
+    // uses Node's xlsx package (no browser extension can block this). This works
+    // even on networks where ad blockers / corporate policies block script CDNs.
+    preview.innerHTML='<div style="padding:10px;color:var(--text3);font-size:12px">📊 Parsing Excel file on server...</div>'
     try{
-      if(!window.XLSX){
-        // Multi-CDN loader — tries cdnjs, jsdelivr, then unpkg. As long as one
-        // works the import succeeds. Throws a descriptive error only if ALL fail.
-        await window._loadXLSX()
+      const formData = new FormData()
+      formData.append('file', file)
+      const resp = await fetch('/api/parse-xlsx', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token },
+        body: formData,
+      })
+      const json = await resp.json()
+      if (!resp.ok) throw new Error(json.error || 'Server returned status ' + resp.status)
+      const dataRows = json.rows || []
+      if (!dataRows.length) {
+        preview.innerHTML = '<div class="alert alert-error">No data rows found in Excel file. The server detected headers at row ' + (json.header_row_index || 1) + ' but found no data below them.</div>'
+        return
       }
-      const buf=await file.arrayBuffer()
-      const wb=XLSX.read(buf,{type:'array'})
-      const ws=wb.Sheets[wb.SheetNames[0]]
-      // Smart header detection: find the first row where most cells are non-empty strings
-      // This handles files with 1-3 title/subtitle rows before the real headers
-      const rawAoa=XLSX.utils.sheet_to_json(ws,{header:1,defval:''})
-      let headerRowIdx=0
-      for(let i=0;i<Math.min(rawAoa.length,5);i++){
-        const row=rawAoa[i]
-        const nonEmpty=row.filter(c=>String(c||'').trim().length>0)
-        // Real header row: multiple non-empty cells, no cell is much longer than ~60 chars
-        const looksLikeHeader=nonEmpty.length>=3&&nonEmpty.every(c=>String(c).length<80)
-        // Skip rows that are a single long title string
-        const isTitleRow=nonEmpty.length<=2&&nonEmpty.some(c=>String(c).length>40)
-        if(looksLikeHeader&&!isTitleRow){headerRowIdx=i;break}
-      }
-      const headers=rawAoa[headerRowIdx].map(h=>String(h||'').trim()).filter(Boolean)
-      const dataRows=rawAoa.slice(headerRowIdx+1)
-        .filter(row=>row.some(c=>String(c||'').trim()))
-        .map(row=>{const obj={};headers.forEach((h,i)=>{obj[h]=row[i]===undefined?'':row[i]});return obj})
-      if(!dataRows.length){preview.innerHTML='<div class="alert alert-error">No data found in Excel file (detected headers at row '+(headerRowIdx+1)+')</div>';return}
-      renderImportPreviewAndMap(dataRows,type,preview,file.name)
-    }catch(err){preview.innerHTML=`<div class="alert alert-error">Failed to read Excel: ${err?.message||String(err)||'unknown error'}</div>`}
+      renderImportPreviewAndMap(dataRows, type, preview, file.name)
+    } catch(err) {
+      preview.innerHTML = `<div class="alert alert-error">Failed to parse Excel on server: ${escHtml(err.message)}. As a workaround you can save the file as .csv and re-import.</div>`
+    }
     return
   }
   const reader=new FileReader()
@@ -10094,26 +10118,36 @@ async function exportCSV(type){
 async function exportExcel(type){
   closeAllIE();showToast('Preparing Excel export...','info')
   try{
-    if(!window.XLSX){ await window._loadXLSX() }
-    // Try API, fall back to client-side data
-    let csvText=null
-    try{
-      const r=await fetch(`/api/export/${type}`,{headers:{'Authorization':`Bearer ${token}`}})
-      if(r.ok) csvText=await r.text()
-    }catch(_){}
-    if(!csvText){
-      csvText=_buildCSVFromData(type)
-      if(!csvText){showToast('No data available to export','warn');return}
+    // Server-side .xlsx generation — no browser library needed. The server has
+    // /api/export/:type/xlsx which streams a real .xlsx file. This works even
+    // when ad blockers / corporate policies block script CDNs.
+    const resp = await fetch('/api/export/' + type + '/xlsx', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    })
+    if (!resp.ok) {
+      // Endpoint may not exist for every type — fall back to CSV download with
+      // a clear message rather than silently failing.
+      let errText = ''
+      try { errText = (await resp.json()).error || '' } catch (_) {}
+      if (resp.status === 404) {
+        showToast('Excel export not available for ' + type + ' yet — try CSV', 'warn')
+        return
+      }
+      throw new Error(errText || 'Server returned status ' + resp.status)
     }
-    const lines=csvText.split(/\r?\n/).filter(l=>l.trim())
-    const rows=lines.map(l=>{const vals=[];let cur='',inQ=false;for(let i=0;i<l.length;i++){const c=l[i];if(c==='"'){if(inQ&&l[i+1]==='"'){cur+='"';i++}else inQ=!inQ}else if(c===','&&!inQ){vals.push(cur);cur=''}else cur+=c}vals.push(cur);return vals})
-    const ws=XLSX.utils.aoa_to_sheet(rows)
-    const colWidths=rows[0]?.map((_,ci)=>({wch:Math.min(40,Math.max(10,...rows.map(r=>String(r[ci]||'').length)))}))
-    if(colWidths)ws['!cols']=colWidths
-    const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,type.charAt(0).toUpperCase()+type.slice(1))
-    const filename=`valor-${type}-${new Date().toISOString().split('T')[0]}.xlsx`
-    XLSX.writeFile(wb,filename);showToast(`✅ Exported as ${filename}`,'success')
-  }catch(e){showToast(`Export failed: ${e.message}`,'error')}
+    const blob = await resp.blob()
+    const filename = 'valor-' + type + '-' + new Date().toISOString().split('T')[0] + '.xlsx'
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(link.href)
+    showToast('✅ Exported as ' + filename, 'success')
+  }catch(e){
+    showToast('Export failed: ' + e.message, 'error')
+  }
 }
 
 async function exportPDF(type){
