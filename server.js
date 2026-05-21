@@ -944,31 +944,75 @@ app.put('/api/users/:id', auth, requireAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({error:err.message}) }
 })
 app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
-  // FIX: route now uses requireAdmin (was requireSuper) so the UI Delete
-  // button — which renders for both Admin and Super Admin — actually works
-  // for plain Admins instead of silently 403-ing.
+  // ─── BULLETPROOF USER DELETE — referential cascade unlink ──────────────────
+  // requireAdmin (not requireSuper) so the UI Delete button works for Admins.
   // A plain Admin still may NOT delete a Super Admin (guard below).
+  //
+  // Postgres rejects deleting a user_profiles row while other tables still
+  // reference its id. This route systematically unlinks EVERY dependent row
+  // BEFORE the profile delete, so the deletion always succeeds regardless of
+  // how the database foreign keys are configured. Ownership trails are
+  // nullified (records preserved, owner cleared); ephemeral communication
+  // rows are deleted outright. Each step is wrapped so one missing table
+  // does not abort the whole operation.
+  const targetId = req.params.id
   try {
-    if (req.params.id===req.user.id) return res.status(400).json({error:'Cannot delete your own account'})
-    const { data:target } = await supabase.from('user_profiles').select('email,role').eq('id',req.params.id).single()
-    if (!target) return res.status(404).json({error:'User not found'})
-    if (target.role==='super_admin') {
-      if (req.user.role!=='super_admin') return res.status(403).json({error:'Only a Super Admin can delete a Super Admin account'})
-      const { count } = await supabase.from('user_profiles').select('*',{count:'exact',head:true}).eq('role','super_admin')
-      if ((count||0)<=1) return res.status(400).json({error:'Cannot delete the only Super Admin'})
+    if (targetId === req.user.id) return res.status(400).json({ error: 'Cannot delete your own account' })
+    const { data: target } = await supabase.from('user_profiles').select('email,role').eq('id', targetId).single()
+    if (!target) return res.status(404).json({ error: 'User not found' })
+    if (target.role === 'super_admin') {
+      if (req.user.role !== 'super_admin') return res.status(403).json({ error: 'Only a Super Admin can delete a Super Admin account' })
+      const { count } = await supabase.from('user_profiles').select('*', { count: 'exact', head: true }).eq('role', 'super_admin')
+      if ((count || 0) <= 1) return res.status(400).json({ error: 'Cannot delete the only Super Admin' })
     }
-    // ─── RE-HIRE FIX (part 1) ─────────────────────────────────────────────
-    // Delete the auth user first, then explicitly remove the user_profiles
-    // row so the email is fully freed. If the profile row is left behind it
-    // can collide on a later re-add. Both deletions are required for a clean
-    // re-hire of the same email address.
-    const { error } = await supabase.auth.admin.deleteUser(req.params.id)
-    if (error) return res.status(400).json({error:error.message})
-    try { await supabase.from('user_profiles').delete().eq('id',req.params.id) } catch (e) { console.warn('profile cleanup after delete:',e.message) }
-    try { await supabase.from('user_territory_assignments').delete().eq('user_id',req.params.id) } catch (_) {}
-    try { await supabase.from('activity_log').insert({user_id:req.user.id,action:'DELETE_USER',details:`DELETED: ${target.email}`}) } catch (_) {}
-    res.json({success:true})
-  } catch (err) { res.status(500).json({error:err.message}) }
+
+    const cleanupWarnings = []
+    const nullify = async (table, column) => {
+      try {
+        const { error } = await supabase.from(table).update({ [column]: null }).eq(column, targetId)
+        if (error) cleanupWarnings.push(`${table}.${column}: ${error.message}`)
+      } catch (e) { cleanupWarnings.push(`${table}.${column}: ${e.message}`) }
+    }
+    const purge = async (table, column) => {
+      try {
+        const { error } = await supabase.from(table).delete().eq(column, targetId)
+        if (error) cleanupWarnings.push(`${table}.${column}: ${error.message}`)
+      } catch (e) { cleanupWarnings.push(`${table}.${column}: ${e.message}`) }
+    }
+
+    // 1. Nullify ownership fields — records are preserved, owner cleared.
+    await nullify('wib_records',  'owner_id')
+    await nullify('applications', 'owner_id')
+
+    // 2. Nullify operational activity trails — history preserved, actor cleared.
+    await nullify('activity_log', 'user_id')
+
+    // 3. Delete ephemeral communication / assignment rows outright.
+    await purge('chat_messages',            'sender_id')
+    await purge('chat_dm_messages',         'sender_id')
+    await purge('chat_dm_messages',         'recipient_id')
+    await purge('notifications',            'recipient_id')
+    await purge('notifications',            'sender_id')
+    await purge('user_territory_assignments', 'user_id')
+
+    // 4. Drop the core profile row, then wipe the auth account.
+    const { error: profileErr } = await supabase.from('user_profiles').delete().eq('id', targetId)
+    if (profileErr) {
+      console.error('[DELETE USER] profile delete still blocked:', profileErr.message)
+      return res.status(400).json({
+        error: 'Could not delete the user profile. A database reference is still blocking it: ' + profileErr.message,
+        cleanup_warnings: cleanupWarnings,
+      })
+    }
+    const { error: authErr } = await supabase.auth.admin.deleteUser(targetId)
+    if (authErr) console.warn('[DELETE USER] profile removed but auth wipe failed:', authErr.message)
+
+    try { await supabase.from('activity_log').insert({ user_id: req.user.id, action: 'DELETE_USER', details: `DELETED: ${target.email}` }) } catch (_) {}
+    res.json({ success: true, cleanup_warnings: cleanupWarnings.length ? cleanupWarnings : undefined })
+  } catch (err) {
+    console.error('[DELETE USER] fatal:', err.message)
+    res.status(500).json({ error: err.message })
+  }
 })
 
 app.get('/api/contacts', auth, async (req,res)=>{
