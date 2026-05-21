@@ -128,6 +128,12 @@ setInterval(async () => {
   try {
     await supabase.from('revoked_tokens').delete().lt('expires_at', new Date().toISOString())
   } catch (e) { console.warn('revoked_tokens pruning error:', e.message) }
+  // Chat retention — hard-delete chat + DM messages older than 7 days (no archive).
+  try {
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+    await supabase.from('chat_messages').delete().lt('created_at', cutoff)
+    await supabase.from('chat_dm_messages').delete().lt('created_at', cutoff)
+  } catch (e) { console.warn('chat retention pruning error:', e.message) }
 }, 30 * 60 * 1000)
 ;(async () => {
   try {
@@ -2962,6 +2968,15 @@ app.get('/api/chat/stream', async (req,res)=>{
   const pingInterval=setInterval(()=>{ try { res.write(': ping\n\n') } catch (_) { cleanup() } },20_000)
   function cleanup() { clearInterval(pingInterval); const set=_sseClients.get(userId); if (set) { set.delete(res); if (set.size===0) { _sseClients.delete(userId); _presence.delete(userId); broadcastPresence() } }; try { res.end() } catch (_) {} }
   req.on('close',cleanup); req.on('error',cleanup); res.on('finish',cleanup)
+})
+// ─── CHAT MUTE TOGGLE — per-user, persisted in user_profiles.chat_muted ───────
+// Run once in Supabase: ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS chat_muted BOOLEAN NOT NULL DEFAULT false;
+app.put('/api/chat/mute', auth, async (req, res) => {
+  const muted = req.body && req.body.muted === true
+  const { data, error } = await supabase.from('user_profiles')
+    .update({ chat_muted: muted }).eq('id', req.user.id).select('id,chat_muted').single()
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ success: true, chat_muted: data ? data.chat_muted : muted })
 })
 app.post('/api/chat/heartbeat', auth, (req,res)=>{
   const ex=_presence.get(req.user.id)||{id:req.user.id,name:req.user.full_name||req.user.email,email:req.user.email,initials:(req.user.full_name||req.user.email||'?').slice(0,2).toUpperCase()}
