@@ -3078,7 +3078,12 @@ app.get('/api/auth/google/callback', async (req,res)=>{
   let sd; try { sd=JSON.parse(Buffer.from(state,'base64url').toString('utf8')) } catch { return res.redirect('/?drive_error=invalid_state') }
   const td=await(await fetch('https://oauth2.googleapis.com/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({code,client_id:GOOGLE_CLIENT_ID,client_secret:GOOGLE_CLIENT_SECRET,redirect_uri:GOOGLE_REDIRECT_URI,grant_type:'authorization_code'})})).json()
   if (!td.access_token) return res.redirect('/?drive_error='+encodeURIComponent(td.error_description||'token_exchange_failed'))
-  await supabase.from('user_drive_tokens').upsert({user_id:sd.userId,access_token:td.access_token,refresh_token:td.refresh_token||null,expires_at:new Date(Date.now()+(td.expires_in||3600)*1000).toISOString(),scope:td.scope},{onConflict:'user_id'})
+ const { error: saveErr } = await supabase.from('user_drive_tokens').upsert({user_id:sd.userId,access_token:td.access_token,refresh_token:td.refresh_token||null,expires_at:new Date(Date.now()+(td.expires_in||3600)*1000).toISOString(),scope:td.scope},{onConflict:'user_id'})
+  if (saveErr) {
+    console.error('[drive] token save FAILED:', saveErr.message, '| details:', saveErr.details, '| hint:', saveErr.hint, '| code:', saveErr.code)
+    return res.redirect('/?drive_error=' + encodeURIComponent('save_failed: ' + saveErr.message))
+  }
+  console.log('[drive] token saved OK for user', sd.userId)
   res.redirect('/?page=drive&drive_connected=1')
 })
 app.get('/api/drive/status', auth, async (req,res)=>{ const { data }=await supabase.from('user_drive_tokens').select('expires_at,scope').eq('user_id',req.user.id).single(); res.json({connected:!!data,expires_at:data?.expires_at}) })
