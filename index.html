@@ -1861,7 +1861,6 @@ function renderApp(){
     var div = nav.querySelector('.sb-divider:last-of-type')
     if (div) nav.insertBefore(el, div); else nav.appendChild(el)
   }
-  // Retry a few times in case the sidebar paints late.
   ;[150, 600, 1500].forEach(function(ms){ setTimeout(window._mountChatNav, ms) })
 }
 
@@ -3012,7 +3011,7 @@ function renderNoteCard(n){
       ? `<span style="font-size:9.5px;color:var(--green-t);margin-left:8px">📅 ${escHtml(fmtNoteDateTime(meta.call_date))}</span>`
       : ''
 
-    return`<div class="aircall-card" data-note-id="${n.id}" data-note-raw="${escHtml(content)}" data-note-type="${escHtml(noteType||'Aircall')}">
+    return`<div class="aircall-card">
       <div class="aircall-hd" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px">
         <div style="width:26px;height:26px;border-radius:50%;background:#16a34a;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0">📞</div>
         <div style="flex:1;min-width:0">
@@ -3021,7 +3020,7 @@ function renderNoteCard(n){
         </div>
         ${durationBadge}${dirBadge}
         ${meta.recording_url?`<a href="${escUrl(meta.recording_url)}" target="_blank" style="font-size:9.5px;color:var(--blue-t);margin-left:auto;text-decoration:none">🔗 Recording</a>`:''}
-        <button class="action-btn" title="Edit note" onclick="editNote('${n.id}')">✎</button>
+        <button class="action-btn del" onclick="deleteNote('${n.id}')">✕</button>
       </div>
       ${cpWrapHtml}
       ${sentimentHtml}
@@ -3033,7 +3032,7 @@ function renderNoteCard(n){
 
   // Standard note
   const initials = authorName.slice(0,2).toUpperCase()
-  return`<div class="note-card" data-note-id="${n.id}" data-note-raw="${escHtml(content)}" data-note-type="${escHtml(noteType)}">
+  return`<div class="note-card">
     <div class="note-meta" style="align-items:flex-start">
       <div class="note-av" style="margin-top:2px">${initials}</div>
       <div style="flex:1;min-width:0">
@@ -3041,56 +3040,20 @@ function renderNoteCard(n){
         <div class="note-time">${escHtml(noteDateTime)}</div>
       </div>
       <span class="note-badge" style="margin-top:2px">${escHtml(noteType)}</span>
-      <button class="action-btn" title="Edit note" onclick="editNote('${n.id}')">✎</button>
+      <button class="action-btn del" onclick="deleteNote('${n.id}')">✕</button>
     </div>
     <div class="note-content" style="margin-top:6px">${escHtml(content).replace(/\n/g,'<br>')}</div>
   </div>`
 }
 
-// Notes are EDITABLE but NOT DELETABLE by design. editNote opens an inline editor
-// on the note card; saving sends PUT /api/notes/:id. There is no deleteNote function.
-async function editNote(id){
-  const card = document.querySelector('[data-note-id="'+id+'"]')
-  if(!card){ showToast('Note not found','error'); return }
-  if(card.querySelector('.note-edit-ta')) return  // already editing
-  const contentEl = card.querySelector('.note-content')
-    || card.querySelector('[style*="border-top"]')  // Aircall content div fallback
-  const raw = card.getAttribute('data-note-raw') || ''
-  const noteType = card.getAttribute('data-note-type') || 'Note'
-  const editBtn = card.querySelector('.action-btn')
-  if(editBtn) editBtn.style.display = 'none'
-
-  const editor = document.createElement('div')
-  editor.style.marginTop = '6px'
-  editor.innerHTML =
-    '<textarea class="note-edit-ta" style="width:100%;min-height:70px;font-size:11.5px;'
-    + 'padding:7px;border:1px solid var(--blue);border-radius:6px;resize:vertical;'
-    + 'font-family:inherit;box-sizing:border-box"></textarea>'
-    + '<div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">'
-    + '<button class="btn btn-sm btn-ghost note-edit-cancel">Cancel</button>'
-    + '<button class="btn btn-primary btn-sm note-edit-save">Save</button></div>'
-  const ta = editor.querySelector('.note-edit-ta')
-  ta.value = raw
-  if(contentEl){ contentEl.style.display = 'none'; contentEl.insertAdjacentElement('afterend', editor) }
-  else { card.appendChild(editor) }
-  ta.focus()
-
-  const restore = () => {
-    editor.remove()
-    if(contentEl) contentEl.style.display = ''
-    if(editBtn) editBtn.style.display = ''
-  }
-  editor.querySelector('.note-edit-cancel').onclick = restore
-  editor.querySelector('.note-edit-save').onclick = async () => {
-    const val = ta.value.trim()
-    if(!val){ showToast('Note cannot be empty','error'); return }
-    try{
-      await api('/api/notes/'+id,'PUT',{ content: val, note_type: noteType })
-      showToast('Note updated','success')
-      if(currentWib)     loadWibTabData(wibTab)
-      if(currentCompany) loadCompanyTabData(companyTab)
-    }catch(e){ showToast(e.message,'error'); restore() }
-  }
+async function deleteNote(id){
+  if(!confirm('Delete this note?'))return
+  try{
+    await api('/api/notes/'+id,'DELETE')
+    showToast('Note deleted','success')
+    if(currentWib)loadWibTabData(wibTab)
+    if(currentCompany)loadCompanyTabData(companyTab)
+  }catch(e){showToast(e.message,'error')}
 }
 
 /* ═══════════════════════════════════════════════════
@@ -4527,9 +4490,9 @@ function deleteUserConfirm(id,name){
   showModal(`⚠️ Delete User — Irreversible`,`
     <div class="alert alert-error">⚠️ You are about to permanently delete <strong>${name}</strong>. This will:<br><br>• Immediately revoke all system access<br>• Terminate all active sessions<br>• Remove login credentials permanently<br>• This CANNOT be undone</div>
     <div style="margin-top:12px;font-size:12px">Type <strong>DELETE</strong> to confirm:</div>
-    <input id="del-confirm" placeholder="Type DELETE here..." style="margin-top:8px" autocomplete="off">`,
+    <input id="del-confirm" placeholder="Type DELETE here..." style="margin-top:8px">`,
   async()=>{
-    const _v=(document.getElementById('del-confirm')?.value||'').trim().toUpperCase();if(_v!=='DELETE'){showToast('Type the word DELETE to confirm','error');return false}
+    if(document.getElementById('del-confirm')?.value!=='DELETE'){showToast('Type DELETE to confirm','error');return false}
     try{await api('/api/users/'+id,'DELETE');showToast('User permanently deleted','success');pageUsers()}catch(e){showToast(e.message,'error');return false}
   })
 }
@@ -9538,7 +9501,7 @@ function openNewNoteModal(){
 
   showModal('New Note',`
     <div style="background:var(--blue-bg);border:.5px solid #93c5fd;border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:11px;color:var(--blue-t)">
-      ℹ️ A note saved on a WIB or Company stays on that record. All notes also appear together on the Notes page. Notes can be edited but not deleted.
+      ℹ️ Notes are shared across the entire CRM. All notes show the author name, date/time, and content wherever they appear — on WIB profiles, Company profiles, the Notes page, and the Calls page.
     </div>
     <div class="form-row">
       <div class="form-group"><div class="form-label">Note Type</div>
@@ -12089,6 +12052,9 @@ function _vcDateLabel(iso) {
 /* ─── Init (called after login / render) ─── */
 function vcInit() {
   if (!token || !currentUser) return
+  // Re-show the chat FAB (logout hides it; this restores it on next login).
+  var _fab = document.getElementById('vc-fab')
+  if (_fab) _fab.style.display = ''
   // Already initialized?
   if (_vc.sseSource) return
 
@@ -12138,7 +12104,7 @@ function _vcConnectSSE() {
   }
   // Helper: play the ping if the message warrants attention (sender is someone else,
   // and either chat panel is closed or user is on a different tab/conversation).
- if (!_vc.playNotify) {
+  if (!_vc.playNotify) {
     _vc.playNotify = function () {
       try {
         if (!_vc.notifyAudio) return
