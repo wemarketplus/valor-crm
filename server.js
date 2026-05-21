@@ -3042,10 +3042,34 @@ async function driveApi(userId,endpoint,opts={}) {
   if (r.status===401) { await supabase.from('user_drive_tokens').delete().eq('user_id',userId); throw new Error('Google Drive authorization expired. Please reconnect.') }
   return r
 }
-app.get('/api/auth/google', auth, (req,res)=>{
+app.get('/api/auth/google', async (req, res) => {
   if (!GOOGLE_CLIENT_ID) return res.status(503).send('GOOGLE_CLIENT_ID not configured.')
-  const state=Buffer.from(JSON.stringify({userId:req.user.id,token:req.query.token})).toString('base64url')
-  res.redirect('https://accounts.google.com/o/oauth2/v2/auth?'+new URLSearchParams({client_id:GOOGLE_CLIENT_ID,redirect_uri:GOOGLE_REDIRECT_URI,response_type:'code',scope:DRIVE_SCOPE+' https://www.googleapis.com/auth/userinfo.email',access_type:'offline',prompt:'consent',state}))
+  // Browser top-level navigation cannot send an Authorization header,
+  // so accept the token from the query string and verify it here.
+  const rawToken = (req.query.token || '').trim()
+  if (!rawToken || rawToken.length < 10) {
+    return res.status(401).send('Authentication required. Please sign in to the CRM, then click Connect Google Drive again.')
+  }
+  let userId = null
+  try {
+    const { data: { user }, error } = await authClient.auth.getUser(rawToken)
+    if (error || !user) {
+      return res.status(401).send('Your session has expired. Please sign in again, then retry Connect Google Drive.')
+    }
+    userId = user.id
+  } catch (e) {
+    return res.status(401).send('Could not verify your session. Please sign in again.')
+  }
+  const state = Buffer.from(JSON.stringify({ userId, token: rawToken })).toString('base64url')
+  res.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: GOOGLE_REDIRECT_URI,
+    response_type: 'code',
+    scope: DRIVE_SCOPE + ' https://www.googleapis.com/auth/userinfo.email',
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  }))
 })
 app.get('/api/auth/google/callback', async (req,res)=>{
   const { code, state, error }=req.query
