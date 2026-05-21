@@ -500,23 +500,51 @@ app.delete('/api/wibs/:id', auth, requireAdmin, async (req, res) => {
 
 // ─── COMPANIES CRUD ───────────────────────────────────────────────────────────
 app.post('/api/companies/dedup', auth, requireAdmin, async (req, res) => {
+  // Dedup by normalized company name. For each duplicate group the OLDEST row
+  // is the keeper; data from newer copies is merged into it for any field the
+  // keeper is missing; child locations/applications are re-pointed at the
+  // keeper; then the duplicates are deleted.
+  //
+  // Performance: child re-link + delete for all dupes in a group run in
+  // PARALLEL (Promise.all), so the whole job completes within one request
+  // instead of timing out after ~258 records.
   const { data: all, error } = await supabase.from('companies').select('*').order('created_at')
   if (error) return res.status(400).json({ error: error.message })
   const groups = {}
-  for (const c of (all||[])) { const key = c.company_name.trim().toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,30); if (!groups[key]) groups[key]=[]; groups[key].push(c) }
-  let merged = 0, deleted = 0, errors = []
+  for (const c of (all||[])) {
+    const key = (c.company_name||'').trim().toLowerCase().replace(/[^a-z0-9]/g,'').substring(0,30)
+    if (!key) continue
+    if (!groups[key]) groups[key]=[]
+    groups[key].push(c)
+  }
+  let merged = 0, deleted = 0
+  const errors = []
   for (const [,group] of Object.entries(groups)) {
     if (group.length < 2) continue
     const keeper = group[0], dupes = group.slice(1), patch = {}
-    for (const d of dupes) for (const [k,v] of Object.entries(d)) if (v && !keeper[k] && !['id','created_at','updated_at'].includes(k)) patch[k]=v
-    if (Object.keys(patch).length) { const { error: pErr } = await supabase.from('companies').update(patch).eq('id',keeper.id); if (pErr) errors.push(pErr.message); else merged++ }
-    for (const d of dupes) {
+    for (const d of dupes) for (const [k,v] of Object.entries(d)) {
+      if (v && !keeper[k] && !['id','created_at','updated_at'].includes(k)) patch[k]=v
+    }
+    if (Object.keys(patch).length) {
+      const { error: pErr } = await supabase.from('companies').update(patch).eq('id',keeper.id)
+      if (pErr) errors.push(pErr.message); else merged++
+    }
+    // Re-link children and delete all duplicates in this group in parallel.
+    const ops = dupes.map(async (d) => {
       await supabase.from('locations').update({ company_id: keeper.id }).eq('company_id', d.id)
       await supabase.from('applications').update({ company_id: keeper.id }).eq('company_id', d.id)
-      const { error: dErr } = await supabase.from('companies').delete().eq('id', d.id); if (!dErr) deleted++
-    }
+      const { error: dErr } = await supabase.from('companies').delete().eq('id', d.id)
+      if (dErr) { errors.push(dErr.message); return false }
+      return true
+    })
+    const results = await Promise.all(ops)
+    deleted += results.filter(Boolean).length
   }
-  res.json({ merged, deleted, errors, total_groups: Object.values(groups).filter(g=>g.length>1).length })
+  res.json({
+    merged, deleted, errors,
+    total_groups: Object.values(groups).filter(g=>g.length>1).length,
+    complete: true,
+  })
 })
 app.get('/api/companies', auth, async (req, res) => {
   const { search, status, limit = 200, offset = 0 } = req.query
@@ -790,11 +818,81 @@ app.get('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, limit = 50 } = req.query
   const bc = global._safeActivityCols || 'id,action,created_at', uj = global._hasUserId !== false ? ',user:user_profiles!user_id(full_name,email)' : ''
   let q = supabase.from('activity_log').select(bc+uj).eq('action', 'NOTE')
-  if (record_type && global._hasRecordType !== false) q = q.eq('record_type', record_type)
-  if (record_id   && global._hasRecordId   !== false) q = q.eq('record_id',   record_id)
+  // When the REAL record_type/record_id columns exist, filter on them directly.
+  if (record_type && global._hasRecordType === true) q = q.eq('record_type', record_type)
+  if (record_id   && global._hasRecordId   === true) q = q.eq('record_id',   record_id)
+  // ─── WIB-NOTES-LEAK FIX ─────────────────────────────────────────────────────
+  // The live activity_log table has NO record_type/record_id columns (Render logs
+  // confirm record_id:false, record_type:false). safeInsertLog therefore stores the
+  // linkage inside the metadata JSON column (metadata.record_type / metadata.record_id).
+  // Previously the GET filter was SKIPPED whenever the real columns were absent, so a
+  // note saved on one WIB was returned for EVERY WIB. Now: filter on the metadata JSON.
+  if (record_type && global._hasRecordType !== true && global._hasMetadata) q = q.eq('metadata->>record_type', record_type)
+  if (record_id   && global._hasRecordId   !== true && global._hasMetadata) q = q.eq('metadata->>record_id',   record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   const { data, error } = await q; if (error) return res.status(400).json({ error: error.message })
-  res.json({ data: (data||[]).map(n => parseLogRow(n)) })
+  let rows = (data||[]).map(n => parseLogRow(n))
+  // Final in-code safety net. Covers two cases the DB-side filter cannot:
+  //  (a) metadata stored inside the `details` JSON string (no real metadata column)
+  //  (b) legacy notes saved before this fix that have NO linkage at all.
+  // A specific-record request (record_id present) must NOT return unlinked notes.
+  // The global Notes tab calls this route with no record_id, so it still sees all.
+  if (record_id || record_type) {
+    rows = rows.filter(n => {
+      const m = n.metadata || {}
+      if (record_id   && String(m.record_id   ?? '') !== String(record_id))   return false
+      if (record_type && String(m.record_type ?? '') !== String(record_type)) return false
+      return true
+    })
+  }
+  res.json({ data: rows })
+})
+
+// EDIT a single note. Notes are EDITABLE but NOT DELETABLE by design — there is
+// deliberately no DELETE /api/notes/:id route. A note is a NOTE row in activity_log;
+// editing updates its content while preserving the WIB/company linkage in metadata.
+app.put('/api/notes/:id', auth, async (req, res) => {
+  const content = (req.body.content || req.body.details || '').trim()
+  if (!content) return res.status(400).json({ error: 'Note content required' })
+  // Load the existing row so we keep its linkage (record_type/record_id) intact.
+  const { data: existing } = await supabase.from('activity_log')
+    .select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
+  if (!existing)               return res.status(404).json({ error: 'Note not found' })
+  if (existing.action !== 'NOTE') return res.status(400).json({ error: 'Record is not a note' })
+  const ep = parseLogRow(existing)
+  const note_type = req.body.note_type || ep?.metadata?.note_type || 'Note'
+  // Rebuild the stored fields, preserving record_type/record_id from the old metadata.
+  let update = {}
+  if (global._hasMetadata) {
+    update.metadata = { ...(ep?.metadata || {}), note_type, content, text: content,
+      record_type: ep?.metadata?.record_type ?? null, record_id: ep?.metadata?.record_id ?? null,
+      edited_at: new Date().toISOString() }
+    if (!global._detailsColumnMissing) update.details = content
+  } else if (!global._detailsColumnMissing) {
+    update.details = JSON.stringify({ ...(ep?.metadata || {}), text: content, content, note_type,
+      record_type: ep?.metadata?.record_type ?? null, record_id: ep?.metadata?.record_id ?? null,
+      edited_at: new Date().toISOString() })
+  }
+  const { data, error } = await supabase.from('activity_log').update(update).eq('id', req.params.id).select().single()
+  if (error) return res.status(400).json({ error: error.message })
+  const bc = global._safeActivityCols || 'id,action,created_at', uj = global._hasUserId !== false ? ',user:user_profiles!user_id(full_name,email)' : ''
+  const { data: full } = await supabase.from('activity_log').select(bc+uj).eq('id', req.params.id).single()
+  res.json(parseLogRow(full || data))
+})
+
+// ADMIN-ONLY one-time maintenance: purge ALL notes. This is NOT a user-facing
+// delete — it exists solely to clear pre-fix leaked notes that have no WIB linkage
+// and cannot be sorted retroactively. Restricted to super admin. Dry-run by default;
+// pass { confirm: 'DELETE ALL NOTES' } to actually delete.
+app.post('/api/admin/purge-all-notes', auth, requireSuper, async (req, res) => {
+  const { count } = await supabase.from('activity_log').select('id', { count: 'exact', head: true }).eq('action', 'NOTE')
+  if (req.body?.confirm !== 'DELETE ALL NOTES') {
+    return res.json({ dry_run: true, would_delete: count || 0, message: `Dry run: ${count || 0} notes would be deleted. Re-send with { confirm: 'DELETE ALL NOTES' } to apply.` })
+  }
+  const { error } = await supabase.from('activity_log').delete().eq('action', 'NOTE')
+  if (error) return res.status(400).json({ error: error.message })
+  try { await safeInsertLog({ user_id: req.user.id, action: 'PURGE_NOTES', details: `Purged ${count || 0} notes (pre-fix cleanup)` }) } catch (_) {}
+  res.json({ success: true, deleted: count || 0 })
 })
 app.post('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, note_type = 'Note', is_aircall = false } = req.body
@@ -811,10 +909,14 @@ app.get('/api/tasks', auth, async (req, res) => {
   const { record_id, limit = 100 } = req.query
   const bc = global._safeActivityCols || 'id,action,created_at', uj = global._hasUserId !== false ? ',user:user_profiles!user_id(full_name)' : ''
   let q = supabase.from('activity_log').select(bc+uj).eq('action', 'TASK')
-  if (record_id && global._hasRecordId !== false) q = q.eq('record_id', record_id)
+  if (record_id && global._hasRecordId === true) q = q.eq('record_id', record_id)
+  // Same leak fix as /api/notes: filter on metadata JSON when real column is absent.
+  if (record_id && global._hasRecordId !== true && global._hasMetadata) q = q.eq('metadata->>record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   const { data, error } = await q; if (error) return res.status(400).json({ error: error.message })
-  res.json({ data: (data||[]).map(t => parseLogRow(t)) })
+  let rows = (data||[]).map(t => parseLogRow(t))
+  if (record_id) rows = rows.filter(t => String((t.metadata||{}).record_id ?? '') === String(record_id))
+  res.json({ data: rows })
 })
 app.post('/api/tasks', auth, async (req, res) => {
   const { title, due_date, record_type, record_id, priority = 'normal', notes, assigned_to } = req.body
@@ -834,10 +936,23 @@ app.get('/api/activity', auth, async (req, res) => {
   const { record_type, record_id, limit = 100 } = req.query
   const bc = global._safeActivityCols||'id,action,created_at', uj = global._hasUserId!==false?',user:user_profiles!user_id(full_name,email)':''
   let q = supabase.from('activity_log').select(bc+uj).neq('action','NOTE').neq('action','TASK')
-  if (record_type && global._hasRecordType!==false) q=q.eq('record_type',record_type)
-  if (record_id   && global._hasRecordId  !==false) q=q.eq('record_id',record_id)
+  if (record_type && global._hasRecordType===true) q=q.eq('record_type',record_type)
+  if (record_id   && global._hasRecordId  ===true) q=q.eq('record_id',record_id)
+  // Same leak fix as /api/notes: filter on metadata JSON when real columns are absent.
+  if (record_type && global._hasRecordType!==true && global._hasMetadata) q=q.eq('metadata->>record_type',record_type)
+  if (record_id   && global._hasRecordId  !==true && global._hasMetadata) q=q.eq('metadata->>record_id',record_id)
   q=q.order('created_at',{ascending:false}).limit(Math.min(+limit,200))
-  const { data, error } = await q; if (error) return res.status(400).json({error:error.message}); res.json({data:(data||[]).map(r=>parseLogRow(r))})
+  const { data, error } = await q; if (error) return res.status(400).json({error:error.message})
+  let rows = (data||[]).map(r=>parseLogRow(r))
+  if (record_id || record_type) {
+    rows = rows.filter(r => {
+      const m = r.metadata || {}
+      if (record_id   && String(m.record_id   ?? '') !== String(record_id))   return false
+      if (record_type && String(m.record_type ?? '') !== String(record_type)) return false
+      return true
+    })
+  }
+  res.json({data:rows})
 })
 app.get('/api/audit', auth, requireAdmin, async (req, res) => {
   const { limit=100, offset=0 } = req.query
