@@ -12127,10 +12127,12 @@ function _vcConnectSSE() {
   }
   // Helper: play the ping if the message warrants attention (sender is someone else,
   // and either chat panel is closed or user is on a different tab/conversation).
-  if (!_vc.playNotify) {
+ if (!_vc.playNotify) {
     _vc.playNotify = function () {
       try {
         if (!_vc.notifyAudio) return
+        // Respect the per-user mute setting (user_profiles.chat_muted).
+        if (currentUser && currentUser.chat_muted === true) return
         // Some browsers refuse autoplay until first user interaction. Catch and ignore.
         _vc.notifyAudio.currentTime = 0
         const p = _vc.notifyAudio.play()
