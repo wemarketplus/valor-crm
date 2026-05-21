@@ -1836,18 +1836,22 @@ function renderApp(){
   // Boot-time notification badge reconcile — phantom guard runs immediately so
   // a stale "3" from a previous session is cleared the moment the app loads.
   setTimeout(function(){ loadNotificationBadge() }, 200)
-  setTimeout(function(){
-    var nav=document.querySelector('.sb-nav')
-    if(nav&&!document.getElementById('nav-chat')){
-      var el=document.createElement('div')
-      el.className='sb-item'
-      el.id='nav-chat'
-      el.innerHTML='<span class="sb-item-icon">💬</span><span class="sb-item-label">Team Chat</span><span class="sb-badge" id="nav-chat-badge" style="display:none">0</span>'
-      el.onclick=function(){vcToggle();setNav('chat')}
-      var div=nav.querySelector('.sb-divider:last-of-type')
-      if(div)nav.insertBefore(el,div);else nav.appendChild(el)
-    }
-  },150)
+  // Unified chat mount — self-healing. External partners are excluded.
+  window._mountChatNav = function(){
+    if (currentUser && currentUser.role === 'external_partner') return
+    var nav = document.querySelector('.sb-nav')
+    if (!nav) return
+    if (document.getElementById('nav-chat')) return
+    var el = document.createElement('div')
+    el.className = 'sb-item'
+    el.id = 'nav-chat'
+    el.innerHTML = '<span class="sb-item-icon">💬</span><span class="sb-item-label">Team Chat</span><span class="sb-badge" id="nav-chat-badge" style="display:none">0</span>'
+    el.onclick = function(){ vcToggle(); setNav('chat') }
+    var div = nav.querySelector('.sb-divider:last-of-type')
+    if (div) nav.insertBefore(el, div); else nav.appendChild(el)
+  }
+  // Retry a few times in case the sidebar paints late.
+  ;[150, 600, 1500].forEach(function(ms){ setTimeout(window._mountChatNav, ms) })
 }
 
 function sbi(page,icon,label,badge='',badgeColor=''){
