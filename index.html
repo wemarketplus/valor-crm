@@ -4512,9 +4512,9 @@ function deleteUserConfirm(id,name){
   showModal(`⚠️ Delete User — Irreversible`,`
     <div class="alert alert-error">⚠️ You are about to permanently delete <strong>${name}</strong>. This will:<br><br>• Immediately revoke all system access<br>• Terminate all active sessions<br>• Remove login credentials permanently<br>• This CANNOT be undone</div>
     <div style="margin-top:12px;font-size:12px">Type <strong>DELETE</strong> to confirm:</div>
-    <input id="del-confirm" placeholder="Type DELETE here..." style="margin-top:8px">`,
+    <input id="del-confirm" placeholder="Type DELETE here..." style="margin-top:8px" autocomplete="off">`,
   async()=>{
-    if(document.getElementById('del-confirm')?.value!=='DELETE'){showToast('Type DELETE to confirm','error');return false}
+    const _v=(document.getElementById('del-confirm')?.value||'').trim().toUpperCase();if(_v!=='DELETE'){showToast('Type the word DELETE to confirm','error');return false}
     try{await api('/api/users/'+id,'DELETE');showToast('User permanently deleted','success');pageUsers()}catch(e){showToast(e.message,'error');return false}
   })
 }
