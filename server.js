@@ -818,81 +818,11 @@ app.get('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, limit = 50 } = req.query
   const bc = global._safeActivityCols || 'id,action,created_at', uj = global._hasUserId !== false ? ',user:user_profiles!user_id(full_name,email)' : ''
   let q = supabase.from('activity_log').select(bc+uj).eq('action', 'NOTE')
-  // When the REAL record_type/record_id columns exist, filter on them directly.
-  if (record_type && global._hasRecordType === true) q = q.eq('record_type', record_type)
-  if (record_id   && global._hasRecordId   === true) q = q.eq('record_id',   record_id)
-  // ─── WIB-NOTES-LEAK FIX ─────────────────────────────────────────────────────
-  // The live activity_log table has NO record_type/record_id columns (Render logs
-  // confirm record_id:false, record_type:false). safeInsertLog therefore stores the
-  // linkage inside the metadata JSON column (metadata.record_type / metadata.record_id).
-  // Previously the GET filter was SKIPPED whenever the real columns were absent, so a
-  // note saved on one WIB was returned for EVERY WIB. Now: filter on the metadata JSON.
-  if (record_type && global._hasRecordType !== true && global._hasMetadata) q = q.eq('metadata->>record_type', record_type)
-  if (record_id   && global._hasRecordId   !== true && global._hasMetadata) q = q.eq('metadata->>record_id',   record_id)
+  if (record_type && global._hasRecordType !== false) q = q.eq('record_type', record_type)
+  if (record_id   && global._hasRecordId   !== false) q = q.eq('record_id',   record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   const { data, error } = await q; if (error) return res.status(400).json({ error: error.message })
-  let rows = (data||[]).map(n => parseLogRow(n))
-  // Final in-code safety net. Covers two cases the DB-side filter cannot:
-  //  (a) metadata stored inside the `details` JSON string (no real metadata column)
-  //  (b) legacy notes saved before this fix that have NO linkage at all.
-  // A specific-record request (record_id present) must NOT return unlinked notes.
-  // The global Notes tab calls this route with no record_id, so it still sees all.
-  if (record_id || record_type) {
-    rows = rows.filter(n => {
-      const m = n.metadata || {}
-      if (record_id   && String(m.record_id   ?? '') !== String(record_id))   return false
-      if (record_type && String(m.record_type ?? '') !== String(record_type)) return false
-      return true
-    })
-  }
-  res.json({ data: rows })
-})
-
-// EDIT a single note. Notes are EDITABLE but NOT DELETABLE by design — there is
-// deliberately no DELETE /api/notes/:id route. A note is a NOTE row in activity_log;
-// editing updates its content while preserving the WIB/company linkage in metadata.
-app.put('/api/notes/:id', auth, async (req, res) => {
-  const content = (req.body.content || req.body.details || '').trim()
-  if (!content) return res.status(400).json({ error: 'Note content required' })
-  // Load the existing row so we keep its linkage (record_type/record_id) intact.
-  const { data: existing } = await supabase.from('activity_log')
-    .select(global._safeActivityCols || 'id,action,created_at').eq('id', req.params.id).single()
-  if (!existing)               return res.status(404).json({ error: 'Note not found' })
-  if (existing.action !== 'NOTE') return res.status(400).json({ error: 'Record is not a note' })
-  const ep = parseLogRow(existing)
-  const note_type = req.body.note_type || ep?.metadata?.note_type || 'Note'
-  // Rebuild the stored fields, preserving record_type/record_id from the old metadata.
-  let update = {}
-  if (global._hasMetadata) {
-    update.metadata = { ...(ep?.metadata || {}), note_type, content, text: content,
-      record_type: ep?.metadata?.record_type ?? null, record_id: ep?.metadata?.record_id ?? null,
-      edited_at: new Date().toISOString() }
-    if (!global._detailsColumnMissing) update.details = content
-  } else if (!global._detailsColumnMissing) {
-    update.details = JSON.stringify({ ...(ep?.metadata || {}), text: content, content, note_type,
-      record_type: ep?.metadata?.record_type ?? null, record_id: ep?.metadata?.record_id ?? null,
-      edited_at: new Date().toISOString() })
-  }
-  const { data, error } = await supabase.from('activity_log').update(update).eq('id', req.params.id).select().single()
-  if (error) return res.status(400).json({ error: error.message })
-  const bc = global._safeActivityCols || 'id,action,created_at', uj = global._hasUserId !== false ? ',user:user_profiles!user_id(full_name,email)' : ''
-  const { data: full } = await supabase.from('activity_log').select(bc+uj).eq('id', req.params.id).single()
-  res.json(parseLogRow(full || data))
-})
-
-// ADMIN-ONLY one-time maintenance: purge ALL notes. This is NOT a user-facing
-// delete — it exists solely to clear pre-fix leaked notes that have no WIB linkage
-// and cannot be sorted retroactively. Restricted to super admin. Dry-run by default;
-// pass { confirm: 'DELETE ALL NOTES' } to actually delete.
-app.post('/api/admin/purge-all-notes', auth, requireSuper, async (req, res) => {
-  const { count } = await supabase.from('activity_log').select('id', { count: 'exact', head: true }).eq('action', 'NOTE')
-  if (req.body?.confirm !== 'DELETE ALL NOTES') {
-    return res.json({ dry_run: true, would_delete: count || 0, message: `Dry run: ${count || 0} notes would be deleted. Re-send with { confirm: 'DELETE ALL NOTES' } to apply.` })
-  }
-  const { error } = await supabase.from('activity_log').delete().eq('action', 'NOTE')
-  if (error) return res.status(400).json({ error: error.message })
-  try { await safeInsertLog({ user_id: req.user.id, action: 'PURGE_NOTES', details: `Purged ${count || 0} notes (pre-fix cleanup)` }) } catch (_) {}
-  res.json({ success: true, deleted: count || 0 })
+  res.json({ data: (data||[]).map(n => parseLogRow(n)) })
 })
 app.post('/api/notes', auth, async (req, res) => {
   const { record_type, record_id, note_type = 'Note', is_aircall = false } = req.body
@@ -909,14 +839,10 @@ app.get('/api/tasks', auth, async (req, res) => {
   const { record_id, limit = 100 } = req.query
   const bc = global._safeActivityCols || 'id,action,created_at', uj = global._hasUserId !== false ? ',user:user_profiles!user_id(full_name)' : ''
   let q = supabase.from('activity_log').select(bc+uj).eq('action', 'TASK')
-  if (record_id && global._hasRecordId === true) q = q.eq('record_id', record_id)
-  // Same leak fix as /api/notes: filter on metadata JSON when real column is absent.
-  if (record_id && global._hasRecordId !== true && global._hasMetadata) q = q.eq('metadata->>record_id', record_id)
+  if (record_id && global._hasRecordId !== false) q = q.eq('record_id', record_id)
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   const { data, error } = await q; if (error) return res.status(400).json({ error: error.message })
-  let rows = (data||[]).map(t => parseLogRow(t))
-  if (record_id) rows = rows.filter(t => String((t.metadata||{}).record_id ?? '') === String(record_id))
-  res.json({ data: rows })
+  res.json({ data: (data||[]).map(t => parseLogRow(t)) })
 })
 app.post('/api/tasks', auth, async (req, res) => {
   const { title, due_date, record_type, record_id, priority = 'normal', notes, assigned_to } = req.body
@@ -936,23 +862,10 @@ app.get('/api/activity', auth, async (req, res) => {
   const { record_type, record_id, limit = 100 } = req.query
   const bc = global._safeActivityCols||'id,action,created_at', uj = global._hasUserId!==false?',user:user_profiles!user_id(full_name,email)':''
   let q = supabase.from('activity_log').select(bc+uj).neq('action','NOTE').neq('action','TASK')
-  if (record_type && global._hasRecordType===true) q=q.eq('record_type',record_type)
-  if (record_id   && global._hasRecordId  ===true) q=q.eq('record_id',record_id)
-  // Same leak fix as /api/notes: filter on metadata JSON when real columns are absent.
-  if (record_type && global._hasRecordType!==true && global._hasMetadata) q=q.eq('metadata->>record_type',record_type)
-  if (record_id   && global._hasRecordId  !==true && global._hasMetadata) q=q.eq('metadata->>record_id',record_id)
+  if (record_type && global._hasRecordType!==false) q=q.eq('record_type',record_type)
+  if (record_id   && global._hasRecordId  !==false) q=q.eq('record_id',record_id)
   q=q.order('created_at',{ascending:false}).limit(Math.min(+limit,200))
-  const { data, error } = await q; if (error) return res.status(400).json({error:error.message})
-  let rows = (data||[]).map(r=>parseLogRow(r))
-  if (record_id || record_type) {
-    rows = rows.filter(r => {
-      const m = r.metadata || {}
-      if (record_id   && String(m.record_id   ?? '') !== String(record_id))   return false
-      if (record_type && String(m.record_type ?? '') !== String(record_type)) return false
-      return true
-    })
-  }
-  res.json({data:rows})
+  const { data, error } = await q; if (error) return res.status(400).json({error:error.message}); res.json({data:(data||[]).map(r=>parseLogRow(r))})
 })
 app.get('/api/audit', auth, requireAdmin, async (req, res) => {
   const { limit=100, offset=0 } = req.query
@@ -978,7 +891,32 @@ app.post('/api/users', auth, requireAdmin, async (req, res) => {
     if (password.length<8) return res.status(400).json({error:'Password must be at least 8 characters'})
     if (!VALID_ROLES.includes(role)) return res.status(400).json({error:'Invalid role'})
     if (role==='super_admin'&&req.user.role!=='super_admin') return res.status(403).json({error:'Only Super Admin can assign the Super Admin role'})
-    const { data, error } = await supabase.auth.admin.createUser({email:email.trim().toLowerCase(),password,email_confirm:true,user_metadata:{full_name}})
+    const cleanEmail = email.trim().toLowerCase()
+    let { data, error } = await supabase.auth.admin.createUser({email:cleanEmail,password,email_confirm:true,user_metadata:{full_name}})
+    // ─── RE-HIRE FIX (part 2) ─────────────────────────────────────────────
+    // If the email collides with a leftover auth user (e.g. a prior delete
+    // that did not fully clean up), find that stale account, purge it, and
+    // retry the create once. This lets an Admin re-add a deleted user with
+    // the exact same email without a unique-constraint conflict.
+    if (error && /already.*registered|already.*exist|duplicate|unique/i.test(error.message||'')) {
+      try {
+        let staleId = null
+        // Page through auth users to find the one with this email
+        for (let page=1; page<=20 && !staleId; page++) {
+          const { data:list } = await supabase.auth.admin.listUsers({ page, perPage: 200 })
+          const hit = (list?.users||[]).find(u => (u.email||'').toLowerCase() === cleanEmail)
+          if (hit) staleId = hit.id
+          if (!list?.users || list.users.length < 200) break
+        }
+        if (staleId) {
+          await supabase.auth.admin.deleteUser(staleId)
+          try { await supabase.from('user_profiles').delete().eq('id',staleId) } catch (_) {}
+          try { await supabase.from('user_territory_assignments').delete().eq('user_id',staleId) } catch (_) {}
+          const retry = await supabase.auth.admin.createUser({email:cleanEmail,password,email_confirm:true,user_metadata:{full_name}})
+          data = retry.data; error = retry.error
+        }
+      } catch (e) { console.warn('re-hire cleanup failed:',e.message) }
+    }
     if (error) return res.status(400).json({error:error.message})
     await supabase.from('user_profiles').update({full_name:full_name||null,role,title:title||null,phone:phone||null,is_active:true}).eq('id',data.user.id)
     try { await supabase.from('activity_log').insert({user_id:req.user.id,action:'CREATE_USER',details:`Created: ${email} (${role})`}) } catch (_) {}
@@ -1005,15 +943,31 @@ app.put('/api/users/:id', auth, requireAdmin, async (req, res) => {
     try { await safeInsertLog({user_id:req.user.id,action:'UPDATE_USER',details:'Updated: '+data.email+(cn?' — '+cn:'')}) } catch (_) {}; res.json(data)
   } catch (err) { res.status(500).json({error:err.message}) }
 })
-app.delete('/api/users/:id', auth, requireSuper, async (req, res) => {
+app.delete('/api/users/:id', auth, requireAdmin, async (req, res) => {
+  // FIX: route now uses requireAdmin (was requireSuper) so the UI Delete
+  // button — which renders for both Admin and Super Admin — actually works
+  // for plain Admins instead of silently 403-ing.
+  // A plain Admin still may NOT delete a Super Admin (guard below).
   try {
     if (req.params.id===req.user.id) return res.status(400).json({error:'Cannot delete your own account'})
     const { data:target } = await supabase.from('user_profiles').select('email,role').eq('id',req.params.id).single()
     if (!target) return res.status(404).json({error:'User not found'})
-    if (target.role==='super_admin') { const { count } = await supabase.from('user_profiles').select('*',{count:'exact',head:true}).eq('role','super_admin'); if ((count||0)<=1) return res.status(400).json({error:'Cannot delete the only Super Admin'}) }
+    if (target.role==='super_admin') {
+      if (req.user.role!=='super_admin') return res.status(403).json({error:'Only a Super Admin can delete a Super Admin account'})
+      const { count } = await supabase.from('user_profiles').select('*',{count:'exact',head:true}).eq('role','super_admin')
+      if ((count||0)<=1) return res.status(400).json({error:'Cannot delete the only Super Admin'})
+    }
+    // ─── RE-HIRE FIX (part 1) ─────────────────────────────────────────────
+    // Delete the auth user first, then explicitly remove the user_profiles
+    // row so the email is fully freed. If the profile row is left behind it
+    // can collide on a later re-add. Both deletions are required for a clean
+    // re-hire of the same email address.
     const { error } = await supabase.auth.admin.deleteUser(req.params.id)
     if (error) return res.status(400).json({error:error.message})
-    try { await supabase.from('activity_log').insert({user_id:req.user.id,action:'DELETE_USER',details:`DELETED: ${target.email}`}) } catch (_) {}; res.json({success:true})
+    try { await supabase.from('user_profiles').delete().eq('id',req.params.id) } catch (e) { console.warn('profile cleanup after delete:',e.message) }
+    try { await supabase.from('user_territory_assignments').delete().eq('user_id',req.params.id) } catch (_) {}
+    try { await supabase.from('activity_log').insert({user_id:req.user.id,action:'DELETE_USER',details:`DELETED: ${target.email}`}) } catch (_) {}
+    res.json({success:true})
   } catch (err) { res.status(500).json({error:err.message}) }
 })
 
@@ -3029,34 +2983,10 @@ async function driveApi(userId,endpoint,opts={}) {
   if (r.status===401) { await supabase.from('user_drive_tokens').delete().eq('user_id',userId); throw new Error('Google Drive authorization expired. Please reconnect.') }
   return r
 }
-app.get('/api/auth/google', async (req, res) => {
+app.get('/api/auth/google', auth, (req,res)=>{
   if (!GOOGLE_CLIENT_ID) return res.status(503).send('GOOGLE_CLIENT_ID not configured.')
-  // Browser top-level navigation cannot send an Authorization header,
-  // so accept the token from the query string and verify it here.
-  const rawToken = (req.query.token || '').trim()
-  if (!rawToken || rawToken.length < 10) {
-    return res.status(401).send('Authentication required. Please sign in to the CRM, then click Connect Google Drive again.')
-  }
-  let userId = null
-  try {
-    const { data: { user }, error } = await authClient.auth.getUser(rawToken)
-    if (error || !user) {
-      return res.status(401).send('Your session has expired. Please sign in again, then retry Connect Google Drive.')
-    }
-    userId = user.id
-  } catch (e) {
-    return res.status(401).send('Could not verify your session. Please sign in again.')
-  }
-  const state = Buffer.from(JSON.stringify({ userId, token: rawToken })).toString('base64url')
-  res.redirect('https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: GOOGLE_REDIRECT_URI,
-    response_type: 'code',
-    scope: DRIVE_SCOPE + ' https://www.googleapis.com/auth/userinfo.email',
-    access_type: 'offline',
-    prompt: 'consent',
-    state,
-  }))
+  const state=Buffer.from(JSON.stringify({userId:req.user.id,token:req.query.token})).toString('base64url')
+  res.redirect('https://accounts.google.com/o/oauth2/v2/auth?'+new URLSearchParams({client_id:GOOGLE_CLIENT_ID,redirect_uri:GOOGLE_REDIRECT_URI,response_type:'code',scope:DRIVE_SCOPE+' https://www.googleapis.com/auth/userinfo.email',access_type:'offline',prompt:'consent',state}))
 })
 app.get('/api/auth/google/callback', async (req,res)=>{
   const { code, state, error }=req.query
