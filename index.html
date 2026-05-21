@@ -1732,6 +1732,17 @@ async function doLogin(){
 
 async function logout(){
   try{await api('/api/logout','POST')}catch{}
+  // Tear down the chat panel + SSE connection so it does not linger on the login screen.
+  try{
+    if(_vc){
+      if(_vc.sseSource){try{_vc.sseSource.close()}catch(_){}_vc.sseSource=null}
+      if(_vc.heartbeatInt){clearInterval(_vc.heartbeatInt);_vc.heartbeatInt=null}
+      _vc.open=false
+    }
+    var p=document.getElementById('vc-panel');if(p)p.classList.remove('open')
+    var f=document.getElementById('vc-fab');if(f)f.style.display='none'
+    var n=document.getElementById('nav-chat');if(n&&n.parentNode)n.parentNode.removeChild(n)
+  }catch(_){}
   token=null;currentUser=null;localStorage.removeItem('valor_token');clearTimeout(sessionTimer);render()
 }
 
@@ -12239,6 +12250,7 @@ async function _vcLoadUnreadCounts() {
 
 /* ─── Widget open/close ─── */
 function vcToggle() {
+  setTimeout(vcSyncMuteBtn, 50)
   _vc.open ? vcClose() : vcOpen()
 }
 function vcOpen() {
@@ -12252,6 +12264,25 @@ function vcOpen() {
   // Ensure vcInit ran
   vcInit()
 }
+function vcToggleMute() {
+  var next = !(currentUser && currentUser.chat_muted === true)
+  fetch('/api/chat/mute', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+    body: JSON.stringify({ muted: next })
+  }).then(function(r){ return r.json() }).then(function(d){
+    if (currentUser) currentUser.chat_muted = (d && typeof d.chat_muted === 'boolean') ? d.chat_muted : next
+    vcSyncMuteBtn()
+  }).catch(function(){})
+}
+function vcSyncMuteBtn() {
+  var b = document.getElementById('vc-mute-btn')
+  if (!b) return
+  var muted = currentUser && currentUser.chat_muted === true
+  b.textContent = muted ? '🔕' : '🔔'
+  b.title = muted ? 'Notifications muted — click to unmute' : 'Mute notification sound'
+}
+
 function vcClose() {
   _vc.open = false
   document.getElementById('vc-panel').classList.remove('open')
@@ -12609,7 +12640,10 @@ function vcAutoResize(el) {
     <div class="vc-header">
       <div class="vc-header-top">
         <span class="vc-header-title">💬 Team Chat</span>
-        <button class="vc-header-close" onclick="vcClose()" title="Close">✕</button>
+        <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+          <button class="vc-header-close" id="vc-mute-btn" onclick="vcToggleMute()" title="Mute notification sound">🔔</button>
+          <button class="vc-header-close" onclick="vcClose()" title="Close">✕</button>
+        </span>
       </div>
       <div class="vc-online-row">
         <div class="vc-online-dot"></div>
