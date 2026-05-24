@@ -827,6 +827,8 @@ app.get('/api/notes', auth, async (req, res) => {
   const bc = global._safeActivityCols || 'id,action,created_at', uj = global._hasUserId !== false ? ',user:user_profiles!user_id(full_name,email)' : ''
   let q = supabase.from('activity_log').select(bc+uj).eq('action', 'NOTE')
   if (record_type && global._hasRecordType !== false) q = q.eq('record_type', record_type)
+  // Filter by the specific record (the missing line — this is the per-WIB isolation)
+  if (record_id && global._hasRecordId !== false) q = q.eq('record_id', record_id)
   // "Daily notes only" — exclude any note attached to a WIB/company/etc.
   if (req.query.unattached === 'true' && global._hasRecordId !== false) {
     q = q.is('record_id', null)
