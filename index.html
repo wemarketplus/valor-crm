@@ -9422,7 +9422,7 @@ async function pageNotes(){
     <button class="btn btn-primary" onclick="openNewNoteModal()">+ New note</button>`)
   document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading...</div>'
   try{
-    const r=await api('/api/notes?limit=100')
+    const r=await api('/api/notes?limit=100&unattached=true')
     window._globalNotes=r.data||[]
     renderNotesGrid(window._globalNotes)
   }catch(e){
