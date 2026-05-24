@@ -849,6 +849,13 @@ app.get('/api/tasks', auth, async (req, res) => {
   const bc = global._safeActivityCols || 'id,action,created_at', uj = global._hasUserId !== false ? ',user:user_profiles!user_id(full_name)' : ''
   let q = supabase.from('activity_log').select(bc+uj).eq('action', 'TASK')
   if (record_id && global._hasRecordId !== false) q = q.eq('record_id', record_id)
+  if (record_type && global._hasRecordType !== false) q = q.eq('record_type', record_type)
+  if (record_id   && global._hasRecordId   !== false) q = q.eq('record_id',   record_id)
+  // "Daily notes only" — exclude any note attached to a WIB, company, or other record.
+  if (req.query.unattached === 'true' && global._hasRecordId !== false) {
+    q = q.is('record_id', null)
+  }
+  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
   const { data, error } = await q; if (error) return res.status(400).json({ error: error.message })
   res.json({ data: (data||[]).map(t => parseLogRow(t)) })
