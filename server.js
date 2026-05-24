@@ -302,6 +302,8 @@ async function auth(req, res, next) {
     const { data: profile, error: profileErr } = await supabase.from('user_profiles').select('*').eq('id', user.id).single()
     if (profileErr || !profile) return res.status(401).json({ error: 'User profile not found. Contact administrator.' })
     if (profile.is_active === false) return res.status(403).json({ error: 'Account disabled. Contact your administrator.' })
+    if (profile.role === 'external_partner') return res.status(403).json({ error: 'Access denied. Internal staff only.' })
+    if (profile.role === 'external_partner') return res.status(403).json({ error: 'Access denied. This CRM is restricted to internal staff. Contact your administrator.' })
     req.user = profile; req.rawToken = rawToken; next()
   } catch (err) { console.error('Auth middleware error:', err.message); return res.status(500).json({ error: 'Authentication service error' }) }
 }
