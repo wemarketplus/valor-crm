@@ -41,6 +41,9 @@ try {
 // ─── EXPORT CONCURRENCY GOVERNOR (SR-4) ───────────────────────────────────────
 // In-memory set of user IDs that currently have an active streaming export.
 const _activeExports = new Set()
+// Upload concurrency governor — caps simultaneous in-memory uploads (crash fix)
+let _activeUploads = 0
+const MAX_CONCURRENT_UPLOADS = 3
 
 // ─── XSS STRIP HELPER (HRV-5) ────────────────────────────────────────────────
 const stripHtml = (v) => (typeof v === 'string' ? v.replace(/<[^>]*>/g, '').trim() : v)
@@ -285,7 +288,7 @@ if (_rateLimit) {
 
 let _multer = null
 try { _multer = require('multer') } catch (_) { console.warn('multer not installed — run: npm install multer') }
-const memUpload = _multer ? _multer({ storage: _multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } }) : null
+const memUpload = _multer ? _multer({ storage: _multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }) : null
 
 // ─── AUTH MIDDLEWARE ──────────────────────────────────────────────────────────
 async function auth(req, res, next) {
@@ -3112,6 +3115,8 @@ app.post('/api/drive/upload', auth, async (req,res)=>{
     if (err) return res.status(400).json({error:err.message})
     const { folder_id='root' }=req.body, file=req.file
     if (!file) return res.status(400).json({error:'No file provided'})
+    if (_activeUploads >= MAX_CONCURRENT_UPLOADS) return res.status(429).json({error:'Server busy with other uploads. Please wait a moment and retry.'})
+    _activeUploads++
     const boundary='valorcrmboundary'+Date.now(), meta=JSON.stringify({name:file.originalname,parents:[folder_id]})
     const partHead=Buffer.from('--'+boundary+'\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+meta+'\r\n--'+boundary+'\r\nContent-Type: '+file.mimetype+'\r\n\r\n','utf8')
     const partTail=Buffer.from('\r\n--'+boundary+'--','utf8'), uploadBody=Buffer.concat([partHead,file.buffer,partTail])
@@ -3121,6 +3126,7 @@ app.post('/api/drive/upload', auth, async (req,res)=>{
       const data=await r.json(); if (!r.ok) return res.status(r.status).json({error:data.error?.message||'Upload failed'})
       try { await safeInsertLog({user_id:req.user.id,action:'DRIVE_UPLOAD',details:'Uploaded: '+file.originalname}) } catch (_) {}; res.json({file:data})
     } catch (e) { res.status(500).json({error:e.message}) }
+    finally { _activeUploads = Math.max(0, _activeUploads - 1) }
   })
 })
 app.get('/api/drive/download/:fileId', auth, async (req,res)=>{
