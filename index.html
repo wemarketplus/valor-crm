@@ -1441,7 +1441,7 @@ function showToast(msg,type='info'){
   const colors={success:'#166534',error:'#991b1b',warn:'#92400e',info:'#1e40af'}
   const bgs={success:'#dcfce7',error:'#fee2e2',warn:'#fef3c7',info:'#dbeafe'}
   const t=document.createElement('div')
-  t.style.cssText=`position:fixed;bottom:18px;right:18px;padding:10px 16px;border-radius:9px;font-size:12px;font-weight:500;z-index:999;max-width:340px;box-shadow:0 4px 16px rgba(0,0,0,.15);background:${bgs[type]||bgs.info};color:${colors[type]||colors.info};border:.5px solid currentColor;opacity:0;transition:opacity .2s`
+  t.style.cssText=`position:fixed;bottom:84px;right:18px;padding:10px 16px;border-radius:9px;font-size:12px;font-weight:500;z-index:1001;max-width...
   t.textContent=msg;document.body.appendChild(t)
   requestAnimationFrame(()=>{t.style.opacity='1'})
   setTimeout(()=>{t.style.opacity='0';setTimeout(()=>t.remove(),300)},3800)
