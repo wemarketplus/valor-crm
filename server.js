@@ -847,6 +847,12 @@ app.post('/api/notes', auth, async (req, res) => {
   const { data: full } = await supabase.from('activity_log').select(bc2+uj2).eq('id', data.id).single()
   res.json(parseLogRow(full || data))
 })
+app.delete('/api/notes/:id', auth, requireDelete, async (req, res) => {
+  const { error } = await supabase.from('activity_log').delete().eq('id', req.params.id).eq('action', 'NOTE')
+  if (error) return res.status(400).json({ error: error.message })
+  try { await safeInsertLog({ user_id: req.user.id, action: 'DELETE_NOTE', record_type: 'activity_log', record_id: req.params.id, details: 'Deleted note' }) } catch (_) {}
+  res.json({ success: true })
+})
 
 app.get('/api/tasks', auth, async (req, res) => {
   const { record_id, limit = 100 } = req.query
