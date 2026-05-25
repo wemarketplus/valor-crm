@@ -833,7 +833,7 @@ app.get('/api/notes', auth, async (req, res) => {
   if (req.query.unattached === 'true' && global._hasRecordId !== false) {
     q = q.is('record_id', null)
   }
-  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 500))
+  q = q.order('created_at', { ascending: false }).limit(Math.min(+limit, 5000))
   const { data, error } = await q; if (error) return res.status(400).json({ error: error.message })
   res.json({ data: (data||[]).map(n => parseLogRow(n)) })
 })
