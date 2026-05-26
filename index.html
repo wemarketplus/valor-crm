@@ -1845,18 +1845,33 @@ function renderApp(){
   <div id="notif-container"></div>
   <div id="ie-overlay" onclick="closeAllIE()"></div>`
 
-  // Seed a baseline history entry, then register the Back-button handler.
+  // Seed baseline history entries, then register the Back-button handler.
   // popstate fires when the user presses Back/Forward; we re-route inside the
   // CRM instead of letting the browser leave the app. The suppress flag stops
   // loadPage from pushing a new entry while we are consuming a history pop.
-  try{history.replaceState({crmPage:'dashboard'},'','#dashboard')}catch(_){}
-  window.addEventListener('popstate',function(evt){
-    var target=(evt.state&&evt.state.crmPage)
-      ||(location.hash&&location.hash.slice(1))
-      ||'dashboard'
-    window._suppressHistoryPush=true
-    try{loadPage(target)}finally{window._suppressHistoryPush=false}
-  })
+  //
+  // Two entries are seeded: replaceState rewrites the current (login) entry as
+  // 'dashboard', then pushState adds a SECOND 'dashboard' entry on top. This
+  // extra pushed entry is the back-stop — pressing Back from a freshly loaded
+  // dashboard now pops to a CRM entry the handler can catch, instead of
+  // leaving the app. Without the pushed entry there is nothing CRM-internal
+  // behind the dashboard and Back exits the CRM.
+  try{
+    history.replaceState({crmPage:'dashboard'},'','#dashboard')
+    history.pushState({crmPage:'dashboard'},'','#dashboard')
+  }catch(_){}
+  // Guard: renderApp() can run more than once (e.g. after login). Register the
+  // popstate listener only once so Back is not handled by stacked duplicates.
+  if(!window._crmPopstateBound){
+    window._crmPopstateBound=true
+    window.addEventListener('popstate',function(evt){
+      var target=(evt.state&&evt.state.crmPage)
+        ||(location.hash&&location.hash.slice(1))
+        ||'dashboard'
+      window._suppressHistoryPush=true
+      try{loadPage(target)}finally{window._suppressHistoryPush=false}
+    })
+  }
   // The initial load reuses the baseline entry just seeded above, so suppress
   // its push to avoid a duplicate 'dashboard' entry in the history stack.
   window._suppressHistoryPush=true
@@ -4927,6 +4942,13 @@ async function pageTerritories(){
     .wt-terr-tbl td{padding:8px 10px;font-size:11.5px;border-bottom:.5px solid var(--gray2)}
     .wt-terr-tbl tr:last-child td{border-bottom:none}
     .wt-terr-tbl tr:hover td{background:var(--gray)}
+    /* Collapsible states cell — keeps territory rows short so the coverage map
+       and AI assistant below are not pushed off-screen by a long state list. */
+    .wt-states-cell{font-size:10px;color:var(--text2);max-width:180px}
+    .wt-states-toggle{cursor:pointer;color:var(--blue);font-size:10px;white-space:nowrap;user-select:none}
+    .wt-states-toggle:hover{text-decoration:underline}
+    .wt-states-full{margin-top:3px;line-height:1.5;color:var(--text2)}
+    .wt-states-full[hidden]{display:none}
   </style>
 
   <div id="wt-wrap">
@@ -5098,9 +5120,20 @@ async function pageTerritories(){
         <tbody>${territories.map(t=>{
           const tUsers=usersInTerritory[t.id]||[]
           const tWibs=wibCount[t.id]||0
+          // Compact states cell: show only a count + an expand toggle instead of
+          // dumping all 17+ state codes into the row. The full list is still
+          // available inline on click. This keeps each row short so the map
+          // card below stays on-screen.
+          const stArr=(t.states||[])
+          const stFull=escHtml(stArr.join(', '))
+          const stCellId='wtst-'+escHtml(String(t.id))
+          const statesCell=stArr.length
+            ? `<span class="wt-states-toggle" onclick="wtToggleStates('${stCellId}',this)">${stArr.length} state${stArr.length===1?'':'s'} ▸</span>
+               <div class="wt-states-full" id="${stCellId}" hidden>${stFull}</div>`
+            : '<span style="color:var(--text3)">—</span>'
           return`<tr>
             <td style="font-weight:500">${escHtml(t.name)}</td>
-            <td style="font-size:10px;color:var(--text2)">${(t.states||[]).join(', ')||'—'}</td>
+            <td class="wt-states-cell">${statesCell}</td>
             <td><span class="pill p-blue">${tWibs}</span></td>
             <td style="font-size:10px">${tUsers.map(u=>`<span class="territory-badge">${escHtml((u.full_name||u.email||'').split(' ')[0])}</span>`).join('')||'<span class="territory-badge unassigned">None</span>'}</td>
             ${isAdmin?`<td><button class="action-btn" style="font-size:10px;padding:2px 7px" onclick="openEditTerritoryModal(decodeURIComponent('${encodeURIComponent(JSON.stringify(t))}'))">Edit</button></td>`:''}</tr>`
@@ -5115,6 +5148,21 @@ async function pageTerritories(){
 /* ── Directory ── */
 window._wtSelected = null
 window._wtDirData = null
+
+// Expand/collapse the full state list for a territory row. Keeps the
+// territory table compact by default so the coverage map below stays visible.
+function wtToggleStates(cellId,toggleEl){
+  const box=document.getElementById(cellId)
+  if(!box)return
+  const isHidden=box.hasAttribute('hidden')
+  if(isHidden){
+    box.removeAttribute('hidden')
+    if(toggleEl)toggleEl.innerHTML=toggleEl.innerHTML.replace('▸','▾')
+  }else{
+    box.setAttribute('hidden','')
+    if(toggleEl)toggleEl.innerHTML=toggleEl.innerHTML.replace('▾','▸')
+  }
+}
 
 function wtFilterDir(){
   const q=(document.getElementById('wt-dir-search')?.value||'').toLowerCase()
