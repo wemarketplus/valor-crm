@@ -1845,7 +1845,22 @@ function renderApp(){
   <div id="notif-container"></div>
   <div id="ie-overlay" onclick="closeAllIE()"></div>`
 
-  loadPage('dashboard')
+  // Seed a baseline history entry, then register the Back-button handler.
+  // popstate fires when the user presses Back/Forward; we re-route inside the
+  // CRM instead of letting the browser leave the app. The suppress flag stops
+  // loadPage from pushing a new entry while we are consuming a history pop.
+  try{history.replaceState({crmPage:'dashboard'},'','#dashboard')}catch(_){}
+  window.addEventListener('popstate',function(evt){
+    var target=(evt.state&&evt.state.crmPage)
+      ||(location.hash&&location.hash.slice(1))
+      ||'dashboard'
+    window._suppressHistoryPush=true
+    try{loadPage(target)}finally{window._suppressHistoryPush=false}
+  })
+  // The initial load reuses the baseline entry just seeded above, so suppress
+  // its push to avoid a duplicate 'dashboard' entry in the history stack.
+  window._suppressHistoryPush=true
+  try{loadPage('dashboard')}finally{window._suppressHistoryPush=false}
   // Boot-time notification badge reconcile — phantom guard runs immediately so
   // a stale "3" from a previous session is cleared the moment the app loads.
   setTimeout(function(){ loadNotificationBadge() }, 200)
@@ -2021,6 +2036,12 @@ function applyApplicationView(id){
 /* ─── PAGE ROUTER ─── */
 async function loadPage(page){
   currentPage=page;setNav(page)
+  // Browser-history integration so the Back button navigates within the CRM
+  // instead of leaving the app. _suppressHistoryPush is set true only while we
+  // are responding to a popstate event, to avoid pushing a duplicate entry.
+  if(!window._suppressHistoryPush){
+    try{history.pushState({crmPage:page},'','#'+page)}catch(_){}
+  }
   clearTabs();clearViewbar()
   const pa=document.getElementById('page-area')
   pa.style.padding='14px 16px'  // Always reset padding; profile pages override to '0' as needed
@@ -5049,7 +5070,24 @@ async function pageTerritories(){
     const wibCount={}
     wibs.forEach(w=>{if(w.territory_id)wibCount[w.territory_id]=(wibCount[w.territory_id]||0)+1})
     const usersInTerritory={}
-    users.forEach(u=>{(u.territories||[]).forEach(t=>{if(!usersInTerritory[t.id])usersInTerritory[t.id]=[];usersInTerritory[t.id].push(u)})})
+    // Build the territory->users map. The bulk /api/users response does not always
+    // include each user's territories array, so when it is missing we fetch the
+    // authoritative per-user assignment list from /api/users/:id/territories.
+    await Promise.all(users.map(async u=>{
+      let userTerrs=Array.isArray(u.territories)?u.territories:null
+      if(!userTerrs){
+        try{
+          const res=await api('/api/users/'+u.id+'/territories')
+          userTerrs=res.data||[]
+        }catch(_){userTerrs=[]}
+      }
+      userTerrs.forEach(t=>{
+        const tid=(t&&typeof t==='object')?t.id:t
+        if(tid==null)return
+        if(!usersInTerritory[tid])usersInTerritory[tid]=[]
+        usersInTerritory[tid].push(u)
+      })
+    }))
     const terrList=document.getElementById('wt-terr-list')
     if(!terrList) return   // page was navigated away — safe to bail here only
     if(!territories.length){
