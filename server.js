@@ -898,13 +898,33 @@ app.get('/api/audit', auth, requireAdmin, async (req, res) => {
 
 // ─── USERS ────────────────────────────────────────────────────────────────────
 app.get('/api/users', auth, requireAdmin, async (req, res) => {
-  const [{ data:users, error }, { data:assignments }] = await Promise.all([
+  // Fetch users, the assignment join table, AND the full territory list.
+  // The territory list is needed for the territory_id fallback below.
+  const [{ data:users, error }, { data:assignments }, { data:allTerritories }] = await Promise.all([
     supabase.from('user_profiles').select('id,email,full_name,role,title,phone,is_active,created_at,last_login_at,territory_id').order('created_at',{ascending:false}),
     supabase.from('user_territory_assignments').select('user_id,territory_id,territories(id,name)'),
+    supabase.from('territories').select('id,name'),
   ])
   if (error) return res.status(400).json({error:error.message})
+
+  // Build the assignments map from the join table (primary source).
   const byUser={}; for (const a of (assignments||[])) { if (!byUser[a.user_id]) byUser[a.user_id]=[]; if (a.territories) byUser[a.user_id].push(a.territories) }
-  res.json({data:(users||[]).map(u=>({...u,territories:byUser[u.id]||[]}))})
+
+  // Build a lookup of territory id -> {id,name} so we can resolve a bare
+  // territory_id column value into the same {id,name} shape the frontend expects.
+  const terrById={}; for (const t of (allTerritories||[])) terrById[t.id]=t
+
+  // For each user: if the join table produced no territories but the
+  // user_profiles.territory_id column IS set, fall back to that column.
+  // This keeps the WIB Territories page correct even when an assignment was
+  // written to user_profiles.territory_id but not to user_territory_assignments.
+  res.json({data:(users||[]).map(u=>{
+    let territories = byUser[u.id] || []
+    if (territories.length === 0 && u.territory_id && terrById[u.territory_id]) {
+      territories = [terrById[u.territory_id]]
+    }
+    return {...u, territories}
+  })})
 })
 app.post('/api/users', auth, requireAdmin, async (req, res) => {
   try {
