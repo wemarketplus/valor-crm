@@ -1629,7 +1629,7 @@ function _cleanWibRecord(raw, stateCode) {
     wib_phone:   String(raw.phone || raw.wib_phone || '').trim() || null,
     wib_email:   String(raw.email || raw.wib_email || '').trim() || null,
     website:     String(raw.website || raw.url || '').trim() || null,
-    wib_type:    String(raw.type || raw.wib_type || 'Local').trim(),
+    wib_type:    String(raw.type || raw.wib_type || 'Local').trim().toLowerCase(),
     source_url:  String(raw.source_url || raw.website || raw.url || '').trim() || 'https://www.careeronestop.org',
     status:      'no_reachout_complete',
     contact_name: contactName || null, // stored in metadata/notes, NOT in wib_name
