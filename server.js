@@ -1,7 +1,7 @@
 'use strict'
 
 const express  = require('express')
-const { createClient } = require('@supabase/supabase-js')
+const { createClient } = requifre('@supabase/supabase-js')
 const path     = require('path')
 const fs       = require('fs')
 const crypto   = require('crypto')
@@ -3529,7 +3529,7 @@ app.put('/api/users/:id/territories', auth, requireAdmin, async (req,res)=>{
   res.json({success:true,territory_ids})
 })
 app.get('/api/me/wib-view', auth, async (req,res)=>{
-  const [{ data:pref },{ data:assignments }]=await Promise.all([supabase.from('user_wib_view_prefs').select('view_mode').eq('user_id',req.user.id).single(),supabase.from('user_territory_assignments').select('territory_id, territories(id,name)').eq('user_id',req.user.id)])
+  const [{ data:pref },{ data:assignments }]=await Promise.all([supabase.from('user_wib_view_prefs').select('view_mode').eq('user_id',req.user.id).single(),supabase.from('user_territory_assignments').select('territory_id, territories(id,name,states)').eq('user_id',req.user.id)])
   res.json({view_mode:pref?.view_mode||'all',territories:(assignments||[]).map(a=>a.territories).filter(Boolean)})
 })
 app.put('/api/me/wib-view', auth, async (req,res)=>{
