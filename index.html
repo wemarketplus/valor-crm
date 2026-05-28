@@ -1759,6 +1759,10 @@ async function render(){
 
 function renderApp(){
   const isAdmin=['super_admin','admin'].includes(currentUser?.role)
+  // Sales Specialists (team_member) must NOT see Revenue Tracker or Agreements.
+  // Only roles that legitimately handle revenue / contracts may see these tabs.
+  const canSeeRevenue   =['super_admin','admin','grant_coordinator'].includes(currentUser?.role)
+  const canSeeAgreements=['super_admin','admin','grant_coordinator'].includes(currentUser?.role)
   const initials=(currentUser?.full_name||currentUser?.email||'?').slice(0,2).toUpperCase()
   const roleLabels={super_admin:'Super Admin',admin:'Admin',grant_coordinator:'Grant Coordinator',compliance_mgr:'Compliance Mgr',team_member:'Sales Specialist',external_partner:'Read-Only'}
   const roleLabel=roleLabels[currentUser?.role]||(currentUser?.role||'').replace(/_/g,' ')
@@ -1810,10 +1814,10 @@ function renderApp(){
         ${sbi('settings','⚙','Settings')}
         `:''}
         <div class="sb-divider"></div>
-        ${sbi('revenue','💵','Revenue Tracker')}
+        ${canSeeRevenue?sbi('revenue','💵','Revenue Tracker'):''}
         ${sbi('compliance','🛡','Compliance')}
         ${sbi('training','🎓','Training Providers')}
-        ${sbi('agreements','📄','Agreements')}
+        ${canSeeAgreements?sbi('agreements','📄','Agreements'):''}
         ${sbi('ai','🤖','AI Assistant')}
           ${sbi('drive','📁','Files & Drive')}
       </div>
@@ -2063,6 +2067,19 @@ async function loadPage(page){
   pa.innerHTML='<div class="loading">⏳ Loading...</div>'
   notifOpen=false;document.getElementById('notif-container').innerHTML=''
   closeAllIE()
+  // ── Role-based route guard ──────────────────────────────────────────────────
+  // Block direct navigation (deep-link / hash change) to revenue and agreements
+  // for roles that don't have access. The sidebar already hides these items,
+  // but a user could still paste #revenue into the address bar.
+  const _restrictedPages = {
+    revenue:    ['super_admin','admin','grant_coordinator'],
+    agreements: ['super_admin','admin','grant_coordinator'],
+  }
+  if (_restrictedPages[page] && !_restrictedPages[page].includes(currentUser?.role)) {
+    document.getElementById('page-area').innerHTML =
+      `<div class="empty-state"><div class="empty-icon">🔒</div><div class="empty-text">Access denied</div><div class="empty-sub">Your role does not have permission to view this page.</div></div>`
+    return
+  }
   try{
     if(page==='dashboard')await pageDashboard()
     else if(page==='wibs')await pageWibs()
@@ -2637,7 +2654,14 @@ function renderWibProfile(){
 
         <div class="profile-section">
           <div class="profile-section-title">Funding Details</div>
-          <div class="field-row"><span class="field-key">Status</span><span class="field-val">${wibStatusPill(w.status)}</span></div>
+          <div class="field-row"><span class="field-key">Status</span><span class="field-val">
+            <select class="form-input" style="padding:4px 8px;font-size:11.5px;height:auto;min-width:170px" onchange="updateWibStatus('${w.id}', this.value)">
+              <option value="contacted"${w.status==='contacted'?' selected':''}>Contacted</option>
+              <option value="follow_up_needed"${w.status==='follow_up_needed'?' selected':''}>Follow up needed</option>
+              ${!['contacted','follow_up_needed'].includes(w.status)?`<option value="${escAttr(w.status||'')}" selected>${escHtml((w.status||'—').replace(/_/g,' '))}</option>`:''}
+            </select>
+            <span style="margin-left:8px">${wibStatusPill(w.status)}</span>
+          </span></div>
           <div class="field-row"><span class="field-key">Max Award/EIN</span><span class="field-val">${w.max_award_per_ein?`<span style="font-weight:600;color:var(--green-t)">${fmtMoney(w.max_award_per_ein)}</span>`:'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Match %</span><span class="field-val">${w.employer_match_pct?w.employer_match_pct+'%':'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">IWT Active</span><span class="field-val">${w.iwt_program_active?'<span class="pill p-green">Yes</span>':'<span class="pill p-gray">No</span>'}</span></div>
@@ -3058,7 +3082,7 @@ function renderNoteCard(n){
         </div>
         ${durationBadge}${dirBadge}
         ${meta.recording_url?`<a href="${escUrl(meta.recording_url)}" target="_blank" style="font-size:9.5px;color:var(--blue-t);margin-left:auto;text-decoration:none">🔗 Recording</a>`:''}
-        <button class="action-btn del" onclick="deleteNote('${n.id}')">✕</button>
+        ${['super_admin','admin'].includes(currentUser?.role)?`<button class="action-btn del" title="Delete note" onclick="deleteNote('${n.id}')">✕</button>`:''}
       </div>
       ${cpWrapHtml}
       ${sentimentHtml}
@@ -3070,7 +3094,20 @@ function renderNoteCard(n){
 
   // Standard note
   const initials = authorName.slice(0,2).toUpperCase()
-  return`<div class="note-card">
+  // ── Role-based note action buttons ───────────────────────────────────────
+  // Per role policy:
+  //   • Admin / Super Admin → may EDIT and DELETE notes
+  //   • Sales Specialist (team_member) → may EDIT notes only (no delete)
+  //   • Other roles → fall back to edit-only (server enforces deletes too)
+  const _canDeleteNote = ['super_admin','admin'].includes(currentUser?.role)
+  const _canEditNote   = ['super_admin','admin','grant_coordinator','compliance_mgr','team_member'].includes(currentUser?.role)
+  const _editBtn = _canEditNote
+    ? `<button class="action-btn" title="Edit note" onclick="editNote('${n.id}')" style="margin-right:4px">✎</button>`
+    : ''
+  const _delBtn  = _canDeleteNote
+    ? `<button class="action-btn del" title="Delete note" onclick="deleteNote('${n.id}')">✕</button>`
+    : ''
+  return`<div class="note-card" id="note-card-${n.id}">
     <div class="note-meta" style="align-items:flex-start">
       <div class="note-av" style="margin-top:2px">${initials}</div>
       <div style="flex:1;min-width:0">
@@ -3078,13 +3115,18 @@ function renderNoteCard(n){
         <div class="note-time">${escHtml(noteDateTime)}</div>
       </div>
       <span class="note-badge" style="margin-top:2px">${escHtml(noteType)}</span>
-      <button class="action-btn del" onclick="deleteNote('${n.id}')">✕</button>
+      ${_editBtn}${_delBtn}
     </div>
-    <div class="note-content" style="margin-top:6px">${escHtml(content).replace(/\n/g,'<br>')}</div>
+    <div class="note-content" id="note-content-${n.id}" style="margin-top:6px">${escHtml(content).replace(/\n/g,'<br>')}</div>
   </div>`
 }
 
 async function deleteNote(id){
+  // Client-side role guard — server also enforces this via requireDelete middleware.
+  if(!['super_admin','admin'].includes(currentUser?.role)){
+    showToast('Only Admins can delete notes','error')
+    return
+  }
   if(!confirm('Delete this note?'))return
   try{
     await api('/api/notes/'+id,'DELETE')
@@ -3092,6 +3134,107 @@ async function deleteNote(id){
     if(currentWib)loadWibTabData(wibTab)
     if(currentCompany)loadCompanyTabData(companyTab)
   }catch(e){showToast(e.message,'error')}
+}
+
+// ─── INLINE STATUS DROPDOWN HANDLERS ──────────────────────────────────────────
+// Both functions PUT the new status to the backend, update the in-memory record,
+// and re-render the profile so the status pill on the same page updates instantly
+// without a full reload. Also reloads the main list cache so the next time the
+// user navigates back to the list view, the new status is reflected.
+async function updateWibStatus(id, newStatus){
+  if(!newStatus) return
+  try{
+    const updated = await api('/api/wibs/'+id,'PUT',{ status:newStatus })
+    if(currentWib && currentWib.id===id){
+      currentWib.status = newStatus
+      // Also patch the list cache if loaded
+      if(Array.isArray(window._wibsData)){
+        const idx = window._wibsData.findIndex(w=>w.id===id)
+        if(idx>=0) window._wibsData[idx].status = newStatus
+      }
+      renderWibProfile()
+      loadWibTabData(wibTab)
+    }
+    showToast('Status updated','success')
+  }catch(e){ showToast('Failed to update status: '+e.message,'error') }
+}
+
+async function updateCompanyStatus(id, newStatus){
+  if(!newStatus) return
+  try{
+    const updated = await api('/api/companies/'+id,'PUT',{ status:newStatus })
+    if(currentCompany && currentCompany.id===id){
+      currentCompany.status = newStatus
+      // Active Client rule: when transitioning into active_client, stamp the
+      // last_contact_date so "Last Interaction" no longer renders "No contact".
+      // This is the data-side counterpart to the lastInteractionHtml display rule.
+      if(newStatus==='active_client' && !currentCompany.last_contact_date){
+        currentCompany.last_contact_date = new Date().toISOString()
+      }
+      if(Array.isArray(window._coData)){
+        const idx = window._coData.findIndex(c=>c.id===id)
+        if(idx>=0) window._coData[idx].status = newStatus
+      }
+      renderCompanyProfile()
+      loadCompanyTabData(companyTab)
+    }
+    showToast('Status updated','success')
+  }catch(e){ showToast('Failed to update status: '+e.message,'error') }
+}
+
+// ─── LAST INTERACTION DISPLAY HELPER ──────────────────────────────────────────
+// Rule: a company whose status is "active_client" must never show the placeholder
+// "No contact". If we have a last_contact_date we render the relative time; if
+// not, we render "Active engagement" rather than the blank/empty placeholder.
+// For all other statuses, the existing No-contact placeholder behavior is preserved.
+function lastInteractionHtml(record){
+  if(!record) return '<span class="fv-empty">No contact</span>'
+  if(record.last_contact_date) return fmtAgo(record.last_contact_date)
+  if(record.status==='active_client') return '<span style="color:var(--green-t);font-weight:500">Active engagement</span>'
+  return '<span class="fv-empty">No contact</span>'
+}
+
+// ─── EDIT NOTE — inline editor for Sales Specialist + Admin roles ─────────────
+// Swaps the read-only note content block for a textarea + Save/Cancel buttons.
+// PUTs to /api/notes/:id (server handles activity_log metadata merge).
+async function editNote(id){
+  if(!['super_admin','admin','grant_coordinator','compliance_mgr','team_member'].includes(currentUser?.role)){
+    showToast('You do not have permission to edit notes','error')
+    return
+  }
+  const contentEl = document.getElementById('note-content-'+id)
+  if(!contentEl) return
+  // Pull the current raw text by stripping <br> back to newlines
+  const currentText = contentEl.innerHTML.replace(/<br\s*\/?>/g,'\n').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'")
+  contentEl.innerHTML = `
+    <textarea id="note-edit-ta-${id}" class="form-input" style="width:100%;min-height:80px;font-size:12px;resize:vertical">${escHtml(currentText)}</textarea>
+    <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">
+      <button class="btn btn-xs btn-ghost" onclick="cancelEditNote('${id}','${escAttr(currentText)}')">Cancel</button>
+      <button class="btn btn-xs btn-primary" onclick="saveEditNote('${id}')">Save</button>
+    </div>`
+  document.getElementById('note-edit-ta-'+id)?.focus()
+}
+
+async function saveEditNote(id){
+  const ta = document.getElementById('note-edit-ta-'+id)
+  if(!ta) return
+  const newText = ta.value.trim()
+  if(!newText){ showToast('Note cannot be empty','error'); return }
+  try{
+    // The PUT route on activity_log merges req.body into metadata. Send both
+    // the displayed "content" key and the legacy "text" key so any consumer
+    // (rendering, search, analytics) picks up the new value.
+    await api('/api/notes/'+id,'PUT',{ content: newText, text: newText, details: newText })
+    showToast('Note updated','success')
+    if(currentWib)loadWibTabData(wibTab)
+    if(currentCompany)loadCompanyTabData(companyTab)
+  }catch(e){ showToast(e.message,'error') }
+}
+
+function cancelEditNote(id, originalText){
+  const contentEl = document.getElementById('note-content-'+id)
+  if(!contentEl) return
+  contentEl.innerHTML = escHtml(originalText).replace(/\n/g,'<br>')
 }
 
 /* ═══════════════════════════════════════════════════
@@ -3438,7 +3581,7 @@ function renderCompaniesTable(companies){
         <td style="text-align:center">${c.is_25_pct_operator?'<span style="color:var(--green-t)">✓</span>':'<span style="color:var(--text4)">□</span>'}</td>
         <td>${c.domain?`<a href="${escUrl(c.domain)}" target="_blank" class="cell-link" onclick="event.stopPropagation()">${escHtml(c.domain)}</a>`:'<span class="cell-dim">—</span>'}</td>
         <td class="cell-dim">${escHtml(c.supported_by||'—')}</td>
-        <td class="cell-dim">${c.last_contact_date?fmtAgo(c.last_contact_date):'No contact'}</td>
+        <td class="cell-dim">${c.last_contact_date?fmtAgo(c.last_contact_date):(c.status==='active_client'?'<span style="color:var(--green-t);font-weight:500">Active engagement</span>':'No contact')}</td>
         <td class="cell-dim">${fmtDate(c.created_at)}</td>
         <td class="cell-dim" style="max-width:120px">${
           c._app_count!=null
@@ -3543,7 +3686,15 @@ function renderCompanyProfile(){
 
         <div class="profile-section">
           <div class="profile-section-title">Business Details</div>
-          <div class="field-row"><span class="field-key">Status</span><span class="field-val">${companyStatusPill(c.status)}</span></div>
+          <div class="field-row"><span class="field-key">Status</span><span class="field-val">
+            <select class="form-input" style="padding:4px 8px;font-size:11.5px;height:auto;min-width:170px" onchange="updateCompanyStatus('${c.id}', this.value)">
+              <option value="prospect"${c.status==='prospect'?' selected':''}>Prospect</option>
+              <option value="active_client"${c.status==='active_client'?' selected':''}>Active Client</option>
+              <option value="contacted"${c.status==='contacted'?' selected':''}>Contacted</option>
+              ${!['prospect','active_client','contacted'].includes(c.status)?`<option value="${escAttr(c.status||'')}" selected>${escHtml((c.status||'—').replace(/_/g,' '))}</option>`:''}
+            </select>
+            <span style="margin-left:8px">${companyStatusPill(c.status)}</span>
+          </span></div>
           <div class="field-row"><span class="field-key">Rating</span><span class="field-val">${starRating(c.rating)}</span></div>
           <div class="field-row"><span class="field-key">FEIN / Tax ID</span><span class="field-val">${c.fein?`<span class="cell-mono">${c.fein}</span>`:'<span class="fv-empty">—</span>'}</span></div>
           <div class="field-row"><span class="field-key">Employees</span><span class="field-val">${c.employee_count_total||'<span class="fv-empty">—</span>'}</span></div>
@@ -3565,7 +3716,7 @@ function renderCompanyProfile(){
           <div class="profile-section-title">Record Info</div>
           <div class="field-row"><span class="field-key">Created By</span><span class="field-val">Claude</span></div>
           <div class="field-row"><span class="field-key">Created</span><span class="field-val">${fmtDate(c.created_at)}</span></div>
-          <div class="field-row"><span class="field-key">Last Interaction</span><span class="field-val">${c.last_contact_date?fmtAgo(c.last_contact_date):'<span class="fv-empty">No contact</span>'}</span></div>
+          <div class="field-row"><span class="field-key">Last Interaction</span><span class="field-val">${lastInteractionHtml(c)}</span></div>
         </div>
 
         <div class="profile-section">
@@ -7720,8 +7871,14 @@ async function pagePayments(){
   document.getElementById('page-area').innerHTML=`<div class="empty-state"><div class="empty-icon">💳</div><div class="empty-text">Payment Tracking</div><div class="empty-sub">Track grant disbursements and employer payments</div></div>`
 }
 let _trainingData = []
+// Currently-selected training provider id for the notes panel below the table.
+// Persists across re-renders so a user toggling status or editing doesn't lose
+// their notes context. Reset to null when the page is re-entered fresh.
+let _trainingSelectedId = null
 
 async function pageTraining() {
+  // Reset selection when the page is freshly entered
+  _trainingSelectedId = null
   setTopbar('Training Providers', '', `
     <div style="display:flex;gap:6px;align-items:center">
       <div class="ie-wrap">
@@ -7756,6 +7913,9 @@ function renderTrainingPage() {
   const active   = rows.filter(r => (r.metadata?.status||'active') === 'active').length
   const inactive = rows.filter(r => r.metadata?.status === 'inactive').length
 
+  // Resolve currently-selected provider for the notes panel
+  const selected = _trainingSelectedId ? rows.find(r => r.id === _trainingSelectedId) : null
+
   pa.innerHTML = `
   <!-- Stats -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
@@ -7787,20 +7947,21 @@ function renderTrainingPage() {
         <th>Programs</th>
         <th>Status</th>
         <th>Added</th>
-        <th style="width:70px"></th>
+        <th style="width:160px;text-align:right">Actions</th>
       </tr></thead>
       <tbody>
         ${rows.map(r => {
           const m = r.metadata || {}
-          return `<tr>
+          const isSelected = r.id === _trainingSelectedId
+          return `<tr style="${isSelected?'background:var(--blue-bg)':''};cursor:pointer" onclick="selectTrainingProvider('${r.id}')">
             <td>
               <div style="font-weight:500;font-size:13px">${escHtml(m.name||r.details||'—')}</div>
-              ${m.website?`<a href="${escHtml(m.website)}" target="_blank" class="fv-link" style="font-size:10.5px">🔗 ${escHtml(m.website.replace(/^https?:\/\//,'').split('/')[0])}</a>`:''}
+              ${m.website?`<a href="${escHtml(m.website)}" target="_blank" class="fv-link" style="font-size:10.5px" onclick="event.stopPropagation()">🔗 ${escHtml(m.website.replace(/^https?:\/\//,'').split('/')[0])}</a>`:''}
             </td>
             <td class="cell-dim">${escHtml(m.provider_type||'—')}</td>
             <td class="cell-dim">${escHtml(m.state||'—')}</td>
             <td style="font-size:11.5px">
-              ${m.contact_email?`<a href="mailto:${escHtml(m.contact_email)}" class="fv-link">${escHtml(m.contact_email)}</a><br>`:''}
+              ${m.contact_email?`<a href="mailto:${escHtml(m.contact_email)}" class="fv-link" onclick="event.stopPropagation()">${escHtml(m.contact_email)}</a><br>`:''}
               ${m.contact_phone?`<span class="cell-dim">${escHtml(m.contact_phone)}</span>`:''}
             </td>
             <td style="font-size:11px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(m.programs||'')}">
@@ -7809,14 +7970,116 @@ function renderTrainingPage() {
             <td><span class="pill ${m.status==='active'||!m.status?'pill-green':'pill-gray'}">${m.status||'active'}</span></td>
             <td class="cell-dim">${fmtDate(r.created_at)}</td>
             <td onclick="event.stopPropagation()" style="text-align:right">
+              <button class="btn btn-xs" onclick="selectTrainingProvider('${r.id}')" title="View notes for this provider">📝 Notes</button>
               <button class="btn btn-xs" onclick="openEditTrainingModal('${r.id}')">Edit</button>
             </td>
           </tr>`
         }).join('')}
       </tbody>
     </table>
+  </div>
+
+  <!-- ─────────────────────────────────────────────────────────────────────
+       TRAINING PROVIDER NOTES SECTION
+       Shows notes attached to the currently-selected provider. Provider notes
+       are stored using the existing /api/notes endpoint with
+       record_type='training_provider' and record_id=<provider.id>. The same
+       backend route powers WIB and Company notes; we are simply scoping to a
+       new record_type so existing CRUD, role gates, and audit logging apply
+       automatically. Backend changes required: NONE.
+       ───────────────────────────────────────────────────────────────────── -->
+  <div id="training-notes-panel" style="margin-top:20px;background:var(--bg1);border:0.5px solid var(--border1);border-radius:10px;overflow:hidden">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--bg2);border-bottom:0.5px solid var(--border1)">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:16px">📝</span>
+        <div>
+          <div style="font-size:13px;font-weight:600">Provider Notes</div>
+          <div style="font-size:10.5px;color:var(--text3)">${selected ? 'Notes for: '+escHtml(selected.metadata?.name||selected.details||'provider') : 'Select a provider row above to view or add notes'}</div>
+        </div>
+      </div>
+      ${selected ? `<button class="btn btn-sm btn-primary" onclick="openAddTrainingNoteModal('${selected.id}')">+ Add Note</button>` : ''}
+    </div>
+    <div id="training-notes-list" style="padding:14px 16px;min-height:120px">
+      ${selected
+        ? '<div style="color:var(--text3);font-size:11px;text-align:center;padding:20px">⏳ Loading notes...</div>'
+        : '<div class="empty-state" style="padding:24px"><div class="empty-icon" style="font-size:32px">👆</div><div class="empty-text" style="font-size:13px">Click any provider row above</div><div class="empty-sub" style="font-size:11px">Notes attached to that provider will appear here</div></div>'}
+    </div>
   </div>`}
   `
+
+  // After DOM render, fetch notes for the selected provider if any
+  if (selected) loadTrainingProviderNotes(selected.id)
+}
+
+// ─── TRAINING PROVIDER NOTES — load + render ──────────────────────────────────
+// Pulls notes scoped to record_type='training_provider' and the given provider id.
+// Reuses renderNoteCard() so the look, edit, and delete behavior matches WIB
+// and Company notes — including the new role-based edit/delete restrictions.
+async function loadTrainingProviderNotes(providerId){
+  const el = document.getElementById('training-notes-list')
+  if (!el) return
+  try{
+    const r = await api('/api/notes?record_type=training_provider&record_id='+providerId+'&limit=200')
+    const notes = (r.data || []).map(parseLogRow)
+    if (notes.length === 0){
+      el.innerHTML = '<div class="empty-state" style="padding:20px"><div class="empty-icon" style="font-size:28px">📭</div><div class="empty-text" style="font-size:13px">No notes yet for this provider</div><div class="empty-sub" style="font-size:11px">Click "+ Add Note" above to capture the first one</div></div>'
+      return
+    }
+    el.innerHTML = notes.map(n => renderNoteCard(n)).join('')
+  }catch(e){
+    el.innerHTML = `<div class="alert alert-error" style="margin:0">Failed to load notes: ${escHtml(e.message)}</div>`
+  }
+}
+
+// Highlight the clicked row + load its notes panel.
+function selectTrainingProvider(id){
+  _trainingSelectedId = id
+  renderTrainingPage()
+  // Smooth scroll to bring the notes panel into view
+  setTimeout(() => {
+    const panel = document.getElementById('training-notes-panel')
+    if (panel) panel.scrollIntoView({ behavior:'smooth', block:'nearest' })
+  }, 50)
+}
+
+// ─── ADD NOTE MODAL — training provider ───────────────────────────────────────
+function openAddTrainingNoteModal(providerId){
+  const provider = _trainingData.find(r => r.id === providerId)
+  const providerName = provider?.metadata?.name || provider?.details || 'this provider'
+  const body = `
+  <div style="display:flex;flex-direction:column;gap:10px">
+    <div style="font-size:12px;color:var(--text2)">Adding note to: <strong>${escHtml(providerName)}</strong></div>
+    <div>
+      <label class="form-label">Note type</label>
+      <select id="tp-note-type" class="form-input">
+        <option value="Note">Note</option>
+        <option value="Call">Call</option>
+        <option value="Meeting">Meeting</option>
+        <option value="Compliance">Compliance</option>
+        <option value="Follow-up">Follow-up</option>
+      </select>
+    </div>
+    <div>
+      <label class="form-label">Content</label>
+      <textarea id="tp-note-content" class="form-input" rows="6" placeholder="What did you discuss, observe, or commit to?" style="resize:vertical"></textarea>
+    </div>
+  </div>`
+  showModal('+ Add Provider Note', body, async () => {
+    const content = document.getElementById('tp-note-content')?.value?.trim()
+    const noteType = document.getElementById('tp-note-type')?.value || 'Note'
+    if (!content){ showToast('Note content is required','error'); return }
+    try{
+      await api('/api/notes','POST',{
+        record_type: 'training_provider',
+        record_id:   providerId,
+        note_type:   noteType,
+        content:     content,
+      })
+      showToast('Note added','success')
+      closeModal()
+      loadTrainingProviderNotes(providerId)
+    }catch(e){ showToast(e.message,'error') }
+  }, '', 'Save Note')
 }
 
 async function openNewTrainingModal() {
