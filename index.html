@@ -2655,10 +2655,15 @@ function renderWibProfile(){
         <div class="profile-section">
           <div class="profile-section-title">Funding Details</div>
           <div class="field-row"><span class="field-key">Status</span><span class="field-val">
-            <select class="form-input" style="padding:4px 8px;font-size:11.5px;height:auto;min-width:170px" onchange="updateWibStatus('${w.id}', this.value)">
+            <select class="form-input" style="padding:4px 8px;font-size:11.5px;height:auto;min-width:200px" onchange="updateWibStatus('${w.id}', this.value)">
+              <option value="not_contacted"${w.status==='not_contacted'?' selected':''}>Not Contacted</option>
+              <option value="no_reachout_completed"${w.status==='no_reachout_completed'?' selected':''}>No Reachout Completed</option>
               <option value="contacted"${w.status==='contacted'?' selected':''}>Contacted</option>
-              <option value="follow_up_needed"${w.status==='follow_up_needed'?' selected':''}>Follow up needed</option>
-              ${!['contacted','follow_up_needed'].includes(w.status)?`<option value="${escAttr(w.status||'')}" selected>${escHtml((w.status||'—').replace(/_/g,' '))}</option>`:''}
+              <option value="follow_up_needed"${w.status==='follow_up_needed'?' selected':''}>Follow Up Needed</option>
+              <option value="funding_available"${w.status==='funding_available'?' selected':''}>Funding Available</option>
+              <option value="funding_not_available"${w.status==='funding_not_available'?' selected':''}>Funding Not Available</option>
+              <option value="network_member"${w.status==='network_member'?' selected':''}>Network Member</option>
+              ${!['not_contacted','no_reachout_completed','contacted','follow_up_needed','funding_available','funding_not_available','network_member'].includes(w.status) && w.status ? `<option value="${escAttr(w.status)}" selected>${escHtml(w.status.replace(/_/g,' '))}</option>` : ''}
             </select>
             <span style="margin-left:8px">${wibStatusPill(w.status)}</span>
           </span></div>
@@ -3206,10 +3211,14 @@ async function editNote(id){
   if(!contentEl) return
   // Pull the current raw text by stripping <br> back to newlines
   const currentText = contentEl.innerHTML.replace(/<br\s*\/?>/g,'\n').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'")
+  // Store the original text on the content element as a data attribute so the
+  // Cancel button can restore it without needing to pass it through an inline
+  // onclick string (which breaks on quotes / newlines / apostrophes).
+  contentEl.dataset.originalText = currentText
   contentEl.innerHTML = `
     <textarea id="note-edit-ta-${id}" class="form-input" style="width:100%;min-height:80px;font-size:12px;resize:vertical">${escHtml(currentText)}</textarea>
     <div style="display:flex;gap:6px;margin-top:6px;justify-content:flex-end">
-      <button class="btn btn-xs btn-ghost" onclick="cancelEditNote('${id}','${escAttr(currentText)}')">Cancel</button>
+      <button class="btn btn-xs btn-ghost" onclick="cancelEditNote('${id}')">Cancel</button>
       <button class="btn btn-xs btn-primary" onclick="saveEditNote('${id}')">Save</button>
     </div>`
   document.getElementById('note-edit-ta-'+id)?.focus()
@@ -3231,10 +3240,12 @@ async function saveEditNote(id){
   }catch(e){ showToast(e.message,'error') }
 }
 
-function cancelEditNote(id, originalText){
+function cancelEditNote(id){
   const contentEl = document.getElementById('note-content-'+id)
   if(!contentEl) return
-  contentEl.innerHTML = escHtml(originalText).replace(/\n/g,'<br>')
+  const original = contentEl.dataset.originalText || ''
+  contentEl.innerHTML = escHtml(original).replace(/\n/g,'<br>')
+  delete contentEl.dataset.originalText
 }
 
 /* ═══════════════════════════════════════════════════
@@ -3687,11 +3698,14 @@ function renderCompanyProfile(){
         <div class="profile-section">
           <div class="profile-section-title">Business Details</div>
           <div class="field-row"><span class="field-key">Status</span><span class="field-val">
-            <select class="form-input" style="padding:4px 8px;font-size:11.5px;height:auto;min-width:170px" onchange="updateCompanyStatus('${c.id}', this.value)">
+            <select class="form-input" style="padding:4px 8px;font-size:11.5px;height:auto;min-width:200px" onchange="updateCompanyStatus('${c.id}', this.value)">
               <option value="prospect"${c.status==='prospect'?' selected':''}>Prospect</option>
-              <option value="active_client"${c.status==='active_client'?' selected':''}>Active Client</option>
               <option value="contacted"${c.status==='contacted'?' selected':''}>Contacted</option>
-              ${!['prospect','active_client','contacted'].includes(c.status)?`<option value="${escAttr(c.status||'')}" selected>${escHtml((c.status||'—').replace(/_/g,' '))}</option>`:''}
+              <option value="qualified"${c.status==='qualified'?' selected':''}>Qualified</option>
+              <option value="active_client"${c.status==='active_client'?' selected':''}>Active Client</option>
+              <option value="churned"${c.status==='churned'?' selected':''}>Churned</option>
+              <option value="dnc"${c.status==='dnc'?' selected':''}>Do Not Contact</option>
+              ${!['prospect','contacted','qualified','active_client','churned','dnc'].includes(c.status) && c.status ? `<option value="${escAttr(c.status)}" selected>${escHtml(c.status.replace(/_/g,' '))}</option>` : ''}
             </select>
             <span style="margin-left:8px">${companyStatusPill(c.status)}</span>
           </span></div>
@@ -5694,57 +5708,68 @@ async function wtAiSend(){
   wtAiAppend('user',q)
   const thinking=wtAiAppend('thinking','🤖 Thinking...')
 
-  // ── System prompt (sent via dedicated `system` field, NOT user content) ───
-  // Note: we deliberately summarize the 50-state data rather than serializing
-  // the full JSON array. Sending the entire array bloats the prompt past the
-  // model's effective context, which caused the previous "Colorado truncated"
-  // hallucination loop. The full data is still accessible to the user via
-  // the on-page state directory and the map.
-  const stateList = (window._WIB_STATE_DATA||[]).map(d=>`${d.abbr}=${d.state}:${d.board} (${d.director}, ${d.phone}, ${d.email})`).join(' | ')
-  const systemPrompt = `You are an expert WIB (Workforce Innovation Board) territory assistant inside the Valor Workforce Funding CRM. The user is a workforce grant professional pursuing WIOA-funded Incumbent Worker Training (IWT) grants.
+  // ── Build a deterministic data table — one director per line ──────────────
+  // We use a structured table format (one record per line, fixed columns) so
+  // the model can scan it like a spreadsheet rather than parsing a serialized
+  // JSON blob. This is fast, deterministic, and small (~3-4KB).
+  const dataLines = (window._WIB_STATE_DATA||[]).map(d=>
+    `${d.state} | Board: ${d.board} | Director: ${d.director} (${d.title}) | Phone: ${d.phone} | Email: ${d.email} | Website: ${d.website}`
+  ).join('\n')
 
-Reference data — all 50 state WIBs and DC (compact format: ABBR=State:Board (Director, phone, email)):
-${stateList}
+  const systemPrompt = `You are the WIB Directory Assistant for Valor Workforce Funding CRM. Your job is to answer workforce-grant professionals' questions about state Workforce Innovation Boards (WIBs) using the directory below.
 
-Rules:
-- Answer the user's actual question directly. Do not preface with menus, capability lists, or "how can I help" intros — they already opened a chat.
-- Do not mention "truncated data", "partial entries", or any data quality warnings. The data above is complete.
-- When giving contact info, list: Director name, title, phone, email, website — each on its own line.
-- For IWT grant questions: name the State WIB Director as the primary contact and recommend mentioning employer size, number of incumbent workers, and training topic on first outreach.
-- Keep answers under 200 words unless the user asks for a list.
-- Plain text only. No markdown headers, no tables, no decorative bullets.`
+DIRECTORY (all 50 states + DC — this data is COMPLETE, never describe it as missing, partial, or truncated):
+${dataLines}
 
-  // ── Build clean query context — do NOT feed prior assistant replies back ─
-  // The previous bug: a single bad assistant reply ("Colorado truncated") got
-  // appended to history, then every subsequent turn re-fed that hallucination
-  // to the model, which kept echoing it. We now send ONLY recent user turns
-  // as history, never assistant turns.
-  const userTurnsOnly = (window._wtAiHistory || []).filter(m=>m.role==='user').slice(-5)
-  const _hCtx  = userTurnsOnly.length ? '\n\nPrior user questions in this session:\n'+userTurnsOnly.map(m=>'- '+m.content).join('\n') : ''
-  const _sSel  = window._wtSelected
-    ? (function(){
-        const sd=(window._WIB_STATE_DATA||[]).find(d=>d.state===window._wtSelected||d.abbr===window._wtSelected)
-        return sd?'\n\nCurrently selected state on the map: '+sd.state+' — '+sd.board+' (Director: '+sd.director+', '+sd.phone+', '+sd.email+', '+sd.website+')':''
-      })()
-    : ''
-  // Push current question (USER role only — assistant replies are not stored)
+ANSWER RULES — non-negotiable:
+1. Answer the question directly using the directory. Do not ask "how can I help" or list capabilities.
+2. NEVER say "data was cut off", "context truncated", "not in current session", "not in reference dataset", "data limitation", or any similar phrase. The directory above is your complete, authoritative source.
+3. For "news" questions about a state: give the director's contact info and recommend the user call them directly for current priorities. Do NOT say you lack news data — just provide the contact and a one-line suggestion.
+4. For contact-info questions: output Director name, title, phone, email, website — each on its own line, plain text, no markdown tables, no bullets, no headers.
+5. For IWT grant questions: name the State WIB Director from the directory as the primary point of contact, and mention to bring employer size, number of incumbent workers, and the training topic to the first call.
+6. Maximum response length: 150 words. Plain text only. No markdown.`
+
+  // ── No history is sent. Each question is answered fresh against the
+  // directory. This avoids the historical hallucination-loop bug where one
+  // bad assistant reply poisoned every subsequent turn.
   window._wtAiHistory.push({role:'user',content:q})
   if(window._wtAiHistory.length>10) window._wtAiHistory=window._wtAiHistory.slice(-10)
 
-  const userContent = q + _hCtx + _sSel
+  // Append currently-selected state context if user clicked the map
+  let userContent = q
+  if(window._wtSelected){
+    const sd=(window._WIB_STATE_DATA||[]).find(d=>d.state===window._wtSelected||d.abbr===window._wtSelected)
+    if(sd) userContent += `\n\n(User has currently selected ${sd.state} on the map.)`
+  }
 
   try{
-    // Send system prompt as the dedicated `context` arg — the /api/ai route
-    // sanitizes it and passes it cleanly to Claude as the system field.
     const reply = await apiAI(userContent, systemPrompt)
     if(!reply||reply.trim()==='') throw new Error('Empty response. Check ANTHROPIC_API_KEY in Render environment.')
-    // Guard against the known-bad hallucination phrases; if Claude returns one,
-    // surface a fallback rather than letting the bad reply pollute the UI.
+    // Guard: detect bad/refusal phrases and replace with a direct fallback.
+    // If the question mentions a state we have in the directory, pull and
+    // display that state's directory entry rather than the bad reply.
     const lowReply = reply.toLowerCase()
-    const isBadReply = /truncated|cut off mid|context.*cut off|partial entries|data note|i'll flag any incomplete/.test(lowReply)
+    const isBadReply = /truncated|cut off|not.*included|not.*in.*reference|data limitation|data.*not.*available|i (don't|do not) have|context.*was/i.test(lowReply)
     if(thinking&&thinking.parentNode){thinking.parentNode.removeChild(thinking)}
     if(isBadReply){
-      wtAiAppend('ai', 'I have the full directory of all 50 state WIBs available. Please rephrase your question — for example: "Who is the Alabama WIB director?" or "What WIBs cover the Southeast region?"')
+      // Attempt to extract a state name from the user's question and answer
+      // ourselves from the directory if we can find one.
+      const lowQ = q.toLowerCase()
+      const matched = (window._WIB_STATE_DATA||[]).find(d=>
+        lowQ.includes(d.state.toLowerCase()) || lowQ.includes(' '+d.abbr.toLowerCase()+' ') || lowQ.endsWith(' '+d.abbr.toLowerCase())
+      )
+      if(matched){
+        wtAiAppend('ai',
+          `${matched.state} — ${matched.board}\n`+
+          `Director: ${matched.director} (${matched.title})\n`+
+          `Phone: ${matched.phone}\n`+
+          `Email: ${matched.email}\n`+
+          `Website: ${matched.website}\n\n`+
+          `For latest news or RFPs, call the director's office directly. For IWT grant inquiries, mention employer size, number of incumbent workers, and training topic on first contact.`
+        )
+      } else {
+        wtAiAppend('ai', `The directory covers all 50 states and DC. Please name a specific state — e.g. "Who do I contact for IWT in Texas?"`)
+      }
     } else {
       wtAiAppend('ai',reply)
     }
