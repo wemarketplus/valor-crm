@@ -1206,6 +1206,11 @@ tr:hover .row-actions{opacity:1}
 /* ═══════════════════════════════════════════════════
    GLOBALS
 ═══════════════════════════════════════════════════ */
+// Build marker — check this in the browser console (F12) to confirm which
+// version is deployed. If you don't see this exact string, the new file is
+// not live yet (hard-refresh with Ctrl+Shift+R or check the Render deploy).
+window.VALOR_BUILD = 'territory-companies+backbtn+30min-timer+ai-states-v6'
+console.log('Valor CRM build:', window.VALOR_BUILD)
 let token = localStorage.getItem('valor_token') || null
 let currentUser = null
 let currentPage = 'dashboard'
@@ -3527,6 +3532,11 @@ async function pageCompanies(){
         <div class="ie-item" onclick="closeAllIE();exportCSV('companies')"><span class="ie-icon">📤</span>Export as CSV</div>
         <div class="ie-item" onclick="closeAllIE();exportExcel('companies')"><span class="ie-icon">📊</span>Export as Excel (.xlsx)</div>
         <div class="ie-item" onclick="closeAllIE();exportPDF('companies')"><span class="ie-icon">📄</span>Export as PDF</div>
+        ${(currentUser?.role==='super_admin'||currentUser?.role==='admin')?`
+        <div class="ie-sep"></div>
+        <div class="ie-group-label" style="color:var(--blue-t)">AI Tools</div>
+        <div class="ie-item" onclick="closeAllIE();openCompanyStateAI()" style="color:var(--blue-t)"><span class="ie-icon">🌎</span>AI Fill Missing States<span class="ie-item-hint">Preview &amp; approve</span></div>
+        `:''}
       </div>
     </div>
     <button class="btn" onclick="runDeduplication()" style="display:inline-flex;align-items:center;gap:4px;background:var(--bg2);border-color:var(--border1);color:var(--text2)">🧹 De-dup</button>
@@ -3611,6 +3621,90 @@ async function onCoViewModeChange(newMode){
   renderCompaniesTable(getCompaniesByViewMode(newMode))
   // Persist the same preference key the WIB page uses, so the two stay in sync.
   api('/api/me/wib-view','PUT',{view_mode:newMode}).catch(()=>{})
+}
+
+// ─── AI FILL MISSING STATES (admin) ───────────────────────────────────────────
+// Preview-then-approve flow. Calls the server which uses Claude + web search to
+// guess each company's state, shows them as a checklist, then applies only the
+// approved rows. Nothing is written until the user clicks "Apply Selected".
+async function openCompanyStateAI(){
+  showModal('🌎 AI Fill Missing States', `
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      This finds the US <strong>state</strong> for companies that are currently missing one, using AI web search.
+      It checks up to 40 companies at a time. <strong>Nothing is saved</strong> until you review the results and click Apply.
+      <br><br>
+      Tip: a company's state is what powers territory filtering. Generic names (e.g. "Advanced Health Care") may come back as low confidence — review those carefully.
+    </div>
+    <div id="csai-body" style="margin-top:14px"></div>
+  `, null, '', null)
+  // Replace the default footer button area with our own controls
+  const body = document.getElementById('csai-body')
+  body.innerHTML = `<button class="btn btn-primary" id="csai-run" onclick="runCompanyStateLookup()">🔎 Find States (preview)</button>`
+}
+
+async function runCompanyStateLookup(){
+  const body = document.getElementById('csai-body')
+  if(!body) return
+  body.innerHTML = `<div style="font-size:12px;color:var(--text3);padding:16px;text-align:center">⏳ Asking AI to look up states… this can take 30–60 seconds.</div>`
+  try{
+    const r = await api('/api/admin/company-state-lookup','POST',{ limit:40 })
+    const results = r.results || []
+    if(results.length===0){
+      body.innerHTML = `<div style="font-size:12.5px;color:var(--text2);padding:12px">${escHtml(r.message||'No companies are missing a state.')}</div>`
+      return
+    }
+    const confColor = c => c==='high'?'var(--green-t)':c==='medium'?'var(--amber-t)':'var(--text3)'
+    const rows = results.map((x,i)=>{
+      const has = !!x.guessed_state
+      return `<tr style="border-bottom:.5px solid var(--border1)">
+        <td style="padding:5px 6px"><input type="checkbox" class="csai-chk" data-id="${escAttr(x.id)}" ${has&&x.confidence!=='low'?'checked':''} ${has?'':'disabled'}></td>
+        <td style="padding:5px 6px;font-size:12px">${escHtml(x.company_name)}</td>
+        <td style="padding:5px 6px;text-align:center">
+          ${has?`<input class="csai-state" data-id="${escAttr(x.id)}" value="${escAttr(x.guessed_state)}" maxlength="2" style="width:42px;text-align:center;text-transform:uppercase;border:.5px solid var(--border2);border-radius:5px;padding:2px 4px;font-size:12px">`:'<span style="color:var(--text3);font-size:11px">unknown</span>'}
+        </td>
+        <td style="padding:5px 6px;font-size:10.5px;color:${confColor(x.confidence)};text-transform:capitalize">${escHtml(x.confidence||'')}</td>
+      </tr>`
+    }).join('')
+    body.innerHTML = `
+      <div style="font-size:11.5px;color:var(--text2);margin-bottom:8px">${escHtml(r.message||'')} — checked the box for each one you want to save; you can edit any state code.</div>
+      <div style="max-height:320px;overflow-y:auto;border:.5px solid var(--border1);border-radius:8px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="background:var(--bg2);position:sticky;top:0">
+            <th style="padding:5px 6px;text-align:left;font-size:10.5px;color:var(--text3)">✓</th>
+            <th style="padding:5px 6px;text-align:left;font-size:10.5px;color:var(--text3)">Company</th>
+            <th style="padding:5px 6px;text-align:center;font-size:10.5px;color:var(--text3)">State</th>
+            <th style="padding:5px 6px;text-align:left;font-size:10.5px;color:var(--text3)">Confidence</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button class="btn btn-ghost btn-sm" onclick="runCompanyStateLookup()">↻ Re-run next 40</button>
+        <button class="btn btn-primary btn-sm" onclick="applyCompanyStates()">✓ Apply Selected</button>
+      </div>`
+  }catch(e){
+    body.innerHTML = `<div class="alert alert-error" style="margin:0">${escHtml(e.message)}</div>
+      <button class="btn btn-sm" style="margin-top:10px" onclick="runCompanyStateLookup()">Try again</button>`
+  }
+}
+
+async function applyCompanyStates(){
+  const checks = Array.from(document.querySelectorAll('.csai-chk:checked'))
+  const updates = []
+  checks.forEach(chk=>{
+    const id = chk.getAttribute('data-id')
+    const inp = document.querySelector(`.csai-state[data-id="${id}"]`)
+    const state = inp ? inp.value.trim().toUpperCase() : ''
+    if(id && state) updates.push({ id, state })
+  })
+  if(updates.length===0){ showToast('Nothing selected to apply','warn'); return }
+  try{
+    const r = await api('/api/admin/company-state-apply','POST',{ updates })
+    showToast(`Updated ${r.updated} compan${r.updated===1?'y':'ies'}`+(r.failed?`, ${r.failed} failed`:''), r.failed?'warn':'success')
+    closeModal()
+    // Reload the companies page so the newly-stated companies appear in territory views
+    if(currentPage==='companies') pageCompanies()
+  }catch(e){ showToast(e.message,'error') }
 }
 
 function renderCompaniesTable(companies){
