@@ -1390,7 +1390,7 @@ async function apiAI(prompt, context) {
 let _sessionWarnTimer=null, _sessionLogoutTimer=null, _sessionWarned=false
 function startSessionTimer(){
   clearTimeout(_sessionWarnTimer);clearTimeout(_sessionLogoutTimer);_sessionWarned=false
-  // 55min → show 5-minute warning modal (directive: 5-min warning before sign-out)
+  // 30min of inactivity → show warning modal (directive: warn after 30 min, then log off)
   _sessionWarnTimer=setTimeout(()=>{
     _sessionWarned=true
     const overlay=document.createElement('div')
@@ -1413,14 +1413,14 @@ function startSessionTimer(){
       if(secs<=0)clearInterval(interval)
     },1000)
     overlay.dataset.interval=interval
-  }, 55*60*1000)
-  // 60min → force logout
+  }, 30*60*1000)
+  // 35min → force logout (30 min idle + 5 min warning grace period)
   _sessionLogoutTimer=setTimeout(()=>{
     const ov=document.getElementById('session-warn-overlay')
     if(ov){clearInterval(ov.dataset.interval);ov.remove()}
     showToast('Session expired — you have been signed out','warn')
     setTimeout(()=>logout(),800)
-  }, 60*60*1000)
+  }, 35*60*1000)
   // Reset on any user activity
   if(window._sessResetFn){['click','keydown','mousemove','scroll'].forEach(ev=>window.removeEventListener(ev,window._sessResetFn,true))}
   window._sessResetFn=function(){if(!_sessionWarned){clearTimeout(_sessionWarnTimer);clearTimeout(_sessionLogoutTimer);startSessionTimer()}}
@@ -1869,8 +1869,28 @@ function renderApp(){
   if(!window._crmPopstateBound){
     window._crmPopstateBound=true
     window.addEventListener('popstate',function(evt){
+      // Profile entries: reopen the WIB/Company profile the user navigated to.
+      var st=evt.state||{}
+      if(st.crmProfile==='wib'&&st.crmId){
+        window._suppressHistoryPush=true
+        try{openWibProfile(st.crmId)}finally{window._suppressHistoryPush=false}
+        return
+      }
+      if(st.crmProfile==='company'&&st.crmId){
+        window._suppressHistoryPush=true
+        try{openCompanyProfile(st.crmId)}finally{window._suppressHistoryPush=false}
+        return
+      }
+      // Fall back to hash-based detection for profile deep-links (e.g. #wib/<id>)
+      var hash=(location.hash&&location.hash.slice(1))||''
+      var pm=hash.match(/^(wib|company)\/(.+)$/)
+      if(pm){
+        window._suppressHistoryPush=true
+        try{(pm[1]==='wib'?openWibProfile:openCompanyProfile)(pm[2])}finally{window._suppressHistoryPush=false}
+        return
+      }
       var target=(evt.state&&evt.state.crmPage)
-        ||(location.hash&&location.hash.slice(1))
+        ||hash
         ||'dashboard'
       window._suppressHistoryPush=true
       try{loadPage(target)}finally{window._suppressHistoryPush=false}
@@ -2573,6 +2593,11 @@ function showWibFilterModal(){
 ═══════════════════════════════════════════════════ */
 async function openWibProfile(id){
   currentPage='wib-profile';clearViewbar();clearTabs()
+  // Push a history entry so the browser Back button returns to this profile
+  // (and Back from here returns to the WIB list where the user left off).
+  if(!window._suppressHistoryPush){
+    try{history.pushState({crmProfile:'wib',crmId:id},'','#wib/'+id)}catch(_){}
+  }
   document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading profile...</div>'
   try{currentWib=await api('/api/wibs/'+id)}
   catch(e){if(window._wibs?.length)currentWib=window._wibs.find(w=>w.id===id)}
@@ -3459,11 +3484,38 @@ async function _autoNoteWibStatusChange(wibId, oldStatus, newStatus) {
    COMPANIES — Attio-style
 ═══════════════════════════════════════════════════ */
 async function pageCompanies(){
-  const data=await api('/api/companies?limit=1000')
+  const [data, viewPref] = await Promise.all([
+    api('/api/companies?limit=1000'),
+    // Reuse the same wib-view preference + assigned-territories the WIB page uses,
+    // so a user's territory assignment drives BOTH WIBs and Companies.
+    api('/api/me/wib-view').catch(()=>({view_mode:'all',territories:[]})),
+  ])
   window._companies=data.data||[]
   const total=data.count||window._companies.length
 
+  // Capture the user's assigned territories (each has a `states` array) so we can
+  // filter companies whose state falls inside an assigned territory.
+  window._coMyTerritories = viewPref.territories || []
+  const coHasAssigned = window._coMyTerritories.length > 0
+  const savedCoMode = viewPref.view_mode || 'all'
+  // Only honor "my_territories" if the user actually has assigned territories
+  window._coViewMode = (savedCoMode==='my_territories' && coHasAssigned) ? 'my_territories' : 'all'
+
+  const coViewToggleHtml = `<div class="wib-view-toggle">
+    <span class="vt-label">View Mode</span>
+    <select id="co-view-mode-select" onchange="onCoViewModeChange(this.value)">
+      <option value="all"${window._coViewMode==='all'?' selected':''}>All Companies</option>
+      <option value="my_territories"${window._coViewMode==='my_territories'?' selected':''}${!coHasAssigned?' disabled':''}>
+        My Territory Companies${!coHasAssigned?' (none assigned)':''}
+      </option>
+    </select>
+    <span class="wib-view-indicator${window._coViewMode==='all'?' mode-all':''}" id="co-mode-indicator">
+      ${window._coViewMode==='all'?'⊞ All Companies':'🗺 '+window._coMyTerritories.map(t=>t.name).join(', ')}
+    </span>
+  </div>`
+
   setTopbar('Companies',`${total.toLocaleString()} operators`,`
+    ${coViewToggleHtml}
     <div class="ie-wrap">
       <button class="btn ie-btn" onclick="toggleIEMenu('co-ie')">⬆ Import / Export ∨</button>
       <div class="ie-menu" id="co-ie">
@@ -3493,7 +3545,7 @@ async function pageCompanies(){
     {key:'Company Type',val:'Operator',onRemove:''}
   ],'Status')
 
-  renderCompaniesTable(window._companies)
+  renderCompaniesTable(getCompaniesByViewMode(window._coViewMode))
   // Async enrichment: load apps and locations to populate extra columns
   Promise.all([
     api('/api/applications?limit=2000').catch(()=>({data:[]})),
@@ -3505,13 +3557,73 @@ async function pageCompanies(){
       c._app_count = apps.filter(a=>a.company_id===c.id).length
       c._locations = locs.filter(l=>l.company_id===c.id).map(l=>l.location_name).slice(0,5)
     })
-    renderCompaniesTable(window._companies)
+    renderCompaniesTable(getCompaniesByViewMode(window._coViewMode))
   }).catch(()=>{})
+}
+
+// ── Company territory view-mode helpers ────────────────────────────────────
+window._coViewMode      = 'all'
+window._coMyTerritories = []
+
+// US state name <-> abbreviation map so we can match a company's `state`
+// (which may be "FL" or "Florida") against a territory's `states` array
+// (which may also be either form).
+const _CO_STATE_ABBR = {
+  alabama:'AL',alaska:'AK',arizona:'AZ',arkansas:'AR',california:'CA',colorado:'CO',
+  connecticut:'CT',delaware:'DE',florida:'FL',georgia:'GA',hawaii:'HI',idaho:'ID',
+  illinois:'IL',indiana:'IN',iowa:'IA',kansas:'KS',kentucky:'KY',louisiana:'LA',
+  maine:'ME',maryland:'MD',massachusetts:'MA',michigan:'MI',minnesota:'MN',mississippi:'MS',
+  missouri:'MO',montana:'MT',nebraska:'NE',nevada:'NV','new hampshire':'NH','new jersey':'NJ',
+  'new mexico':'NM','new york':'NY','north carolina':'NC','north dakota':'ND',ohio:'OH',oklahoma:'OK',
+  oregon:'OR',pennsylvania:'PA','rhode island':'RI','south carolina':'SC','south dakota':'SD',
+  tennessee:'TN',texas:'TX',utah:'UT',vermont:'VT',virginia:'VA',washington:'WA',
+  'west virginia':'WV',wisconsin:'WI',wyoming:'WY','district of columbia':'DC',
+}
+// Normalize any state string to a 2-letter uppercase code for comparison.
+function _coNormState(s){
+  if(!s) return ''
+  const v=String(s).trim()
+  if(v.length===2) return v.toUpperCase()
+  return _CO_STATE_ABBR[v.toLowerCase()] || v.toUpperCase()
+}
+
+function getCompaniesByViewMode(mode){
+  const all = window._companies || []
+  if(mode !== 'my_territories' || !window._coMyTerritories.length) return all
+  // Build the set of state codes covered by the user's assigned territories.
+  const allowed = new Set()
+  for(const t of window._coMyTerritories){
+    for(const st of (t.states||[])) allowed.add(_coNormState(st))
+  }
+  if(allowed.size===0) return all
+  return all.filter(c => allowed.has(_coNormState(c.state)))
+}
+
+async function onCoViewModeChange(newMode){
+  window._coViewMode = newMode
+  const indicator = document.getElementById('co-mode-indicator')
+  if(indicator){
+    indicator.className = 'wib-view-indicator' + (newMode==='all'?' mode-all':'')
+    indicator.textContent = newMode==='all'
+      ? '⊞ All Companies'
+      : '🗺 '+window._coMyTerritories.map(t=>t.name).join(', ')
+  }
+  renderCompaniesTable(getCompaniesByViewMode(newMode))
+  // Persist the same preference key the WIB page uses, so the two stay in sync.
+  api('/api/me/wib-view','PUT',{view_mode:newMode}).catch(()=>{})
 }
 
 function renderCompaniesTable(companies){
   const _s=new Set()
   let d=[...companies].filter(c=>{if(!c||_s.has(c.id))return false;_s.add(c.id);return true})
+  // Territory view-mode gate: when the user has chosen "My Territory Companies",
+  // restrict to companies whose state is inside an assigned territory. Applied
+  // here so search / sort / filter / view-tab callers all honor it automatically.
+  if(window._coViewMode==='my_territories' && (window._coMyTerritories||[]).length){
+    const allowed=new Set()
+    for(const t of window._coMyTerritories){ for(const stt of (t.states||[])) allowed.add(_coNormState(stt)) }
+    if(allowed.size) d=d.filter(c=>allowed.has(_coNormState(c.state)))
+  }
   const q=window._coFilters.search
   const st=window._coFilters.status
   const rt=window._coFilters.rating
@@ -3630,6 +3742,11 @@ function renderCompaniesTable(companies){
 async function openCompanyProfile(id){
   currentPage='company-profile';companyTab='overview'
   clearViewbar();clearTabs()
+  // Push a history entry so the browser Back button returns to this profile
+  // (and Back from here returns to the Companies list where the user left off).
+  if(!window._suppressHistoryPush){
+    try{history.pushState({crmProfile:'company',crmId:id},'','#company/'+id)}catch(_){}
+  }
   document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading profile...</div>'
   try{currentCompany=await api('/api/companies/'+id)}
   catch(e){if(window._companies?.length)currentCompany=window._companies.find(c=>c.id===id)}
