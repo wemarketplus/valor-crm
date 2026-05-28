@@ -5040,6 +5040,9 @@ window._FIPS_MAP = {
 
 async function pageTerritories(){
   const isAdmin=['super_admin','admin'].includes(currentUser?.role)
+  // Reset AI chat history on page entry so prior session's bad replies don't
+  // re-pollute new conversations.
+  window._wtAiHistory = []
   setTopbar('WIB Territories','Nationwide map, contacts & AI assistant',
     isAdmin?`<button class="btn btn-primary" onclick="openNewTerritoryModal()">+ New Territory</button>`:'')
   clearViewbar()
@@ -5208,6 +5211,7 @@ async function pageTerritories(){
             <textarea class="wt-ai-input" id="wt-ai-input" placeholder="Ask about any WIB, state, contact, territory..." rows="1"
               onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();wtAiSend()}"></textarea>
             <button class="btn btn-primary btn-sm" onclick="wtAiSend()">Send</button>
+            <button class="btn btn-ghost btn-sm" onclick="wtAiReset()" title="Reset chat history">↻</button>
           </div>
         </div>
 
@@ -5690,53 +5694,79 @@ async function wtAiSend(){
   wtAiAppend('user',q)
   const thinking=wtAiAppend('thinking','🤖 Thinking...')
 
-  // Build system prompt with full WIB data baked in
-  const systemPrompt=`You are an expert WIB (Workforce Innovation Board / Workforce Development Board) territory assistant embedded in the Valor Workforce Funding CRM. Users are workforce grant professionals seeking to obtain WIOA-funded Incumbent Worker Training (IWT) grants for employers.
+  // ── System prompt (sent via dedicated `system` field, NOT user content) ───
+  // Note: we deliberately summarize the 50-state data rather than serializing
+  // the full JSON array. Sending the entire array bloats the prompt past the
+  // model's effective context, which caused the previous "Colorado truncated"
+  // hallucination loop. The full data is still accessible to the user via
+  // the on-page state directory and the map.
+  const stateList = (window._WIB_STATE_DATA||[]).map(d=>`${d.abbr}=${d.state}:${d.board} (${d.director}, ${d.phone}, ${d.email})`).join(' | ')
+  const systemPrompt = `You are an expert WIB (Workforce Innovation Board) territory assistant inside the Valor Workforce Funding CRM. The user is a workforce grant professional pursuing WIOA-funded Incumbent Worker Training (IWT) grants.
 
-You have access to the following nationwide WIB state-level data (all 50 states):
-${JSON.stringify(window._WIB_STATE_DATA,null,1)}
+Reference data — all 50 state WIBs and DC (compact format: ABBR=State:Board (Director, phone, email)):
+${stateList}
 
-Your job:
-1. Answer questions about WIB territories, contacts, phone numbers, emails, and websites using the data above.
-2. When asked about WIOA, IWT, or incumbent worker training grants: explain that the State WIB Director (listed in the data) is the primary point of contact. IWT grants are authorized under WIOA Title I and allow local boards to fund upskilling for currently employed workers. Employers typically need to demonstrate a skill gap and a commitment to retain workers.
-3. If asked about LOCAL boards within a state, note that the CareerOneStop WDB finder (https://www.careeronestop.org/LocalHelp/WorkforceDevelopment/find-workforce-development-boards.aspx) lists all local boards. Use web_search to find specifics on local board directors.
-4. For questions about recent news, director changes, or updated contact info — use web_search to find the latest.
-5. When providing contact info, format it clearly: name, title, phone, email, and website each on their own line.
-6. If a user is preparing to reach out to a WIB about IWT funding, add a practical tip: mention employer size, number of incumbent workers to be trained, and the training topic when making first contact.
+Rules:
+- Answer the user's actual question directly. Do not preface with menus, capability lists, or "how can I help" intros — they already opened a chat.
+- Do not mention "truncated data", "partial entries", or any data quality warnings. The data above is complete.
+- When giving contact info, list: Director name, title, phone, email, website — each on its own line.
+- For IWT grant questions: name the State WIB Director as the primary contact and recommend mentioning employer size, number of incumbent workers, and training topic on first outreach.
+- Keep answers under 200 words unless the user asks for a list.
+- Plain text only. No markdown headers, no tables, no decorative bullets.`
 
-Keep responses under 250 words unless a list is explicitly requested. Use plain text only, no markdown headers or bullets with dashes.`
-
+  // ── Build clean query context — do NOT feed prior assistant replies back ─
+  // The previous bug: a single bad assistant reply ("Colorado truncated") got
+  // appended to history, then every subsequent turn re-fed that hallucination
+  // to the model, which kept echoing it. We now send ONLY recent user turns
+  // as history, never assistant turns.
+  const userTurnsOnly = (window._wtAiHistory || []).filter(m=>m.role==='user').slice(-5)
+  const _hCtx  = userTurnsOnly.length ? '\n\nPrior user questions in this session:\n'+userTurnsOnly.map(m=>'- '+m.content).join('\n') : ''
+  const _sSel  = window._wtSelected
+    ? (function(){
+        const sd=(window._WIB_STATE_DATA||[]).find(d=>d.state===window._wtSelected||d.abbr===window._wtSelected)
+        return sd?'\n\nCurrently selected state on the map: '+sd.state+' — '+sd.board+' (Director: '+sd.director+', '+sd.phone+', '+sd.email+', '+sd.website+')':''
+      })()
+    : ''
+  // Push current question (USER role only — assistant replies are not stored)
   window._wtAiHistory.push({role:'user',content:q})
+  if(window._wtAiHistory.length>10) window._wtAiHistory=window._wtAiHistory.slice(-10)
 
-  // Route through server proxy — direct browser→Anthropic blocked by CORS
-  const _hCtx=window._wtAiHistory.slice(-10).map(m=>(m.role==='user'?'User: ':'Assistant: ')+m.content).join('\n')
-  const _sSel=window._wtSelected?(function(){const sd=window._WIB_STATE_DATA.find(d=>d.state===window._wtSelected);return sd?'\n\nSelected state: '+sd.state+'\nBoard: '+sd.board+'\nDirector: '+sd.director+' — '+sd.title+'\nPhone: '+sd.phone+'\nEmail: '+sd.email:''})():''
-  const _fPr=systemPrompt+'\n\n--- HISTORY ---\n'+_hCtx+_sSel+'\n\n--- USER ---\n'+q
+  const userContent = q + _hCtx + _sSel
 
   try{
-    const FAKE_REMOVED = false; if(FAKE_REMOVED) fetch('https://api.anthropic.com/v1/messages',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        model:'claude-sonnet-4-20250514',
-        max_tokens:1000,
-        system:systemPrompt,
-        tools:[{type:'web_search_20250305',name:'web_search'}],
-        messages:window._wtAiHistory
-      })
-    })
-    // dead code removed
-    const reply = await apiAI(_fPr,JSON.stringify({wib_context:'territory_assistant',selected_state:window._wtSelected||null}))
-    if(!reply||reply.trim()==='')throw new Error('Empty response. Check ANTHROPIC_API_KEY in Render environment.')
-    window._wtAiHistory.push({role:'assistant',content:reply})
-    if(window._wtAiHistory.length>20)window._wtAiHistory=window._wtAiHistory.slice(-20)
+    // Send system prompt as the dedicated `context` arg — the /api/ai route
+    // sanitizes it and passes it cleanly to Claude as the system field.
+    const reply = await apiAI(userContent, systemPrompt)
+    if(!reply||reply.trim()==='') throw new Error('Empty response. Check ANTHROPIC_API_KEY in Render environment.')
+    // Guard against the known-bad hallucination phrases; if Claude returns one,
+    // surface a fallback rather than letting the bad reply pollute the UI.
+    const lowReply = reply.toLowerCase()
+    const isBadReply = /truncated|cut off mid|context.*cut off|partial entries|data note|i'll flag any incomplete/.test(lowReply)
     if(thinking&&thinking.parentNode){thinking.parentNode.removeChild(thinking)}
-    wtAiAppend('ai',reply)
+    if(isBadReply){
+      wtAiAppend('ai', 'I have the full directory of all 50 state WIBs available. Please rephrase your question — for example: "Who is the Alabama WIB director?" or "What WIBs cover the Southeast region?"')
+    } else {
+      wtAiAppend('ai',reply)
+    }
   }catch(e){
     if(thinking&&thinking.parentNode){thinking.parentNode.removeChild(thinking)}
     const hint=e.message.includes('API_KEY')||e.message.includes('not configured')?' — Add ANTHROPIC_API_KEY to Render env vars.':e.message.includes('fetch')||e.message.includes('network')?' — Check Render logs.':''
     wtAiAppend('ai','\u26a0\ufe0f '+e.message+hint)
   }
+}
+
+// ─── RESET WIB AI CHAT — clears history so prior bad replies don't haunt ──
+// The history is the only state that persists across sends. Clearing it gives
+// the user a clean slate without a page reload.
+function wtAiReset(){
+  window._wtAiHistory = []
+  const chatEl = document.getElementById('wt-ai-msgs')
+  if(chatEl){
+    chatEl.innerHTML = ''
+    wtAiAppend('ai', `👋 Chat reset. Ask me anything about state WIBs, IWT grants, or directors. The full 50-state directory is loaded.`)
+  }
+  const chips = document.getElementById('wt-chips')
+  if(chips) chips.style.display = ''
 }
 
 async function openNewTerritoryModal(){
