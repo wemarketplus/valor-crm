@@ -1,7 +1,7 @@
 'use strict'
 
 const express  = require('express')
-const { createClient } = requifre('@supabase/supabase-js')
+const { createClient } = require('@supabase/supabase-js')
 const path     = require('path')
 const fs       = require('fs')
 const crypto   = require('crypto')
