@@ -3226,6 +3226,99 @@ app.post('/api/drive/export', auth, async (req,res)=>{
 // Returns a lightweight map of which users are assigned to which territories so
 // the WIB Territories page can show assigned names to non-admins. Exposes only
 // id, full_name, email, and territory_id — no roles or sensitive fields.
+
+const _US_STATE_ABBRS = ['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC']
+
+app.post('/api/admin/company-state-lookup', auth, requireAdmin, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured in Render environment variables' })
+
+  const limit = Math.min(parseInt(req.body && req.body.limit) || 40, 80)
+
+  const { data: companies, error } = await supabase
+    .from('companies')
+    .select('id, company_name, notes, domain')
+    .or('state.is.null,state.eq.')
+    .limit(limit)
+  if (error) return res.status(400).json({ error: error.message })
+
+  if (!companies || companies.length === 0) {
+    return res.json({ results: [], message: 'No companies are missing a state. Nothing to look up.' })
+  }
+
+  const list = companies.map((c, i) => `${i + 1}. ${c.company_name}${c.domain ? ' (' + c.domain + ')' : ''}`).join('\n')
+
+  const SYSTEM = 'You are a data-enrichment assistant. You find the US state (2-letter code) where a company or healthcare facility is headquartered or primarily located. Use web search when helpful. Return ONLY valid JSON, no prose. If you cannot determine the state with reasonable confidence, use null for that company. Never guess randomly.'
+  const userContent = `For each company below, find the US state where it is located. Return a JSON array, one object per company, in the SAME ORDER, each like {"n":1,"state":"NY","confidence":"high"}. Use 2-letter state codes. confidence is "high", "medium", or "low". If unknown, use {"n":1,"state":null,"confidence":"low"}.\n\nCompanies:\n${list}`
+
+  const MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001']
+  let rawText = '', apiErr = null
+  for (let mi = 0; mi < MODELS.length; mi++) {
+    try {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: MODELS[mi],
+          max_tokens: 4000,
+          system: SYSTEM,
+          tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
+          messages: [{ role: 'user', content: userContent }],
+        }),
+      })
+      const d = await r.json()
+      if (r.status === 529 && mi === 0) continue
+      if (!r.ok || d.error) { apiErr = (d.error && d.error.message) || ('HTTP ' + r.status); continue }
+      rawText = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
+      apiErr = null
+      break
+    } catch (e) { apiErr = e.message }
+  }
+  if (apiErr && !rawText) return res.status(500).json({ error: 'AI lookup failed: ' + apiErr })
+
+  let parsed = []
+  const m = rawText.match(/\[[\s\S]*\]/)
+  if (m) { try { parsed = JSON.parse(m[0]) } catch (_) { parsed = [] } }
+
+  const results = companies.map((c, i) => {
+    const hit = parsed.find(p => p && Number(p.n) === i + 1)
+    let state = hit && hit.state ? String(hit.state).trim().toUpperCase() : null
+    if (state && !_US_STATE_ABBRS.includes(state)) state = null
+    return {
+      id: c.id,
+      company_name: c.company_name,
+      guessed_state: state,
+      confidence: (hit && hit.confidence) || 'low',
+    }
+  })
+
+  res.json({
+    results,
+    total_missing_checked: companies.length,
+    message: `Reviewed ${companies.length} companies missing a state. Approve the ones that look right, then apply.`,
+  })
+})
+
+app.post('/api/admin/company-state-apply', auth, requireAdmin, async (req, res) => {
+  const updates = (req.body && req.body.updates) || []
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return res.status(400).json({ error: 'No updates provided' })
+  }
+  let updated = 0
+  const errors = []
+  for (const u of updates) {
+    if (!u || !u.id || !u.state) continue
+    const st = String(u.state).trim().toUpperCase()
+    if (!_US_STATE_ABBRS.includes(st)) { errors.push(`${u.id}: invalid state ${u.state}`); continue }
+    const { error } = await supabase.from('companies').update({ state: st }).eq('id', u.id)
+    if (error) errors.push(`${u.id}: ${error.message}`)
+    else updated++
+  }
+  try {
+    await safeInsertLog({ user_id: req.user.id, action: 'COMPANY_STATE_AI_UPDATE', details: `AI state fill: ${updated} companies updated` })
+  } catch (_) {}
+  res.json({ updated, failed: errors.length, errors: errors.slice(0, 20) })
+})
 app.get('/api/territory-users', auth, async (req, res) => {
   try {
     // Pull assignments from the join table, plus a fallback to the
