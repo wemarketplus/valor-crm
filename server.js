@@ -3222,6 +3222,44 @@ app.post('/api/drive/export', auth, async (req,res)=>{
 })
 
 // ─── TERRITORIES ──────────────────────────────────────────────────────────────
+// ─── TERRITORY USER ASSIGNMENTS (read-only, any authenticated user) ───────────
+// Returns a lightweight map of which users are assigned to which territories so
+// the WIB Territories page can show assigned names to non-admins. Exposes only
+// id, full_name, email, and territory_id — no roles or sensitive fields.
+app.get('/api/territory-users', auth, async (req, res) => {
+  try {
+    // Pull assignments from the join table, plus a fallback to the
+    // user_profiles.territory_id column for users assigned the legacy way.
+    const [{ data: assignments }, { data: profiles }] = await Promise.all([
+      supabase.from('user_territory_assignments')
+        .select('user_id, territory_id, user:user_profiles!user_id(id,full_name,email)'),
+      supabase.from('user_profiles')
+        .select('id, full_name, email, territory_id')
+        .eq('is_active', true),
+    ])
+ 
+    // territory_id -> [ {id, full_name, email}, ... ]
+    const byTerritory = {}
+    const addUser = (tid, u) => {
+      if (!tid || !u) return
+      if (!byTerritory[tid]) byTerritory[tid] = []
+      if (byTerritory[tid].some(x => x.id === u.id)) return // de-dupe
+      byTerritory[tid].push({ id: u.id, full_name: u.full_name || null, email: u.email || null })
+    }
+ 
+    for (const a of (assignments || [])) {
+      if (a.user) addUser(a.territory_id, a.user)
+    }
+    // Fallback: legacy single-column assignment
+    for (const p of (profiles || [])) {
+      if (p.territory_id) addUser(p.territory_id, p)
+    }
+ 
+    res.json({ data: byTerritory })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
 app.get('/api/territories', auth, async (req,res)=>{ const { data, error }=await supabase.from('territories').select('*').order('name',{ascending:true}); if (error) return res.status(400).json({error:error.message}); res.json({data}) })
 app.post('/api/territories', auth, requireAdmin, async (req,res)=>{
   const { name, states, description }=req.body; if (!name?.trim()) return res.status(400).json({error:'Territory name required'})
