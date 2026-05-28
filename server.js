@@ -3260,6 +3260,30 @@ app.get('/api/territory-users', auth, async (req, res) => {
     res.status(500).json({ error: e.message })
   }
 })
+app.get('/api/territory-users', auth, async (req, res) => {
+  try {
+    const [{ data: assignments }, { data: profiles }] = await Promise.all([
+      supabase.from('user_territory_assignments').select('user_id, territory_id, user:user_profiles!user_id(id,full_name,email)'),
+      supabase.from('user_profiles').select('id, full_name, email, territory_id').eq('is_active', true),
+    ])
+    const byTerritory = {}
+    const addUser = (tid, u) => {
+      if (!tid || !u) return
+      if (!byTerritory[tid]) byTerritory[tid] = []
+      if (byTerritory[tid].some(x => x.id === u.id)) return
+      byTerritory[tid].push({ id: u.id, full_name: u.full_name || null, email: u.email || null })
+    }
+    for (const a of (assignments || [])) {
+      if (a.user) addUser(a.territory_id, a.user)
+    }
+    for (const p of (profiles || [])) {
+      if (p.territory_id) addUser(p.territory_id, p)
+    }
+    res.json({ data: byTerritory })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
 app.get('/api/territories', auth, async (req,res)=>{ const { data, error }=await supabase.from('territories').select('*').order('name',{ascending:true}); if (error) return res.status(400).json({error:error.message}); res.json({data}) })
 app.post('/api/territories', auth, requireAdmin, async (req,res)=>{
   const { name, states, description }=req.body; if (!name?.trim()) return res.status(400).json({error:'Territory name required'})
