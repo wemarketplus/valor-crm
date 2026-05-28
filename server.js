@@ -850,6 +850,45 @@ app.post('/api/notes', auth, async (req, res) => {
   const { data: full } = await supabase.from('activity_log').select(bc2+uj2).eq('id', data.id).single()
   res.json(parseLogRow(full || data))
 })
+// ─── EDIT NOTE (PUT) ──────────────────────────────────────────────────────────
+app.put('/api/notes/:id', auth, requireContributor, async (req, res) => {
+  const newContent = (req.body.content || req.body.details || req.body.text || '').trim()
+  if (!newContent) return res.status(400).json({ error: 'Note content required' })
+
+  const { data: existing, error: exErr } = await supabase
+    .from('activity_log')
+    .select(global._safeActivityCols || 'id,action,created_at')
+    .eq('id', req.params.id)
+    .eq('action', 'NOTE')
+    .single()
+  if (exErr || !existing) return res.status(404).json({ error: 'Note not found' })
+
+  const ep = parseLogRow(existing)
+  const mergedMeta = { ...(ep?.metadata || {}), content: newContent, text: newContent }
+
+  const update = global._hasMetadata
+    ? { metadata: mergedMeta, ...(global._detailsColumnMissing ? {} : { details: newContent }) }
+    : (global._detailsColumnMissing ? {} : { details: newContent })
+
+  const { data, error } = await supabase
+    .from('activity_log')
+    .update(update)
+    .eq('id', req.params.id)
+    .eq('action', 'NOTE')
+    .select()
+    .single()
+  if (error) return res.status(400).json({ error: error.message })
+
+  try {
+    await safeInsertLog({
+      user_id: req.user.id, action: 'UPDATE_NOTE',
+      record_type: 'activity_log', record_id: req.params.id,
+      details: 'Edited note',
+    })
+  } catch (_) {}
+
+  res.json(parseLogRow(data))
+})
 app.delete('/api/notes/:id', auth, requireDelete, async (req, res) => {
   const { error } = await supabase.from('activity_log').delete().eq('id', req.params.id).eq('action', 'NOTE')
   if (error) return res.status(400).json({ error: error.message })
