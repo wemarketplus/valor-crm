@@ -3138,6 +3138,10 @@ async function deleteNote(id){
     showToast('Note deleted','success')
     if(currentWib)loadWibTabData(wibTab)
     if(currentCompany)loadCompanyTabData(companyTab)
+    // Refresh the training provider notes panel if it's currently open
+    if(typeof _trainingSelectedId!=='undefined' && _trainingSelectedId && document.getElementById('training-notes-list')){
+      loadTrainingProviderNotes(_trainingSelectedId)
+    }
   }catch(e){showToast(e.message,'error')}
 }
 
@@ -3237,6 +3241,10 @@ async function saveEditNote(id){
     showToast('Note updated','success')
     if(currentWib)loadWibTabData(wibTab)
     if(currentCompany)loadCompanyTabData(companyTab)
+    // Refresh the training provider notes panel if it's currently open
+    if(typeof _trainingSelectedId!=='undefined' && _trainingSelectedId && document.getElementById('training-notes-list')){
+      loadTrainingProviderNotes(_trainingSelectedId)
+    }
   }catch(e){ showToast(e.message,'error') }
 }
 
