@@ -941,7 +941,7 @@ app.get('/api/users', auth, requireAdmin, async (req, res) => {
   // The territory list is needed for the territory_id fallback below.
   const [{ data:users, error }, { data:assignments }, { data:allTerritories }] = await Promise.all([
     supabase.from('user_profiles').select('id,email,full_name,role,title,phone,is_active,created_at,last_login_at,territory_id').order('created_at',{ascending:false}),
-    supabase.from('user_territory_assignments').select('user_id,territory_id,territories(id,name)'),
+    supabase.from('user_territory_assignments').select('user_id,territory_id,territories(id,name, states)'),
     supabase.from('territories').select('id,name'),
   ])
   if (error) return res.status(400).json({error:error.message})
