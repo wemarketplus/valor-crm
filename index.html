@@ -1498,9 +1498,12 @@ function closeAllIE(){
 
 /* ─── STATUS HELPERS ─── */
 function wibStatusPill(s){
-  const m={funding_available:'p-green',follow_up_needed:'p-amber',funding_not_available:'p-red',no_reachout_completed:'p-gray',network_member:'p-teal',contacted:'p-blue',not_contacted:'p-gray'}
-  const l={funding_available:'Funding Available - Have',follow_up_needed:'Follow Up Needed',funding_not_available:'Funding Not Available',no_reachout_completed:'No Reachout Completed',network_member:'Network Member',contacted:'Contacted',not_contacted:'Not Contacted'}
-  const d={funding_available:'d-green',follow_up_needed:'d-amber',funding_not_available:'d-red',no_reachout_completed:'d-gray',network_member:'d-teal',contacted:'d-blue',not_contacted:'d-gray'}
+  // Maps include both the real DB enum values (no_reachout_complete,
+  // pending_employer, stop_applications) and legacy frontend values that may
+  // still appear in cached data, so pills render correctly either way.
+  const m={funding_available:'p-green',follow_up_needed:'p-amber',funding_not_available:'p-red',no_reachout_complete:'p-gray',no_reachout_completed:'p-gray',pending_employer:'p-blue',stop_applications:'p-red',network_member:'p-teal',contacted:'p-blue',not_contacted:'p-gray'}
+  const l={funding_available:'Funding Available',follow_up_needed:'Follow Up Needed',funding_not_available:'Funding Not Available',no_reachout_complete:'No Reachout Complete',no_reachout_completed:'No Reachout Complete',pending_employer:'Pending Employer',stop_applications:'Stop Applications',network_member:'Network Member',contacted:'Contacted',not_contacted:'Not Contacted'}
+  const d={funding_available:'d-green',follow_up_needed:'d-amber',funding_not_available:'d-red',no_reachout_complete:'d-gray',no_reachout_completed:'d-gray',pending_employer:'d-blue',stop_applications:'d-red',network_member:'d-teal',contacted:'d-blue',not_contacted:'d-gray'}
   return`<span class="pill ${m[s]||'p-gray'}"><span class="sdot ${d[s]||'d-gray'}"></span>${l[s]||s||'—'}</span>`
 }
 function companyStatusPill(s){
@@ -2686,13 +2689,13 @@ function renderWibProfile(){
           <div class="profile-section-title">Funding Details</div>
           <div class="field-row"><span class="field-key">Status</span><span class="field-val">
             <select class="form-input" style="padding:4px 8px;font-size:11.5px;height:auto;min-width:200px" onchange="updateWibStatus('${w.id}', this.value)">
-              <option value="no_reachout_completed"${(w.status==='no_reachout_completed'||w.status==='not_contacted')?' selected':''}>No Reachout Completed</option>
-              <option value="contacted"${w.status==='contacted'?' selected':''}>Contacted</option>
+              <option value="no_reachout_complete"${(w.status==='no_reachout_complete'||w.status==='no_reachout_completed'||w.status==='not_contacted')?' selected':''}>No Reachout Complete</option>
               <option value="follow_up_needed"${w.status==='follow_up_needed'?' selected':''}>Follow Up Needed</option>
+              <option value="pending_employer"${w.status==='pending_employer'?' selected':''}>Pending Employer</option>
               <option value="funding_available"${w.status==='funding_available'?' selected':''}>Funding Available</option>
               <option value="funding_not_available"${w.status==='funding_not_available'?' selected':''}>Funding Not Available</option>
-              <option value="network_member"${w.status==='network_member'?' selected':''}>Network Member</option>
-              ${!['no_reachout_completed','contacted','follow_up_needed','funding_available','funding_not_available','network_member','not_contacted'].includes(w.status) && w.status ? `<option value="${escAttr(w.status)}" selected>${escHtml(w.status.replace(/_/g,' '))}</option>` : ''}
+              <option value="stop_applications"${w.status==='stop_applications'?' selected':''}>Stop Applications</option>
+              ${!['no_reachout_complete','follow_up_needed','pending_employer','funding_available','funding_not_available','stop_applications','no_reachout_completed','not_contacted','contacted','network_member'].includes(w.status) && w.status ? `<option value="${escAttr(w.status)}" selected>${escHtml(w.status.replace(/_/g,' '))}</option>` : ''}
             </select>
             <span style="margin-left:8px">${wibStatusPill(w.status)}</span>
           </span></div>
@@ -3181,10 +3184,16 @@ async function deleteNote(id){
 // user navigates back to the list view, the new status is reflected.
 async function updateWibStatus(id, newStatus){
   if(!newStatus) return
-  // Safety: the wib_status DB enum does not include 'not_contacted'; remap to
-  // the canonical 'no_reachout_completed' so the update doesn't fail with
-  // "invalid input value for enum wib_status".
-  if(newStatus==='not_contacted') newStatus='no_reachout_completed'
+  // Safety: remap any legacy values to the actual DB enum values verified
+  // via pg_enum. The enum is: no_reachout_complete, follow_up_needed,
+  // pending_employer, funding_available, funding_not_available, stop_applications.
+  const _legacyMap = {
+    'not_contacted':'no_reachout_complete',
+    'no_reachout_completed':'no_reachout_complete',  // note: no trailing 'd' in DB
+    'contacted':'pending_employer',
+    'network_member':'funding_available',
+  }
+  if(_legacyMap[newStatus]) newStatus = _legacyMap[newStatus]
   try{
     const updated = await api('/api/wibs/'+id,'PUT',{ status:newStatus })
     if(currentWib && currentWib.id===id){
@@ -3404,11 +3413,12 @@ function _collectWibContactRows(){
 }
 
 function openWibModal(wib=null){
-  // NOTE: The wib_status DB enum does NOT include 'not_contacted' (it uses
-  // 'no_reachout_completed' for that meaning), so saving with not_contacted
-  // throws "invalid input value for enum wib_status". The dropdown only offers
-  // the values the enum actually accepts.
-  const statusOpts=['no_reachout_completed','contacted','funding_available','follow_up_needed','funding_not_available','network_member'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
+  // The wib_status DB enum accepts exactly these 6 values:
+  //   no_reachout_complete, follow_up_needed, pending_employer,
+  //   funding_available, funding_not_available, stop_applications
+  // (Verified via pg_enum on 2026-05-29.) Any other value causes the save
+  // to fail with "invalid input value for enum wib_status".
+  const statusOpts=['no_reachout_complete','follow_up_needed','pending_employer','funding_available','funding_not_available','stop_applications'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${wib?.state===s?' selected':''}>${s}</option>`).join('')
   showModal(wib?`Edit: ${escHtml(wib.wib_name)}`:'New Workforce Board',`
@@ -3444,10 +3454,17 @@ function openWibModal(wib=null){
       </div>
     </div>`,
   async()=>{
-    let newStatus = document.getElementById('wib-status')?.value || 'no_reachout_completed'
-    // Safety: remap any stray 'not_contacted' to the canonical enum value so
-    // the save never trips the wib_status enum check on the DB.
-    if(newStatus==='not_contacted') newStatus='no_reachout_completed'
+    let newStatus = document.getElementById('wib-status')?.value || 'no_reachout_complete'
+    // Safety: remap legacy frontend values to the actual DB enum values.
+    // Verified via pg_enum: no_reachout_complete (no trailing d), follow_up_needed,
+    // pending_employer, funding_available, funding_not_available, stop_applications.
+    const _legacyMap = {
+      'not_contacted':'no_reachout_complete',
+      'no_reachout_completed':'no_reachout_complete',
+      'contacted':'pending_employer',
+      'network_member':'funding_available',
+    }
+    if(_legacyMap[newStatus]) newStatus = _legacyMap[newStatus]
     const oldStatus = wib?.status || null
     const payload={
       wib_name:document.getElementById('wib-name').value.trim(),
