@@ -1209,7 +1209,7 @@ tr:hover .row-actions{opacity:1}
 // Build marker — check this in the browser console (F12) to confirm which
 // version is deployed. If you don't see this exact string, the new file is
 // not live yet (hard-refresh with Ctrl+Shift+R or check the Render deploy).
-window.VALOR_BUILD = 'wib-enum-strict-v9'
+window.VALOR_BUILD = 'wib-type-enum-v10'
 console.log('Valor CRM build:', window.VALOR_BUILD)
 let token = localStorage.getItem('valor_token') || null
 let currentUser = null
@@ -2452,7 +2452,7 @@ function renderWibTable(wibs){
   if(q)d=d.filter(w=>(w.wib_name+' '+(w.state||'')+' '+(w.wib_email||'')+' '+(w.short_name||'')).toLowerCase().includes(q.toLowerCase()))
   if(st)d=d.filter(w=>w.status===st)
   if(stateF)d=d.filter(w=>w.state===stateF)
-  if(typeF)d=d.filter(w=>w.wib_type===typeF)
+  if(typeF)d=d.filter(w=>(w.wib_type||'').toLowerCase()===typeF.toLowerCase())
 
   document.getElementById('page-area').innerHTML=`
   <div class="att-wrap">
@@ -2568,9 +2568,10 @@ function showWibFilterModal(){
     <div class="form-row form-full"><div class="form-group"><div class="form-label">WIB Type</div>
       <select id="wf-type">
         <option value="">All types</option>
-        <option value="Local"${window._wibFilters.type==='Local'?' selected':''}>Local</option>
-        <option value="Regional"${window._wibFilters.type==='Regional'?' selected':''}>Regional</option>
-        <option value="State"${window._wibFilters.type==='State'?' selected':''}>State</option>
+        <option value="local"${(window._wibFilters.type==='local'||window._wibFilters.type==='Local')?' selected':''}>Local</option>
+        <option value="regional"${(window._wibFilters.type==='regional'||window._wibFilters.type==='Regional')?' selected':''}>Regional</option>
+        <option value="state"${(window._wibFilters.type==='state'||window._wibFilters.type==='State')?' selected':''}>State</option>
+        <option value="tribal"${(window._wibFilters.type==='tribal'||window._wibFilters.type==='Tribal')?' selected':''}>Tribal</option>
       </select>
     </div></div>`,
   ()=>{
@@ -3430,9 +3431,10 @@ function openWibModal(wib=null){
     <div class="form-group"><label class="form-label">Phone</label><input id="wib-phone" type="tel" value="${wib?.wib_phone||''}"></div></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Website URL</label><input id="wib-url" value="${wib?.source_url||''}" placeholder="https://"></div>
     <div class="form-group"><label class="form-label">WIB Type</label><select id="wib-type">
-      <option value="Local"${wib?.wib_type==='Local'?' selected':''}>Local</option>
-      <option value="Regional"${wib?.wib_type==='Regional'?' selected':''}>Regional</option>
-      <option value="State"${wib?.wib_type==='State'?' selected':''}>State</option>
+      <option value="local"${(wib?.wib_type==='local'||wib?.wib_type==='Local')?' selected':''}>Local</option>
+      <option value="regional"${(wib?.wib_type==='regional'||wib?.wib_type==='Regional')?' selected':''}>Regional</option>
+      <option value="state"${(wib?.wib_type==='state'||wib?.wib_type==='State')?' selected':''}>State</option>
+      <option value="tribal"${(wib?.wib_type==='tribal'||wib?.wib_type==='Tribal')?' selected':''}>Tribal</option>
     </select></div></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Max Award/EIN ($)</label><input id="wib-max" type="number" value="${wib?.max_award_per_ein||''}"></div>
     <div class="form-group"><label class="form-label">Employer Match (%)</label><input id="wib-match" type="number" value="${wib?.employer_match_pct||''}"></div></div>
@@ -3466,13 +3468,20 @@ function openWibModal(wib=null){
     }
     if(_legacyMap[newStatus]) newStatus = _legacyMap[newStatus]
     const oldStatus = wib?.status || null
-    // BULLETPROOF: enforce DB enum whitelist on the final status value, no matter
-    // what came from the dropdown, the wib record, or any other source. The
-    // wib_status enum accepts exactly these 6 values (verified via pg_enum).
+    // BULLETPROOF: enforce DB enum whitelists on the final status AND type values,
+    // no matter what came from the dropdowns, the wib record, or any other source.
+    // Both enums were verified via pg_enum.
     const _VALID_WIB_STATUS = ['no_reachout_complete','follow_up_needed','pending_employer','funding_available','funding_not_available','stop_applications']
     if(!_VALID_WIB_STATUS.includes(newStatus)){
       console.warn('[wib-save] Invalid status "'+newStatus+'" — forcing to no_reachout_complete')
       newStatus = 'no_reachout_complete'
+    }
+    // wib_type enum: state, regional, local, tribal (all lowercase in DB)
+    const _VALID_WIB_TYPE = ['state','regional','local','tribal']
+    let newType = (document.getElementById('wib-type')?.value || 'local').toLowerCase()
+    if(!_VALID_WIB_TYPE.includes(newType)){
+      console.warn('[wib-save] Invalid type "'+newType+'" — forcing to local')
+      newType = 'local'
     }
     const payload={
       wib_name:document.getElementById('wib-name').value.trim(),
@@ -3482,7 +3491,7 @@ function openWibModal(wib=null){
       wib_email:document.getElementById('wib-email')?.value||null,
       wib_phone:document.getElementById('wib-phone')?.value||null,
       source_url:document.getElementById('wib-url')?.value||null,
-      wib_type:document.getElementById('wib-type')?.value||'Local',
+      wib_type:newType,
       max_award_per_ein:document.getElementById('wib-max')?.value||null,
       employer_match_pct:document.getElementById('wib-match')?.value||null,
       call_priority:document.getElementById('wib-priority')?.value||null,
