@@ -2686,14 +2686,13 @@ function renderWibProfile(){
           <div class="profile-section-title">Funding Details</div>
           <div class="field-row"><span class="field-key">Status</span><span class="field-val">
             <select class="form-input" style="padding:4px 8px;font-size:11.5px;height:auto;min-width:200px" onchange="updateWibStatus('${w.id}', this.value)">
-              <option value="not_contacted"${w.status==='not_contacted'?' selected':''}>Not Contacted</option>
-              <option value="no_reachout_completed"${w.status==='no_reachout_completed'?' selected':''}>No Reachout Completed</option>
+              <option value="no_reachout_completed"${(w.status==='no_reachout_completed'||w.status==='not_contacted')?' selected':''}>No Reachout Completed</option>
               <option value="contacted"${w.status==='contacted'?' selected':''}>Contacted</option>
               <option value="follow_up_needed"${w.status==='follow_up_needed'?' selected':''}>Follow Up Needed</option>
               <option value="funding_available"${w.status==='funding_available'?' selected':''}>Funding Available</option>
               <option value="funding_not_available"${w.status==='funding_not_available'?' selected':''}>Funding Not Available</option>
               <option value="network_member"${w.status==='network_member'?' selected':''}>Network Member</option>
-              ${!['not_contacted','no_reachout_completed','contacted','follow_up_needed','funding_available','funding_not_available','network_member'].includes(w.status) && w.status ? `<option value="${escAttr(w.status)}" selected>${escHtml(w.status.replace(/_/g,' '))}</option>` : ''}
+              ${!['no_reachout_completed','contacted','follow_up_needed','funding_available','funding_not_available','network_member','not_contacted'].includes(w.status) && w.status ? `<option value="${escAttr(w.status)}" selected>${escHtml(w.status.replace(/_/g,' '))}</option>` : ''}
             </select>
             <span style="margin-left:8px">${wibStatusPill(w.status)}</span>
           </span></div>
@@ -3182,6 +3181,10 @@ async function deleteNote(id){
 // user navigates back to the list view, the new status is reflected.
 async function updateWibStatus(id, newStatus){
   if(!newStatus) return
+  // Safety: the wib_status DB enum does not include 'not_contacted'; remap to
+  // the canonical 'no_reachout_completed' so the update doesn't fail with
+  // "invalid input value for enum wib_status".
+  if(newStatus==='not_contacted') newStatus='no_reachout_completed'
   try{
     const updated = await api('/api/wibs/'+id,'PUT',{ status:newStatus })
     if(currentWib && currentWib.id===id){
@@ -3401,7 +3404,11 @@ function _collectWibContactRows(){
 }
 
 function openWibModal(wib=null){
-  const statusOpts=['not_contacted','contacted','funding_available','follow_up_needed','funding_not_available','network_member'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
+  // NOTE: The wib_status DB enum does NOT include 'not_contacted' (it uses
+  // 'no_reachout_completed' for that meaning), so saving with not_contacted
+  // throws "invalid input value for enum wib_status". The dropdown only offers
+  // the values the enum actually accepts.
+  const statusOpts=['no_reachout_completed','contacted','funding_available','follow_up_needed','funding_not_available','network_member'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${wib?.state===s?' selected':''}>${s}</option>`).join('')
   showModal(wib?`Edit: ${escHtml(wib.wib_name)}`:'New Workforce Board',`
@@ -3437,7 +3444,10 @@ function openWibModal(wib=null){
       </div>
     </div>`,
   async()=>{
-    const newStatus = document.getElementById('wib-status')?.value || 'not_contacted'
+    let newStatus = document.getElementById('wib-status')?.value || 'no_reachout_completed'
+    // Safety: remap any stray 'not_contacted' to the canonical enum value so
+    // the save never trips the wib_status enum check on the DB.
+    if(newStatus==='not_contacted') newStatus='no_reachout_completed'
     const oldStatus = wib?.status || null
     const payload={
       wib_name:document.getElementById('wib-name').value.trim(),
