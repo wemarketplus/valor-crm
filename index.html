@@ -1209,7 +1209,7 @@ tr:hover .row-actions{opacity:1}
 // Build marker — check this in the browser console (F12) to confirm which
 // version is deployed. If you don't see this exact string, the new file is
 // not live yet (hard-refresh with Ctrl+Shift+R or check the Render deploy).
-window.VALOR_BUILD = 'territory-companies+backbtn+30min-timer+ai-states-v6'
+window.VALOR_BUILD = 'wib-contacts+chat-names-v7'
 console.log('Valor CRM build:', window.VALOR_BUILD)
 let token = localStorage.getItem('valor_token') || null
 let currentUser = null
@@ -2829,7 +2829,7 @@ function renderWibProfile(){
     <div class="att-wrap">
       <div class="att-toolbar">
         <div class="att-toolbar-l"><div class="card-title">👥 Contacts › Name</div></div>
-        <button class="btn btn-sm btn-primary" onclick="showToast('Add contact via Edit WIB modal','info')">+ Add Contact</button>
+        <button class="btn btn-sm btn-primary" onclick="openWibModal(currentWib);setTimeout(()=>{var el=document.getElementById('wib-contacts-rows');if(el)el.scrollIntoView({behavior:'smooth',block:'center'})},200)">+ Add Contact</button>
       </div>
       <div id="wib-contacts-list"><div class="loading">⏳ Loading...</div></div>
     </div>`
@@ -3363,6 +3363,43 @@ async function runDeduplication() {
   })
 }
 
+// ─── WIB Contact-row helpers (used by openWibModal) ──────────────────────────
+function _wibContactRowHtml(c, i){
+  c = c || {}
+  return `<div class="wib-contact-row" data-idx="${i}" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:6px;margin-bottom:6px;align-items:center">
+    <input class="wib-c-name"  placeholder="Name"  value="${escAttr(c.name||'')}" style="font-size:12px;padding:6px 8px;border:.5px solid var(--border1);border-radius:6px">
+    <input class="wib-c-title" placeholder="Title" value="${escAttr(c.title||'')}" style="font-size:12px;padding:6px 8px;border:.5px solid var(--border1);border-radius:6px">
+    <input class="wib-c-email" placeholder="Email" value="${escAttr(c.email||'')}" type="email" style="font-size:12px;padding:6px 8px;border:.5px solid var(--border1);border-radius:6px">
+    <input class="wib-c-phone" placeholder="Phone" value="${escAttr(c.phone||'')}" type="tel" style="font-size:12px;padding:6px 8px;border:.5px solid var(--border1);border-radius:6px">
+    <button type="button" onclick="this.closest('.wib-contact-row').remove()" style="background:var(--red-bg);color:var(--red-t);border:.5px solid var(--red);border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:14px" title="Remove">✕</button>
+  </div>`
+}
+function wibAddContactRow(){
+  const wrap = document.getElementById('wib-contacts-rows')
+  if(!wrap) return
+  const empty = document.getElementById('wib-contacts-empty')
+  if(empty) empty.remove()
+  const existing = wrap.querySelectorAll('.wib-contact-row').length
+  wrap.insertAdjacentHTML('beforeend', _wibContactRowHtml({}, existing))
+  // Focus the new row's Name input
+  const rows = wrap.querySelectorAll('.wib-contact-row')
+  const last = rows[rows.length-1]
+  last?.querySelector('.wib-c-name')?.focus()
+}
+function _collectWibContactRows(){
+  const rows = document.querySelectorAll('#wib-contacts-rows .wib-contact-row')
+  const out = []
+  rows.forEach(r=>{
+    const name  = r.querySelector('.wib-c-name')?.value?.trim()  || ''
+    const title = r.querySelector('.wib-c-title')?.value?.trim() || ''
+    const email = r.querySelector('.wib-c-email')?.value?.trim() || ''
+    const phone = r.querySelector('.wib-c-phone')?.value?.trim() || ''
+    // Only keep rows that have at least one populated field
+    if(name||title||email||phone) out.push({name,title,email,phone})
+  })
+  return out
+}
+
 function openWibModal(wib=null){
   const statusOpts=['not_contacted','contacted','funding_available','follow_up_needed','funding_not_available','network_member'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
@@ -3385,7 +3422,20 @@ function openWibModal(wib=null){
     <div class="form-row"><div class="form-group"><label class="form-label">Call Priority Score</label><input id="wib-priority" type="number" value="${wib?.call_priority||''}"><div class="form-hint">Higher = more urgent</div></div>
     <div class="form-group"><label class="form-label">Owner</label><input id="wib-owner" value="${wib?.owner||''}"></div></div>
     <div class="form-row form-full"><div class="form-group"><label class="form-label">Application Process Notes</label><textarea id="wib-notes" rows="3">${escHtml(wib?.notes||'')}</textarea></div></div>
-    <label class="chk-row"><input type="checkbox" id="wib-iwt"${wib?.iwt_program_active?' checked':''}> IWT Program Active</label>`,
+    <label class="chk-row"><input type="checkbox" id="wib-iwt"${wib?.iwt_program_active?' checked':''}> IWT Program Active</label>
+    <div class="form-row form-full" style="margin-top:14px">
+      <div class="form-group" style="border-top:.5px solid var(--border1);padding-top:12px">
+        <label class="form-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span>👥 Additional Contacts <span style="font-weight:400;color:var(--text3);font-size:11px">(separate from the main business phone/email above)</span></span>
+          <button type="button" class="btn btn-xs btn-primary" onclick="wibAddContactRow()">+ Add Contact</button>
+        </label>
+        <div id="wib-contacts-rows">${(()=>{
+          const cs = (wib&&Array.isArray(wib.contacts))?wib.contacts:[]
+          if(!cs.length) return '<div id="wib-contacts-empty" style="font-size:11.5px;color:var(--text3);padding:8px 0">No additional contacts yet. Click "+ Add Contact" to add one.</div>'
+          return cs.map((c,i)=>_wibContactRowHtml(c,i)).join('')
+        })()}</div>
+      </div>
+    </div>`,
   async()=>{
     const newStatus = document.getElementById('wib-status')?.value || 'not_contacted'
     const oldStatus = wib?.status || null
@@ -3403,7 +3453,8 @@ function openWibModal(wib=null){
       call_priority:document.getElementById('wib-priority')?.value||null,
       owner:document.getElementById('wib-owner')?.value||null,
       notes:document.getElementById('wib-notes')?.value||null,
-      iwt_program_active:document.getElementById('wib-iwt')?.checked||false
+      iwt_program_active:document.getElementById('wib-iwt')?.checked||false,
+      contacts:_collectWibContactRows()
     }
     if(!payload.wib_name){showToast('WIB name is required','error');return false}
     try{
@@ -10557,10 +10608,6 @@ function importCSV(type){
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Upload CSV or Excel File (.csv, .xlsx, .xls)</div>
       <input type="file" accept=".csv,.xlsx,.xls" id="import-file-input" onchange="processImportFile(this,'${type}')">
     </div></div>
-    <label style="display:flex;align-items:center;gap:8px;margin:4px 0 10px;font-size:13px;cursor:pointer">
-      <input type="checkbox" id="import-update-existing" checked>
-      <span><strong>Update existing records</strong> — fill addresses &amp; fields onto companies already in the CRM (instead of skipping them)</span>
-    </label>
     <div id="import-preview" style="margin-top:10px"></div>
     <div style="margin-top:8px"><button class="btn btn-xs btn-ghost" onclick="runImportDiagnostic('${type}')">🔍 Test DB Connection</button></div>`,
   async()=>{
@@ -10905,9 +10952,7 @@ async function runFullImport(){
     }
   }
   let _dupeCount=0
-  const _updateExisting=!!(document.getElementById('import-update-existing')&&document.getElementById('import-update-existing').checked)
   const dedupedRows=mappedRows.filter(row=>{
-    if(_updateExisting)return true
     if(_isApps){
       const co=String(row.company_name||'').toLowerCase().trim()
       const fo=String(row.funding_opportunity_name||'').toLowerCase().trim()
@@ -12693,9 +12738,13 @@ function vcInit() {
   if (_vc.sseSource) return
 
   _vcConnectSSE()
-  _vcLoadGlobal()
-  _vcLoadUsers()
-  _vcLoadUnreadCounts()
+  // Load users FIRST so the sender-name lookup is populated before messages render.
+  // Otherwise the first render of historical messages can fall back to "Team Member"
+  // or whatever the server attached (which may be a stale name).
+  _vcLoadUsers().then(() => {
+    _vcLoadGlobal()
+    _vcLoadUnreadCounts()
+  })
 
   // Heartbeat every 25 s
   _vc.heartbeatInt = setInterval(() => {
@@ -12962,14 +13011,24 @@ function _vcAppendGlobalMsg(msg) {
 }
 
 function _vcMsgHtml(m, isMine) {
-  const color = _vcColor(m.sender_id || m.sender_name)
-  const initials = m.sender_initials || (m.sender_name || '?').slice(0, 2).toUpperCase()
+  // Resolve sender display name. The server-side response may sometimes omit
+  // sender_name or contain stale data. Prefer the live user-list lookup by
+  // sender_id when available so each user always shows up as themselves.
+  let senderName = ''
+  if (isMine) {
+    senderName = currentUser?.full_name || currentUser?.email || 'You'
+  } else {
+    const u = (_vc.users || []).find(x => x.id === m.sender_id)
+    senderName = (u && (u.full_name || u.email)) || m.sender_name || 'Team Member'
+  }
+  const color = _vcColor(m.sender_id || senderName)
+  const initials = (senderName || '?').slice(0, 2).toUpperCase()
   const time = _vcTime(m.created_at)
   return `
   <div class="vc-msg${isMine ? ' mine' : ''}" data-msg-id="${m.id}">
     <div class="vc-av" style="background:${color}">${initials}</div>
     <div class="vc-bubble-wrap">
-      ${!isMine ? `<div class="vc-sender">${escHtml(m.sender_name || '')}</div>` : ''}
+      ${!isMine ? `<div class="vc-sender">${escHtml(senderName)}</div>` : ''}
       <div class="vc-bubble">${escHtml(m.content)}</div>
       <div class="vc-msg-time">${time}</div>
     </div>
@@ -12990,8 +13049,15 @@ async function vcSendGlobal() {
     // Append the sent message immediately so the sender sees it without waiting
     // on the SSE echo. _vcAppendGlobalMsg dedups by message id, so when the SSE
     // echo arrives it will be ignored rather than duplicated.
+    // Explicitly set sender info from currentUser so the displayed name is correct
+    // even if the server response omits sender_name.
     if (msg && msg.id) {
-      _vcAppendGlobalMsg({ ...msg, sender_id: msg.sender_id || currentUser?.id })
+      const myName = currentUser?.full_name || currentUser?.email || 'You'
+      _vcAppendGlobalMsg({
+        ...msg,
+        sender_id: msg.sender_id || currentUser?.id,
+        sender_name: msg.sender_name || myName,
+      })
       _vcScrollBottom('vc-global-msgs')
     }
   } catch (e) {
@@ -13131,8 +13197,14 @@ async function vcSendDM() {
   vcAutoResize(inp)
   try {
     const msg = await api(`/api/dm/${_vc.dmUserId}`, 'POST', { content })
-    // SSE will deliver back; but for sender show immediately
-    _vcAppendDMMsg({ ...msg, sender_id: currentUser.id })
+    // SSE will deliver back; but for sender show immediately.
+    // Explicitly use currentUser's name to avoid blank/wrong sender label.
+    const myName = currentUser?.full_name || currentUser?.email || 'You'
+    _vcAppendDMMsg({
+      ...msg,
+      sender_id: currentUser.id,
+      sender_name: msg.sender_name || myName,
+    })
     _vcScrollBottom('vc-dm-msgs')
   } catch (e) {
     showToast('Failed to send: ' + e.message, 'error')
