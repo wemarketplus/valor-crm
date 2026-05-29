@@ -654,6 +654,11 @@ app.post('/api/companies', auth, async (req, res) => {
   try { await safeInsertLog({ user_id: req.user.id, action: 'CREATE_COMPANY', record_type: 'companies', record_id: data.id, details: `Created: ${data.company_name}` }) } catch (_) {}
   res.json(data)
 })
+app.get('/api/companies/:id', auth, async (req, res) => {
+  const { data, error } = await supabase.from('companies').select('*').eq('id', req.params.id).single()
+  if (error) return res.status(404).json({ error: 'Company not found' })
+  res.json(data)
+})
 app.put('/api/companies/:id', auth, async (req, res) => {
   // Whitelist matches the POST route and the real `companies` columns.
   const A = ['company_name','company_type','status','fein','industry','naics_code','domain','website','employee_count_total','employee_count_ft','employee_count_pt','avg_hourly_wage','primary_contact_name','primary_contact_title','primary_contact_email','primary_contact_phone','hr_contact_name','hr_contact_email','hr_contact_phone','training_needs','current_training_providers','turnover_challenges','notes','rating','is_25_plus','supported_by','source_url']
