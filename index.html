@@ -10557,6 +10557,10 @@ function importCSV(type){
     <div class="form-row form-full"><div class="form-group"><div class="form-label">Upload CSV or Excel File (.csv, .xlsx, .xls)</div>
       <input type="file" accept=".csv,.xlsx,.xls" id="import-file-input" onchange="processImportFile(this,'${type}')">
     </div></div>
+    <label style="display:flex;align-items:center;gap:8px;margin:4px 0 10px;font-size:13px;cursor:pointer">
+      <input type="checkbox" id="import-update-existing" checked>
+      <span><strong>Update existing records</strong> — fill addresses &amp; fields onto companies already in the CRM (instead of skipping them)</span>
+    </label>
     <div id="import-preview" style="margin-top:10px"></div>
     <div style="margin-top:8px"><button class="btn btn-xs btn-ghost" onclick="runImportDiagnostic('${type}')">🔍 Test DB Connection</button></div>`,
   async()=>{
@@ -10901,7 +10905,9 @@ async function runFullImport(){
     }
   }
   let _dupeCount=0
+  const _updateExisting=!!(document.getElementById('import-update-existing')&&document.getElementById('import-update-existing').checked)
   const dedupedRows=mappedRows.filter(row=>{
+    if(_updateExisting)return true
     if(_isApps){
       const co=String(row.company_name||'').toLowerCase().trim()
       const fo=String(row.funding_opportunity_name||'').toLowerCase().trim()
