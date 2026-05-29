@@ -1209,7 +1209,7 @@ tr:hover .row-actions{opacity:1}
 // Build marker — check this in the browser console (F12) to confirm which
 // version is deployed. If you don't see this exact string, the new file is
 // not live yet (hard-refresh with Ctrl+Shift+R or check the Render deploy).
-window.VALOR_BUILD = 'wib-contacts+chat-names-v7'
+window.VALOR_BUILD = 'wib-enum-strict-v9'
 console.log('Valor CRM build:', window.VALOR_BUILD)
 let token = localStorage.getItem('valor_token') || null
 let currentUser = null
@@ -3466,6 +3466,14 @@ function openWibModal(wib=null){
     }
     if(_legacyMap[newStatus]) newStatus = _legacyMap[newStatus]
     const oldStatus = wib?.status || null
+    // BULLETPROOF: enforce DB enum whitelist on the final status value, no matter
+    // what came from the dropdown, the wib record, or any other source. The
+    // wib_status enum accepts exactly these 6 values (verified via pg_enum).
+    const _VALID_WIB_STATUS = ['no_reachout_complete','follow_up_needed','pending_employer','funding_available','funding_not_available','stop_applications']
+    if(!_VALID_WIB_STATUS.includes(newStatus)){
+      console.warn('[wib-save] Invalid status "'+newStatus+'" — forcing to no_reachout_complete')
+      newStatus = 'no_reachout_complete'
+    }
     const payload={
       wib_name:document.getElementById('wib-name').value.trim(),
       short_name:document.getElementById('wib-short')?.value||null,
