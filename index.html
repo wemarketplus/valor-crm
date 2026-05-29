@@ -1209,7 +1209,7 @@ tr:hover .row-actions{opacity:1}
 // Build marker — check this in the browser console (F12) to confirm which
 // version is deployed. If you don't see this exact string, the new file is
 // not live yet (hard-refresh with Ctrl+Shift+R or check the Render deploy).
-window.VALOR_BUILD = 'wib-tab-reload-v11'
+window.VALOR_BUILD = 'task-email-fixes-v12'
 console.log('Valor CRM build:', window.VALOR_BUILD)
 let token = localStorage.getItem('valor_token') || null
 let currentUser = null
@@ -10127,6 +10127,81 @@ function openTaskEdit(id){
       showToast('Task updated','success');loadPage('tasks')
     }catch(e){showToast(e.message,'error');return false}
   })
+}
+
+// ─── TASK ACTION HELPERS ─────────────────────────────────────────────────────
+// These three functions back the onclick handlers on task checkboxes and the
+// Done / Del row-action buttons (pre-existing in HTML, never implemented).
+// They use the same task PUT/DELETE routes that openTaskEdit already uses.
+
+// Mark a task done/undone and refresh whatever view is open. Used by the WIB
+// and Company "Tasks" tab checkbox circles and the task list checkboxes.
+async function toggleTaskDB(id, currentlyDone){
+  try{
+    const newDone = !currentlyDone
+    // Send `done` at the top level AND inside metadata so the server-side
+    // PUT handler accepts it whether it merges by top-level field or by
+    // metadata object.
+    await api('/api/tasks/'+id, 'PUT', { done: newDone, metadata: { done: newDone } })
+    showToast(newDone ? 'Task completed' : 'Task reopened', 'success')
+    // Refresh whichever view is showing
+    if(currentPage === 'tasks') loadPage('tasks')
+    else if(currentPage === 'wib-profile' && currentWib) loadWibTabData(wibTab)
+    else if(currentPage === 'company-profile' && currentCompany) loadCompanyTabData(companyTab)
+    else if(currentPage === 'dashboard') loadPage('dashboard')
+  }catch(e){ showToast(e.message,'error') }
+}
+
+// Tasks-page list view uses a real checkbox via onchange; this wraps the same
+// PUT but takes the desired state directly (since the checkbox already toggled
+// itself in the DOM).
+async function toggleTaskDone(id, isDone){
+  try{
+    await api('/api/tasks/'+id, 'PUT', { done: !!isDone, metadata: { done: !!isDone } })
+    showToast(isDone ? 'Task completed' : 'Task reopened', 'success')
+    if(currentPage === 'tasks'){
+      // Update the cached task in window._tasks and re-render rather than
+      // re-fetching the full list, so the row keeps its place.
+      const t = (window._tasks||[]).find(x => x.id === id)
+      if(t){
+        if(t.metadata && typeof t.metadata === 'object') t.metadata.done = !!isDone
+        else { try{ const p=JSON.parse(t.details||'{}'); p.done=!!isDone; t.details=JSON.stringify(p) }catch(_){} }
+        renderTasksPage(window._tasks)
+      }
+    }
+  }catch(e){ showToast(e.message,'error'); loadPage('tasks') }
+}
+
+// Delete a task. Hard guard so accidental clicks don't wipe a task.
+async function deleteTask(id){
+  if(!confirm('Delete this task? This cannot be undone.')) return
+  try{
+    await api('/api/tasks/'+id, 'DELETE')
+    showToast('Task deleted','success')
+    if(currentPage === 'tasks') loadPage('tasks')
+    else if(currentPage === 'wib-profile' && currentWib) loadWibTabData(wibTab)
+    else if(currentPage === 'company-profile' && currentCompany) loadCompanyTabData(companyTab)
+  }catch(e){ showToast(e.message,'error') }
+}
+
+// ─── EMAILS PAGE TAB SWITCHER ────────────────────────────────────────────────
+// The Drafts / Outbox / Templates tabs are placeholder UI on the Emails page
+// (the email feature is not connected to a real provider yet). This just
+// updates the visual active state when a tab is clicked so the UI feels alive.
+function switchEmailTab(tabKey, btn){
+  // Update active class on sibling tab buttons.
+  const row = btn && btn.parentElement
+  if(row){
+    row.querySelectorAll('.rtab').forEach(b => b.classList.remove('active'))
+    btn.classList.add('active')
+  }
+  // Drafts and Templates currently use the same placeholder body, so just
+  // show an info toast describing what each tab will hold once email is wired.
+  if(tabKey === 'drafts'){
+    showToast('Drafts — connect Gmail or Outlook in Settings → Integrations to enable real drafts','info')
+  } else if(tabKey === 'templates'){
+    showToast('Templates — pre-built outreach templates will appear here','info')
+  }
 }
 
 /* ═══════════════════════════════════════════════════
