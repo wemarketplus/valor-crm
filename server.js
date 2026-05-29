@@ -2188,6 +2188,7 @@ app.post('/api/import/:type', async (req, res) => {
           if (streetPart) insertRow.address = streetPart
         if (cityPart)   insertRow.city    = cityPart
         if (zipPart)    insertRow.zip      = zipPart
+       
         if (statePart && statePart.length <= 3) insertRow.state = statePart.toUpperCase()
 
         const linkedin=getField(row,'LinkedIn','LinkedIn URL','linkedin_url','LinkedIn Profile')
