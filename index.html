@@ -1209,7 +1209,7 @@ tr:hover .row-actions{opacity:1}
 // Build marker — check this in the browser console (F12) to confirm which
 // version is deployed. If you don't see this exact string, the new file is
 // not live yet (hard-refresh with Ctrl+Shift+R or check the Render deploy).
-window.VALOR_BUILD = 'wib-type-enum-v10'
+window.VALOR_BUILD = 'wib-tab-reload-v11'
 console.log('Valor CRM build:', window.VALOR_BUILD)
 let token = localStorage.getItem('valor_token') || null
 let currentUser = null
@@ -3520,7 +3520,15 @@ function openWibModal(wib=null){
           console.warn('[wib-status] auto-note failed:', err?.message))
       }
 
-      if(currentPage==='wib-profile'&&wib){currentWib={...currentWib,...payload};renderWibProfile()}
+      if(currentPage==='wib-profile'&&wib){
+        currentWib={...currentWib,...payload}
+        renderWibProfile()
+        // Also reload the current tab's data, since renderWibProfile only
+        // rebuilds the tab's HTML skeleton (with "Loading..."); loadWibTabData
+        // is what actually populates it. Without this, the user is left
+        // staring at a "Loading..." spinner forever on Contacts/Notes/etc.
+        loadWibTabData(wibTab)
+      }
       else loadPage('wibs')
     }catch(e){showToast(e.message,'error');return false}
   },'modal-lg')
