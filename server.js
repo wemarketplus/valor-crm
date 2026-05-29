@@ -2185,6 +2185,7 @@ app.post('/api/import/:type', async (req, res) => {
         const zipPart    =getField(row,'Zip','zip','ZIP','Zip Code','zip code','Zipcode','zipcode','Postal Code','Mailing Zip')
         const countryPart=getField(row,'Country','Mailing Country')
         const address    =[streetPart,cityPart,statePart,zipPart,countryPart].filter(Boolean).join(', ')
+          if (statePart && statePart.length <= 3) insertRow.state = statePart.toUpperCase()
 
         const linkedin=getField(row,'LinkedIn','LinkedIn URL','linkedin_url','LinkedIn Profile')
         const tags    =getField(row,'Tags','Labels','Categories','tag','label')
