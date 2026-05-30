@@ -2158,6 +2158,7 @@ let _iwtStats = {}
 async function pageIwtLibrary(){
   setTopbar('IWT Application Source Library','',`
     <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-ghost" onclick="verifyAllIwt()">🔍 Verify All</button>
       <button class="btn btn-ghost" onclick="importCSV('iwt_sources')">📥 Import</button>
       <button class="btn btn-ghost" onclick="exportIwtCsv()">📤 Export CSV</button>
       <button class="btn btn-primary" onclick="openIwtModal()">+ Add Source</button>
@@ -2271,6 +2272,7 @@ function renderIwtTable(){
             <td class="cell-dim" style="font-size:11.5px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(sub)}">${escHtml(sub||'—')}</td>
             <td>${_iwtPill(r.status)}</td>
             <td style="text-align:right;white-space:nowrap">
+              <button class="btn btn-xs" onclick="verifyIwt('${r.id}')">🔍 Verify</button>
               <button class="btn btn-xs" onclick="openIwtModal('${r.id}')">Edit</button>
               <button class="btn btn-xs" onclick="deleteIwt('${r.id}')">Delete</button>
             </td>
@@ -2346,6 +2348,36 @@ async function deleteIwt(id){
 async function exportIwtCsv(){
   try{ await apiDownload('/api/iwt-sources/export/csv') }
   catch(e){ showToast(e.message||'Export failed','error') }
+}
+
+async function verifyIwt(id){
+  showToast('🔍 Verifying with AI (web search)…','info')
+  try{
+    const r=await api('/api/iwt-sources/'+id+'/verify','POST')
+    const v=r.verdict||'unconfirmed'
+    const icon=v==='current'?'✅':(v==='changed'?'⚠️':'❓')
+    let msg=icon+' '+v.toUpperCase()+(r.reason?': '+r.reason:'')
+    if(r.suggested_form_url) msg+='  |  Suggested link: '+r.suggested_form_url
+    if(r.suggested_revision) msg+='  |  Suggested revision: '+r.suggested_revision
+    showToast(msg, v==='current'?'success':'warn')
+    await reloadIwt()
+  }catch(e){ showToast('Verify failed: '+(e.message||'error'),'error') }
+}
+
+async function verifyAllIwt(){
+  if(!_iwtAll.length){ showToast('No sources to verify','warn'); return }
+  if(!confirm('AI-verify all '+_iwtAll.length+' sources? This uses web search and may take a few minutes.')) return
+  const ids=_iwtAll.map(r=>r.id)
+  let ok=0, review=0, fail=0
+  for(let i=0;i<ids.length;i++){
+    showToast('🔍 Verifying '+(i+1)+' of '+ids.length+'…','info')
+    try{
+      const r=await api('/api/iwt-sources/'+ids[i]+'/verify','POST')
+      if((r.verdict||'')==='current') ok++; else review++
+    }catch(e){ fail++ }
+  }
+  showToast('Verify complete — '+ok+' current, '+review+' need review, '+fail+' failed', fail?'warn':'success')
+  await reloadIwt()
 }
 
 async function pageDashboard(){
