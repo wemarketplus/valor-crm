@@ -2490,6 +2490,33 @@ app.post('/api/import/:type', async (req, res) => {
           results.errors.push(`"${invNum}": ${e.message}`)
         }
       }
+        // ═════════════ IWT APPLICATION SOURCES ════════════════════════════════════
+    // Stored in activity_log with action='IWT_APP_SOURCE'. Accepts snake_case and
+    // Title Case headers via the shared _buildIwtMetadata() normaliser.
+    } else if (type === 'iwt_sources') {
+      for (const row of rows) {
+        const metadata = _buildIwtMetadata(row)
+        if (!metadata.territory && !metadata.board_name) {
+          results.errors.push('Skipped — no territory or board name'); continue
+        }
+        const label = metadata.territory
+          ? `${metadata.territory}${metadata.board_name ? ' — ' + metadata.board_name : ''}`
+          : metadata.board_name
+        try {
+          const { error: insErr } = await safeInsertLog({
+            user_id:     importUser.id,
+            action:      'IWT_APP_SOURCE',
+            record_type: 'iwt_app_source',
+            record_id:   metadata.wib_id || null,
+            details:     label,
+            metadata,
+          })
+          if (insErr) results.errors.push(`"${label}": ${insErr.message}`)
+          else results.created++
+        } catch (e) {
+          results.errors.push(`"${label}": ${e.message}`)
+        }
+      }
     } else {
       return res.status(400).json({ error: `Import not supported for type: ${type}` })
     }
@@ -4378,6 +4405,11 @@ const IMPORT_SCHEMAS = {
     required: ['company_name'],
     optional: ['invoice_number','amount','fee_model','status','due_date','notes'],
   },
+  // iwt_sources — imports into activity_log (action='IWT_APP_SOURCE')
+  iwt_sources: {
+    required: [],   // territory OR board_name is enforced per-row in the handler
+    optional: ['territory','state','board_name','wib_id','program_name','form_url','revision_date','submission_method','submission_detail','status','last_verified_date','notes'],
+  },
 }
 
 // POST /api/import/file/:type — multipart file upload (CSV or Excel)
@@ -5395,6 +5427,219 @@ app.get('/api/training-providers/export/xlsx', auth, async (req, res) => {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
   res.setHeader('Content-Disposition', `attachment; filename="training-providers-${new Date().toISOString().split('T')[0]}.xlsx"`)
   res.send(buffer)
+})
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// IWT APPLICATION SOURCE LIBRARY
+// ═══════════════════════════════════════════════════════════════════════════════
+// metadata schema:
+//   { territory, state, board_name, wib_id, program_name, form_url, revision_date,
+//     submission_method, submission_detail, status, last_verified_date, notes }
+//
+// Routes:
+//   GET    /api/iwt-sources              list (filters: territory, state, status, search)
+//   GET    /api/iwt-sources/stats        aggregate counts for KPI cards
+//   GET    /api/iwt-sources/export/csv   CSV download
+//   POST   /api/iwt-sources              create
+//   PUT    /api/iwt-sources/:id          update (partial merge supported)
+//   DELETE /api/iwt-sources/:id          delete (admin only)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Build the metadata object from a request/import body. Centralised so list,
+// create, update, and import all agree on the exact field set. Accepts both
+// snake_case and Title Case keys (so CSV/Excel imports map straight in).
+function _buildIwtMetadata(body = {}) {
+  return {
+    territory:         (body.territory         || body.Territory         || '').toString().trim() || null,
+    state:             (body.state             || body.State             || '').toString().trim().toUpperCase().slice(0, 2) || null,
+    board_name:        (body.board_name        || body['Board Name']     || body.board || body.boards || '').toString().trim() || null,
+    wib_id:            body.wib_id || body.WIB_ID || null,
+    program_name:      (body.program_name      || body['Program Name']   || body.program || '').toString().trim() || null,
+    form_url:          (body.form_url          || body['Form URL']       || body.application_link || body.link || body.url || '').toString().trim() || null,
+    revision_date:     (body.revision_date     || body['Revision Date']  || body.rev_date || '').toString().trim() || null,
+    submission_method: (body.submission_method || body['Submission Method'] || body.how_submitted || '').toString().trim() || null,
+    submission_detail: (body.submission_detail || body['Submission Detail'] || body.submission_url || body.submission_email || '').toString().trim() || null,
+    status:            (body.status            || body.Status            || 'active').toString().trim().toLowerCase(),
+    last_verified_date:(body.last_verified_date || body['Last Verified']  || '').toString().trim() || new Date().toISOString().split('T')[0],
+    notes:             (body.notes             || body.Notes             || '').toString().trim() || null,
+  }
+}
+
+// Read metadata back off an activity_log row regardless of metadata/details storage.
+function _readIwtMeta(row) {
+  if (!row) return {}
+  let m = row.metadata
+  if (m == null && row.details) { try { m = JSON.parse(row.details) } catch (_) { m = {} } }
+  if (typeof m === 'string')    { try { m = JSON.parse(m) }          catch (_) { m = {} } }
+  return m || {}
+}
+
+app.get('/api/iwt-sources', auth, async (req, res) => {
+  const { territory, state, status, search, limit = 500 } = req.query
+  try {
+    const { data, error } = await supabase
+      .from('activity_log')
+      .select('*, user:user_profiles!user_id(full_name,email)')
+      .eq('action', 'IWT_APP_SOURCE')
+      .order('created_at', { ascending: false })
+      .limit(Math.min(+limit, 2000))
+    if (error) return res.status(400).json({ error: error.message })
+
+    let rows = (data || []).map(r => {
+      const m = _readIwtMeta(r)
+      return {
+        id:         r.id,
+        created_at: r.created_at,
+        added_by:   r.user?.full_name || r.user?.email || null,
+        ...m,
+      }
+    })
+    if (territory) rows = rows.filter(r => (r.territory || '').toLowerCase() === String(territory).toLowerCase())
+    if (state)     rows = rows.filter(r => (r.state || '').toUpperCase() === String(state).toUpperCase())
+    if (status)    rows = rows.filter(r => (r.status || '') === String(status).toLowerCase())
+    if (search) {
+      const s = String(search).toLowerCase()
+      rows = rows.filter(r =>
+        (r.board_name   || '').toLowerCase().includes(s) ||
+        (r.territory    || '').toLowerCase().includes(s) ||
+        (r.program_name || '').toLowerCase().includes(s) ||
+        (r.notes        || '').toLowerCase().includes(s)
+      )
+    }
+    res.json({ data: rows, count: rows.length })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/iwt-sources/stats', auth, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('activity_log')
+      .select('metadata, details')
+      .eq('action', 'IWT_APP_SOURCE')
+      .limit(2000)
+    if (error) return res.status(400).json({ error: error.message })
+
+    const sources     = (data || []).map(_readIwtMeta)
+    const total       = sources.length
+    const active      = sources.filter(s => (s.status || 'active') === 'active').length
+    const needsCheck  = sources.filter(s => s.status === 'needs_verification' || s.status === 'outdated').length
+    const territories = new Set(sources.map(s => s.territory).filter(Boolean))
+    const states      = new Set(sources.map(s => s.state).filter(Boolean))
+    const withForm    = sources.filter(s => s.form_url).length
+
+    res.json({
+      total,
+      active,
+      needs_verification:  needsCheck,
+      territories_covered: territories.size,
+      territories:         [...territories].sort(),
+      states_covered:      states.size,
+      with_form_link:      withForm,
+      missing_form_link:   total - withForm,
+    })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.get('/api/iwt-sources/export/csv', auth, async (req, res) => {
+  const { data, error } = await supabase
+    .from('activity_log')
+    .select('metadata, details, created_at, user:user_profiles!user_id(full_name,email)')
+    .eq('action', 'IWT_APP_SOURCE')
+    .order('created_at', { ascending: false })
+  if (error) return res.status(400).json({ error: error.message })
+
+  const escIwt = (v) => {
+    const s = String(v == null ? '' : v).replace(/[\r\n]+/g, ' ')
+    return '"' + (/^[=+\-@\t]/.test(s) ? "'" + s : s).replace(/"/g, '""') + '"'
+  }
+
+  const headers = ['Territory', 'State', 'Board(s)', 'Program', 'Form URL', 'Revision Date', 'Submission Method', 'Submission Detail', 'Status', 'Last Verified', 'Notes', 'Added By', 'Created']
+  const rows = (data || []).map(r => {
+    const m = _readIwtMeta(r)
+    return [
+      m.territory || '', m.state || '', m.board_name || '', m.program_name || '',
+      m.form_url || '', m.revision_date || '', m.submission_method || '', m.submission_detail || '',
+      m.status || '', m.last_verified_date || '', m.notes || '',
+      r.user?.full_name || r.user?.email || '', r.created_at ? r.created_at.split('T')[0] : '',
+    ]
+  })
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+  res.setHeader('Content-Disposition', `attachment; filename="valor-iwt-sources-${new Date().toISOString().split('T')[0]}.csv"`)
+  safeInsertLog({ user_id: req.user.id, action: 'EXPORT', details: `Exported IWT application sources — ${rows.length} records` }).catch(() => {})
+  res.send([headers.map(escIwt).join(','), ...rows.map(r => r.map(escIwt).join(','))].join('\n'))
+})
+
+app.post('/api/iwt-sources', auth, requireContributor, async (req, res) => {
+  const metadata = _buildIwtMetadata(req.body || {})
+  if (!metadata.territory && !metadata.board_name) {
+    return res.status(400).json({ error: 'Territory or Board name is required' })
+  }
+  const label = metadata.territory
+    ? `${metadata.territory}${metadata.board_name ? ' — ' + metadata.board_name : ''}`
+    : metadata.board_name
+  try {
+    const { data, error } = await safeInsertLog({
+      user_id:     req.user.id,
+      action:      'IWT_APP_SOURCE',
+      record_type: 'iwt_app_source',
+      record_id:   metadata.wib_id || null,
+      details:     label,
+      metadata,
+    })
+    if (error) return res.status(400).json({ error: error.message })
+    res.json({ id: data?.id || null, ...metadata, created_at: (data && data.created_at) || new Date().toISOString() })
+  } catch (e) {
+    res.status(400).json({ error: e.message })
+  }
+})
+
+app.put('/api/iwt-sources/:id', auth, requireContributor, async (req, res) => {
+  const { data: ex } = await supabase
+    .from('activity_log')
+    .select(global._safeActivityCols || 'id,action,created_at')
+    .eq('id', req.params.id)
+    .eq('action', 'IWT_APP_SOURCE')
+    .single()
+  if (!ex) return res.status(404).json({ error: 'IWT source not found' })
+
+  const existing = _readIwtMeta(ex)
+  const incoming = _buildIwtMetadata({ ...existing, ...req.body })
+  const merged   = { ...existing, ...incoming, updated_at: new Date().toISOString() }
+  const label    = merged.territory
+    ? `${merged.territory}${merged.board_name ? ' — ' + merged.board_name : ''}`
+    : (merged.board_name || ex.details)
+
+  const update = global._hasMetadata
+    ? { metadata: merged, ...(global._detailsColumnMissing ? {} : { details: label }) }
+    : (global._detailsColumnMissing ? {} : { details: JSON.stringify(merged) })
+
+  const { data, error } = await supabase
+    .from('activity_log')
+    .update(update)
+    .eq('id', req.params.id)
+    .eq('action', 'IWT_APP_SOURCE')
+    .select()
+    .single()
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ id: data.id, created_at: data.created_at, ..._readIwtMeta(data) })
+})
+
+app.delete('/api/iwt-sources/:id', auth, requireAdmin, async (req, res) => {
+  const { error } = await supabase
+    .from('activity_log')
+    .delete()
+    .eq('id', req.params.id)
+    .eq('action', 'IWT_APP_SOURCE')
+  if (error) return res.status(400).json({ error: error.message })
+  try { await safeInsertLog({ user_id: req.user.id, action: 'DELETE_IWT_SOURCE', record_type: 'iwt_app_source', record_id: req.params.id, details: 'Deleted IWT application source' }) } catch (_) {}
+  res.json({ success: true })
 })
 
 
