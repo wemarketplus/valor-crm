@@ -3450,6 +3450,8 @@ async function deleteNote(id){
   try{
     await api('/api/notes/'+id,'DELETE')
     showToast('Note deleted','success')
+    if(typeof closeModal==='function')closeModal()
+    if(currentPage==='notes'){ try{ const r=await api('/api/notes?limit=5000&unattached=true'); window._globalNotes=r.data||[]; renderNotesGrid(window._globalNotes) }catch(_){} }
     if(currentWib)loadWibTabData(wibTab)
     if(currentCompany)loadCompanyTabData(companyTab)
     // Refresh the training provider notes panel if it's currently open
@@ -10403,7 +10405,8 @@ function showNoteDetail(id){
   const authorName=isAircall?'Aircall':rawAuthor
   const noteDateTime=fmtNoteDateTime(meta.timestamp||n.created_at)
   const initials=authorName.slice(0,2).toUpperCase()
-  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${initials}</div><div><div class="note-author">${escHtml(authorName)}</div><div class="note-time">${noteDateTime}</div></div><span class="note-badge" style="margin-left:auto">${escHtml(meta.note_type||'Note')}</span></div><div class="note-content" style="margin-top:8px">${escHtml(getNoteContent(n)).replace(/\n/g,'<br>')}</div></div>`)
+  const canDel=['super_admin','admin'].includes(currentUser?.role)
+  showModal('Note Detail',`<div class="note-card"><div class="note-meta"><div class="note-av">${initials}</div><div><div class="note-author">${escHtml(authorName)}</div><div class="note-time">${noteDateTime}</div></div><span class="note-badge" style="margin-left:auto">${escHtml(meta.note_type||'Note')}</span></div><div class="note-content" style="margin-top:8px">${escHtml(getNoteContent(n)).replace(/\n/g,'<br>')}</div></div>${canDel?`<div style="margin-top:14px;text-align:right"><button class="btn btn-sm" style="background:var(--red-bg);color:var(--red-t);border:none" onclick="deleteNote('${n.id}')">🗑 Delete note</button></div>`:''}`)
 }
 
 function openNewNoteModal(){
