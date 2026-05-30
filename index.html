@@ -1866,9 +1866,15 @@ function renderApp(){
   // dashboard now pops to a CRM entry the handler can catch, instead of
   // leaving the app. Without the pushed entry there is nothing CRM-internal
   // behind the dashboard and Back exits the CRM.
+  // Honor the URL hash on a fresh load / refresh so the user stays on their tab
+  // (e.g. #iwtlibrary) instead of being bounced to the dashboard. Capture the
+  // hash BEFORE we rewrite history below; unknown or profile hashes -> dashboard.
+  var _KNOWN_PAGES=['dashboard','wibs','companies','locations','funding','applications','revenue','compliance','users','territories','tasks','notes','calls','emails','chat','ai','drive','auditlogs','reports','invoices','contracts','agreements','grants','payments','training','iwtlibrary','notifications','sequences','workflows','settings','automations']
+  var _bootHash=(location.hash&&location.hash.slice(1))||''
+  var _bootPage=(_KNOWN_PAGES.indexOf(_bootHash)>=0)?_bootHash:'dashboard'
   try{
-    history.replaceState({crmPage:'dashboard'},'','#dashboard')
-    history.pushState({crmPage:'dashboard'},'','#dashboard')
+    history.replaceState({crmPage:_bootPage},'','#'+_bootPage)
+    history.pushState({crmPage:_bootPage},'','#'+_bootPage)
   }catch(_){}
   // Guard: renderApp() can run more than once (e.g. after login). Register the
   // popstate listener only once so Back is not handled by stacked duplicates.
@@ -1905,7 +1911,7 @@ function renderApp(){
   // The initial load reuses the baseline entry just seeded above, so suppress
   // its push to avoid a duplicate 'dashboard' entry in the history stack.
   window._suppressHistoryPush=true
-  try{loadPage('dashboard')}finally{window._suppressHistoryPush=false}
+  try{loadPage(_bootPage)}finally{window._suppressHistoryPush=false}
   // Boot-time notification badge reconcile — phantom guard runs immediately so
   // a stale "3" from a previous session is cleared the moment the app loads.
   setTimeout(function(){ loadNotificationBadge() }, 200)
@@ -2365,10 +2371,24 @@ async function verifyIwt(id){
 }
 
 async function verifyAllIwt(){
-  if(!_iwtAll.length){ showToast('No sources to verify','warn'); return }
-  if(!confirm('AI-verify all '+_iwtAll.length+' sources? This uses web search and runs one at a time, so it can take 10-20+ minutes. Keep this tab open until it finishes.')) return
+  // Respect the on-screen filters so the user can verify a smaller, targeted
+  // subset (e.g. filter to "needs verification") — fewer calls = fewer failures.
+  const q=((document.getElementById('iwt-f-search')||{}).value||'').toLowerCase().trim()
+  const ft=((document.getElementById('iwt-f-territory')||{}).value||'').toLowerCase().trim()
+  const fs=((document.getElementById('iwt-f-state')||{}).value||'').toUpperCase().trim()
+  const fst=(document.getElementById('iwt-f-status')||{}).value||''
+  const targets=_iwtAll.filter(r=>{
+    if(fst && (r.status||'active')!==fst) return false
+    if(fs && (r.state||'').toUpperCase()!==fs) return false
+    if(ft && (r.territory||'').toLowerCase().indexOf(ft)===-1) return false
+    if(q){ const hay=((r.board_name||'')+' '+(r.territory||'')+' '+(r.program_name||'')+' '+(r.notes||'')).toLowerCase(); if(hay.indexOf(q)===-1) return false }
+    return true
+  })
+  if(!targets.length){ showToast('No sources to verify (check your filters)','warn'); return }
+  const isFiltered = targets.length!==_iwtAll.length
+  if(!confirm('AI-verify '+targets.length+(isFiltered?' filtered':'')+' source(s)? This uses web search and runs one at a time (~10-20s each). Keep this tab open until it finishes.')) return
   const sleep=ms=>new Promise(r=>setTimeout(r,ms))
-  const ids=_iwtAll.map(r=>r.id)
+  const ids=targets.map(r=>r.id)
   let ok=0, review=0
   let failed=[]
   // Pass 1 — gentle pacing between calls so we don't overload the AI service
@@ -2378,18 +2398,23 @@ async function verifyAllIwt(){
       const r=await api('/api/iwt-sources/'+ids[i]+'/verify','POST')
       if((r.verdict||'')==='current') ok++; else review++
     }catch(e){ failed.push(ids[i]) }
-    await sleep(1200)
+    if((i+1)%8===0){ try{ await reloadIwt() }catch(_){} }  // live status refresh
+    await sleep(1500)
   }
-  // Pass 2 — retry any that failed (usually transient overload), slower pace
-  if(failed.length){
+  // Up to 3 cooldown + retry passes over stragglers (transient overload usually clears)
+  let pass=0
+  while(failed.length && pass<3){
+    pass++
     const retry=failed; failed=[]
+    showToast('🔁 Cooling down, then retrying '+retry.length+' failed…','info')
+    await sleep(8000)
     for(let i=0;i<retry.length;i++){
-      showToast('🔁 Retrying failed '+(i+1)+' of '+retry.length+'…','info')
+      showToast('🔁 Retry pass '+pass+' — '+(i+1)+' of '+retry.length+'…','info')
       try{
         const r=await api('/api/iwt-sources/'+retry[i]+'/verify','POST')
         if((r.verdict||'')==='current') ok++; else review++
       }catch(e){ failed.push(retry[i]) }
-      await sleep(2500)
+      await sleep(3000)
     }
   }
   showToast('Verify complete — '+ok+' current, '+review+' need review'+(failed.length?(', '+failed.length+' still failed (verify those individually)'):''), failed.length?'warn':'success')
