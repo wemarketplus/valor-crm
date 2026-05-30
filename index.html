@@ -2388,22 +2388,24 @@ async function verifyAllIwt(){
   const isFiltered = targets.length!==_iwtAll.length
   if(!confirm('AI-verify '+targets.length+(isFiltered?' filtered':'')+' source(s)? This uses web search and runs one at a time (~10-20s each). Keep this tab open until it finishes.')) return
   const sleep=ms=>new Promise(r=>setTimeout(r,ms))
+  const isBilling=e=>/credit balance|billing|too low|purchase credits|insufficient|quota/i.test((e&&e.message)||'')
   const ids=targets.map(r=>r.id)
   let ok=0, review=0
   let failed=[]
+  let billingHalt=false
   // Pass 1 — gentle pacing between calls so we don't overload the AI service
   for(let i=0;i<ids.length;i++){
     showToast('🔍 Verifying '+(i+1)+' of '+ids.length+'…','info')
     try{
       const r=await api('/api/iwt-sources/'+ids[i]+'/verify','POST')
       if((r.verdict||'')==='current') ok++; else review++
-    }catch(e){ failed.push(ids[i]) }
+    }catch(e){ if(isBilling(e)){ billingHalt=true; break } failed.push(ids[i]) }
     if((i+1)%8===0){ try{ await reloadIwt() }catch(_){} }  // live status refresh
     await sleep(1500)
   }
   // Up to 3 cooldown + retry passes over stragglers (transient overload usually clears)
   let pass=0
-  while(failed.length && pass<3){
+  while(!billingHalt && failed.length && pass<3){
     pass++
     const retry=failed; failed=[]
     showToast('🔁 Cooling down, then retrying '+retry.length+' failed…','info')
@@ -2413,11 +2415,15 @@ async function verifyAllIwt(){
       try{
         const r=await api('/api/iwt-sources/'+retry[i]+'/verify','POST')
         if((r.verdict||'')==='current') ok++; else review++
-      }catch(e){ failed.push(retry[i]) }
+      }catch(e){ if(isBilling(e)){ billingHalt=true; break } failed.push(retry[i]) }
       await sleep(3000)
     }
   }
-  showToast('Verify complete — '+ok+' current, '+review+' need review'+(failed.length?(', '+failed.length+' still failed (verify those individually)'):''), failed.length?'warn':'success')
+  if(billingHalt){
+    showToast('⛔ Stopped — the Anthropic API is out of credits. Add credits in the Anthropic Console → Plans & Billing, then run Verify again. (Verified before stopping: '+ok+' current, '+review+' need review.)','error')
+  }else{
+    showToast('Verify complete — '+ok+' current, '+review+' need review'+(failed.length?(', '+failed.length+' still failed (verify those individually)'):''), failed.length?'warn':'success')
+  }
   await reloadIwt()
 }
 
