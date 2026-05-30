@@ -5468,12 +5468,24 @@ function _buildIwtMetadata(body = {}) {
 }
 
 // Read metadata back off an activity_log row regardless of metadata/details storage.
+function _iwtStateFromTerritory(territory) {
+  if (!territory) return null
+  const t = territory.toString().trim().toLowerCase()
+  if (t === 'dc' || t === 'district of columbia' || t === 'washington dc' || t === 'washington, d.c.') return 'DC'
+  const hit = US_STATES.find(s => s[1].toLowerCase() === t)
+  return hit ? hit[0] : null
+}
+
 function _readIwtMeta(row) {
   if (!row) return {}
   let m = row.metadata
   if (m == null && row.details) { try { m = JSON.parse(row.details) } catch (_) { m = {} } }
   if (typeof m === 'string')    { try { m = JSON.parse(m) }          catch (_) { m = {} } }
-  return m || {}
+  m = m || {}
+  // Self-heal the 2-letter State from the (always-correct) Territory name, so a
+  // mis-mapped import (State pulled from "May 2026" -> "MA") still displays right.
+  if (m.territory) { const c = _iwtStateFromTerritory(m.territory); if (c) m.state = c }
+  return m
 }
 
 app.get('/api/iwt-sources', auth, async (req, res) => {
