@@ -2366,17 +2366,33 @@ async function verifyIwt(id){
 
 async function verifyAllIwt(){
   if(!_iwtAll.length){ showToast('No sources to verify','warn'); return }
-  if(!confirm('AI-verify all '+_iwtAll.length+' sources? This uses web search and may take a few minutes.')) return
+  if(!confirm('AI-verify all '+_iwtAll.length+' sources? This uses web search and runs one at a time, so it can take 10-20+ minutes. Keep this tab open until it finishes.')) return
+  const sleep=ms=>new Promise(r=>setTimeout(r,ms))
   const ids=_iwtAll.map(r=>r.id)
-  let ok=0, review=0, fail=0
+  let ok=0, review=0
+  let failed=[]
+  // Pass 1 — gentle pacing between calls so we don't overload the AI service
   for(let i=0;i<ids.length;i++){
     showToast('🔍 Verifying '+(i+1)+' of '+ids.length+'…','info')
     try{
       const r=await api('/api/iwt-sources/'+ids[i]+'/verify','POST')
       if((r.verdict||'')==='current') ok++; else review++
-    }catch(e){ fail++ }
+    }catch(e){ failed.push(ids[i]) }
+    await sleep(1200)
   }
-  showToast('Verify complete — '+ok+' current, '+review+' need review, '+fail+' failed', fail?'warn':'success')
+  // Pass 2 — retry any that failed (usually transient overload), slower pace
+  if(failed.length){
+    const retry=failed; failed=[]
+    for(let i=0;i<retry.length;i++){
+      showToast('🔁 Retrying failed '+(i+1)+' of '+retry.length+'…','info')
+      try{
+        const r=await api('/api/iwt-sources/'+retry[i]+'/verify','POST')
+        if((r.verdict||'')==='current') ok++; else review++
+      }catch(e){ failed.push(retry[i]) }
+      await sleep(2500)
+    }
+  }
+  showToast('Verify complete — '+ok+' current, '+review+' need review'+(failed.length?(', '+failed.length+' still failed (verify those individually)'):''), failed.length?'warn':'success')
   await reloadIwt()
 }
 
