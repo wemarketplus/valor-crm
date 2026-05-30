@@ -5664,38 +5664,49 @@ app.post('/api/iwt-sources/:id/verify', auth, requireContributor, async (req, re
     `Check: (1) does the program still exist and is it currently open/active? (2) is the link still valid (not dead/moved)? (3) has the application form, revision, or submission method changed?\n` +
     `Return ONLY this JSON object: {"verdict":"current"|"changed"|"unconfirmed","reason":"one or two sentences","suggested_form_url":"a better/current official URL if the one on file is wrong or dead, else empty string","suggested_revision":"updated revision/version text if changed, else empty string"}`
 
-  let rawText = '', apiErr = null
+  let rawText = '', apiErr = null, done = false
   const MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001']
-  for (let mi = 0; mi < MODELS.length; mi++) {
-    try {
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({
-          model: MODELS[mi], max_tokens: 1200, system: SYSTEM,
-          tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
-          messages: [{ role: 'user', content: userContent }],
-        }),
-      })
-      const d = await r.json()
-      if (r.status === 529 && mi === 0) { continue }
-      if (!r.ok || d.error) {
-        apiErr = (d.error && d.error.message) || ('HTTP ' + r.status)
-        if (mi === 0 && /tool|web_search|not.*enabled|unsupported/i.test(apiErr)) {
-          const r2 = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-            body: JSON.stringify({ model: MODELS[mi], max_tokens: 1200, system: SYSTEM, messages: [{ role: 'user', content: userContent }] }),
-          })
-          const d2 = await r2.json()
-          if (r2.ok && !d2.error) { rawText = (d2.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n'); apiErr = null; break }
+  const _sleep = ms => new Promise(r => setTimeout(r, ms))
+  // Try each model, retrying the SAME model with backoff on transient overload
+  // (429/529). This is what makes "Verify All" survive a long batch.
+  for (let mi = 0; mi < MODELS.length && !done; mi++) {
+    for (let attempt = 0; attempt < 3 && !done; attempt++) {
+      try {
+        const r = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({
+            model: MODELS[mi], max_tokens: 1200, system: SYSTEM,
+            tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 4 }],
+            messages: [{ role: 'user', content: userContent }],
+          }),
+        })
+        // Overloaded / rate-limited — wait with (jittered) backoff and retry same model
+        if (r.status === 429 || r.status === 529) {
+          apiErr = 'HTTP ' + r.status
+          await _sleep(1500 * (attempt + 1) + Math.floor(Math.random() * 700))
+          continue
         }
-        continue
-      }
-      rawText = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
-      apiErr = null
-      break
-    } catch (fetchErr) { apiErr = fetchErr.message; continue }
+        const d = await r.json()
+        if (!r.ok || d.error) {
+          apiErr = (d.error && d.error.message) || ('HTTP ' + r.status)
+          // web_search not enabled on the account — retry once without the tool
+          if (/tool|web_search|not.*enabled|unsupported/i.test(apiErr)) {
+            const r2 = await fetch('https://api.anthropic.com/v1/messages', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+              body: JSON.stringify({ model: MODELS[mi], max_tokens: 1200, system: SYSTEM, messages: [{ role: 'user', content: userContent }] }),
+            })
+            const d2 = await r2.json()
+            if (r2.ok && !d2.error) { rawText = (d2.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n'); apiErr = null; done = true }
+          }
+          break // non-retryable for this model — fall through to the next model
+        }
+        rawText = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
+        apiErr = null
+        done = true
+      } catch (fetchErr) { apiErr = fetchErr.message; await _sleep(1200 * (attempt + 1)); continue }
+    }
   }
   if (apiErr && !rawText) return res.status(502).json({ error: 'AI verify failed: ' + apiErr })
 
