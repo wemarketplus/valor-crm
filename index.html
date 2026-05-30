@@ -2183,6 +2183,8 @@ async function reloadIwt(){
     api('/api/iwt-sources/stats').catch(()=>({}))
   ])
   _iwtAll=list.data||[]
+  // Always display A→Z by territory (then program), regardless of import order
+  _iwtAll.sort((a,b)=>(a.territory||'').localeCompare(b.territory||'',undefined,{sensitivity:'base'})||(a.program_name||'').localeCompare(b.program_name||'',undefined,{sensitivity:'base'}))
   _iwtStats=stats||{}
   renderIwtShell()
   renderIwtTable()
