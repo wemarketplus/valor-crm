@@ -1817,6 +1817,7 @@ function renderApp(){
         <div class="sb-section">Admin</div>
         ${sbi('users','👥','User Management')}
         ${sbi('auditlogs','🔍','Audit Logs')}
+        ${sbi('documents','📚','Document Library')}
         ${sbi('settings','⚙','Settings')}
         `:''}
         <div class="sb-divider"></div>
@@ -1869,7 +1870,7 @@ function renderApp(){
   // Honor the URL hash on a fresh load / refresh so the user stays on their tab
   // (e.g. #iwtlibrary) instead of being bounced to the dashboard. Capture the
   // hash BEFORE we rewrite history below; unknown or profile hashes -> dashboard.
-  var _KNOWN_PAGES=['dashboard','wibs','companies','locations','funding','applications','revenue','compliance','users','territories','tasks','notes','calls','emails','chat','ai','drive','auditlogs','reports','invoices','contracts','agreements','grants','payments','training','iwtlibrary','notifications','sequences','workflows','settings','automations']
+  var _KNOWN_PAGES=['dashboard','wibs','companies','locations','funding','applications','revenue','compliance','users','territories','tasks','notes','calls','emails','chat','ai','drive','auditlogs','reports','invoices','contracts','agreements','grants','payments','training','iwtlibrary','documents','notifications','sequences','workflows','settings','automations']
   var _bootHash=(location.hash&&location.hash.slice(1))||''
   var _bootPage=(_KNOWN_PAGES.indexOf(_bootHash)>=0)?_bootHash:'dashboard'
   try{
@@ -2139,6 +2140,7 @@ async function loadPage(page){
     else if(page==='payments')await pagePayments()
     else if(page==='training')await pageTraining()
     else if(page==='iwtlibrary')await pageIwtLibrary()
+    else if(page==='documents')await pageDocuments()
     else if(page==='notifications')pageNotifications()
     else if(page==='sequences')pageSequences()
     else if(page==='workflows')pageWorkflows()
@@ -2160,6 +2162,13 @@ async function loadPage(page){
 ═══════════════════════════════════════════════════ */
 let _iwtAll = []
 let _iwtStats = {}
+let _docsAll = []
+let _docsStats = {}
+let _docsGroup = 'blank'
+const DOC_CATS = {
+  blank:  ['Agreement Template','Form','Policy','Checklist','Other'],
+  signed: ['WIB Agreement','Employer Agreement','Training Provider Agreement','Compliance','Other'],
+}
 
 async function pageIwtLibrary(){
   setTopbar('IWT Application Source Library','',`
@@ -2357,6 +2366,216 @@ async function exportIwtCsv(){
   try{ await apiDownload('/api/iwt-sources/export/csv') }
   catch(e){ showToast(e.message||'Export failed','error') }
 }
+
+// ─── DOCUMENT LIBRARY (admin-only) ────────────────────────────────────────────
+async function pageDocuments(){
+  if(!['super_admin','admin'].includes(currentUser?.role)){
+    setTopbar('Document Library','')
+    document.getElementById('page-area').innerHTML='<div class="alert alert-error" style="margin:20px">This area is for Admins only.</div>'
+    return
+  }
+  setTopbar('Document Library','',`
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-ghost" onclick="importCSV('documents')">📥 Import</button>
+      <button class="btn btn-ghost" onclick="exportDocsCsv()">📤 Export CSV</button>
+      <button class="btn btn-primary" onclick="openDocModal()">+ Upload Document</button>
+    </div>`)
+  document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading documents...</div>'
+  try{ await reloadDocs() }
+  catch(e){ document.getElementById('page-area').innerHTML=`<div class="alert alert-error" style="margin:20px">Failed: ${escHtml(e.message)}</div>` }
+}
+
+async function reloadDocs(){
+  const [list,stats]=await Promise.all([
+    api('/api/documents?limit=5000'),
+    api('/api/documents/stats').catch(()=>({}))
+  ])
+  _docsAll=list.data||[]
+  // Always display A→Z by title
+  _docsAll.sort((a,b)=>(a.title||'').localeCompare(b.title||'',undefined,{sensitivity:'base'}))
+  _docsStats=stats||{}
+  renderDocsShell()
+  renderDocsTable()
+}
+
+function setDocGroup(g){ _docsGroup=(g==='signed'?'signed':'blank'); renderDocsShell(); renderDocsTable() }
+
+function renderDocsShell(){
+  const pa=document.getElementById('page-area')
+  const s=_docsStats
+  const cards=[
+    {label:'Total Documents',val:(s.total!=null?s.total:_docsAll.length),icon:'📚'},
+    {label:'Blank Documents',val:(s.blank!=null?s.blank:''),icon:'📄'},
+    {label:'Signed Agreements',val:(s.signed!=null?s.signed:''),icon:'✍️',color:'var(--green-t)'},
+    {label:'Uploaded Files',val:(s.with_file!=null?s.with_file:''),icon:'📎'},
+    {label:'Links',val:(s.with_link!=null?s.with_link:''),icon:'🔗'}
+  ]
+  const cats=DOC_CATS[_docsGroup]||[]
+  pa.innerHTML=`
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px">
+    ${cards.map(c=>`<div style="background:var(--bg2);border:0.5px solid var(--border1);border-radius:10px;padding:12px 14px">
+      <div style="font-size:18px;margin-bottom:6px">${c.icon}</div>
+      <div style="font-size:22px;font-weight:600;color:${c.color||'var(--text1)'}">${c.val}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">${c.label}</div>
+    </div>`).join('')}
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <button class="btn ${_docsGroup==='blank'?'btn-primary':'btn-ghost'}" onclick="setDocGroup('blank')">📄 Blank Documents</button>
+    <button class="btn ${_docsGroup==='signed'?'btn-primary':'btn-ghost'}" onclick="setDocGroup('signed')">✍️ Signed Agreements</button>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+    <input id="doc-f-search" class="form-input" style="flex:2;min-width:200px;font-size:13px" placeholder="Search title, description, category, related to...">
+    <select id="doc-f-category" class="form-input" style="width:220px;font-size:13px">
+      <option value="">All categories</option>
+      ${cats.map(c=>`<option value="${escHtml(c)}">${escHtml(c)}</option>`).join('')}
+    </select>
+  </div>
+  <div id="doc-table-wrap"></div>`
+  const se=document.getElementById('doc-f-search'); if(se) se.addEventListener('input',renderDocsTable)
+  const ce=document.getElementById('doc-f-category'); if(ce) ce.addEventListener('change',renderDocsTable)
+}
+
+function renderDocsTable(){
+  const wrap=document.getElementById('doc-table-wrap'); if(!wrap) return
+  const qq=((document.getElementById('doc-f-search')||{}).value||'').toLowerCase().trim()
+  const fc=((document.getElementById('doc-f-category')||{}).value||'')
+  const rows=_docsAll.filter(r=>{
+    if((r.doc_group||'blank')!==_docsGroup) return false
+    if(fc && (r.category||'')!==fc) return false
+    if(qq){
+      const hay=((r.title||'')+' '+(r.description||'')+' '+(r.category||'')+' '+(r.related_to||'')+' '+(r.file_name||'')).toLowerCase()
+      if(hay.indexOf(qq)===-1) return false
+    }
+    return true
+  })
+  if(rows.length===0){
+    wrap.innerHTML=`<div class="empty-state">
+      <div class="empty-icon">${_docsGroup==='signed'?'✍️':'📄'}</div>
+      <div class="empty-text">No ${_docsGroup==='signed'?'signed agreements':'blank documents'} yet</div>
+      <div class="empty-sub">Upload a file (max 5MB) or paste a link to add the first one.</div>
+      <button class="btn btn-primary" onclick="openDocModal()" style="margin-top:12px">+ Upload Document</button>
+    </div>`
+    return
+  }
+  wrap.innerHTML=`
+  <div style="background:var(--bg1);border:0.5px solid var(--border1);border-radius:10px;overflow:hidden">
+    <table class="data-table">
+      <thead><tr>
+        <th>Title</th><th>Category</th><th>Related To</th><th>Document</th>
+        <th>Added By</th><th>Date</th><th style="width:150px;text-align:right">Actions</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r=>{
+          const docCell = r.has_file
+            ? `<button class="btn btn-xs" onclick="downloadDoc('${r.id}')">⬇ ${escHtml(r.file_name||'Download')}</button>`
+            : (r.link?`<a href="${escHtml(r.link)}" target="_blank" class="fv-link" style="font-size:11px" onclick="event.stopPropagation()">🔗 Open link</a>`:'<span class="cell-dim">—</span>')
+          return `<tr>
+            <td><div style="font-weight:500;font-size:13px">${escHtml(r.title||'—')}</div>
+              ${r.description?`<div class="cell-dim" style="font-size:11px">${escHtml(r.description)}</div>`:''}</td>
+            <td class="cell-dim" style="font-size:12px">${escHtml(r.category||'—')}</td>
+            <td class="cell-dim" style="font-size:12px">${escHtml(r.related_to||'—')}</td>
+            <td>${docCell}</td>
+            <td class="cell-dim" style="font-size:11.5px">${escHtml(r.added_by||r.uploaded_by||'—')}</td>
+            <td class="cell-dim" style="font-size:11.5px">${escHtml(r.uploaded_date||'')}</td>
+            <td style="text-align:right;white-space:nowrap">
+              <button class="btn btn-xs" onclick="openDocModal('${r.id}')">Edit</button>
+              <button class="btn btn-xs" onclick="deleteDoc('${r.id}')">Delete</button>
+            </td>
+          </tr>`
+        }).join('')}
+      </tbody>
+    </table>
+  </div>`
+}
+
+function openDocModal(id){
+  const r = id ? _docsAll.find(x=>x.id===id) : null
+  const v=(k)=>r?escHtml(r[k]||''):''
+  const grp = r ? (r.doc_group||'blank') : _docsGroup
+  const allCats=[...new Set([...(DOC_CATS.blank),...(DOC_CATS.signed)])]
+  const catOpts=allCats.map(c=>`<option value="${escHtml(c)}"${r&&r.category===c?' selected':''}>${escHtml(c)}</option>`).join('')
+  const body=`
+  <div style="display:flex;flex-direction:column;gap:12px">
+    <div><label class="form-label">Title</label><input id="doc-title" class="form-input" style="font-size:13px" placeholder="e.g. WIB Participation Agreement (blank)" value="${v('title')}"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label class="form-label">Where does it go?</label><select id="doc-group" class="form-input" style="font-size:13px">
+        <option value="blank"${grp==='blank'?' selected':''}>📄 Blank Documents (template / form)</option>
+        <option value="signed"${grp==='signed'?' selected':''}>✍️ Signed Agreements (executed)</option>
+      </select></div>
+      <div><label class="form-label">Category</label><select id="doc-category" class="form-input" style="font-size:13px">${catOpts}</select></div>
+    </div>
+    <div><label class="form-label">Related to (optional)</label><input id="doc-related" class="form-input" style="font-size:13px" placeholder="e.g. Workforce Solutions Greater Dallas, or an employer name" value="${v('related_to')}"></div>
+    <div><label class="form-label">Description (optional)</label><textarea id="doc-desc" class="form-input" rows="2" style="font-size:13px;resize:vertical" placeholder="What is this document?">${r?escHtml(r.description||''):''}</textarea></div>
+    <div style="border-top:0.5px solid var(--border1);padding-top:10px">
+      <div style="font-size:11px;font-weight:600;color:var(--gd2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Attach the document</div>
+      <label class="form-label">Upload a file (PDF, Word, etc. — max 5MB)</label>
+      <input type="file" id="doc-file" class="form-input" style="font-size:13px;padding:6px">
+      ${r&&r.has_file?`<div class="cell-dim" style="font-size:11px;margin-top:4px">Current file: ${escHtml(r.file_name||'(file)')}. Choosing a new file replaces it.</div>`:''}
+      <div style="text-align:center;color:var(--text3);font-size:11px;margin:6px 0">— or —</div>
+      <label class="form-label">Paste a link (best for large files / Google Drive)</label>
+      <input id="doc-link" class="form-input" style="font-size:13px" placeholder="https://drive.google.com/..." value="${v('link')}">
+    </div>
+  </div>`
+  showModal(id?'Edit Document':'+ Upload Document', body, ()=>saveDoc(id), '', id?'Save Changes':'Upload')
+}
+
+async function saveDoc(id){
+  const g=(x)=>{const el=document.getElementById(x);return el&&el.value?el.value.trim():''}
+  const title=g('doc-title')
+  if(!title){ showToast('Enter a title','error'); return false }
+  const fileEl=document.getElementById('doc-file')
+  const file=fileEl&&fileEl.files&&fileEl.files[0]
+  const payload={
+    title,
+    doc_group:(document.getElementById('doc-group')||{}).value||'blank',
+    category:(document.getElementById('doc-category')||{}).value||'Other',
+    related_to:g('doc-related'),
+    description:g('doc-desc'),
+    link:g('doc-link')
+  }
+  if(file){
+    if(file.size>5*1024*1024){ showToast('File is too large (max 5MB). Paste a link instead for big files.','error'); return false }
+    try{
+      payload.file_data=await new Promise((resolve,reject)=>{
+        const fr=new FileReader(); fr.onload=()=>resolve(fr.result); fr.onerror=()=>reject(new Error('Could not read file')); fr.readAsDataURL(file)
+      })
+      payload.file_name=file.name
+      payload.file_type=file.type||'application/octet-stream'
+      payload.file_size=file.size
+    }catch(e){ showToast(e.message||'Could not read file','error'); return false }
+  }
+  if(!id && !payload.file_data && !payload.link){ showToast('Attach a file or paste a link','error'); return false }
+  try{
+    if(id) await api('/api/documents/'+id,'PUT',payload)
+    else   await api('/api/documents','POST',payload)
+    showToast(id?'Document updated':'Document added','success')
+    await reloadDocs()
+  }catch(e){ showToast(e.message||'Save failed','error'); return false }
+}
+
+async function downloadDoc(id){
+  try{
+    const d=await api('/api/documents/'+id+'/file')
+    const a=document.createElement('a')
+    a.href=d.file_data; a.download=d.file_name||'document'
+    document.body.appendChild(a); a.click(); a.remove()
+  }catch(e){ showToast(e.message||'Download failed','error') }
+}
+
+async function deleteDoc(id){
+  if(!confirm('Delete this document? This cannot be undone.')) return
+  try{
+    await api('/api/documents/'+id,'DELETE')
+    showToast('Document deleted','success')
+    await reloadDocs()
+  }catch(e){ showToast(e.message||'Delete failed (requires Admin access)','error') }
+}
+
+async function exportDocsCsv(){
+  try{ await apiDownload('/api/documents/export/csv') }
+  catch(e){ showToast(e.message||'Export failed','error') }
+}
+
 
 async function verifyIwt(id){
   showToast('🔍 Verifying with AI (web search)…','info')
@@ -10683,6 +10902,17 @@ const IMPORT_FIELD_DEFS={
     {key:'status',label:'Status (active / needs_verification / outdated)'},
     {key:'last_verified_date',label:'Last Verified'},
     {key:'notes',label:'Notes'},
+  ],
+  documents:[
+    {key:'title',label:'Title',required:true},
+    {key:'doc_group',label:'Group (blank / signed)'},
+    {key:'category',label:'Category'},
+    {key:'description',label:'Description'},
+    {key:'related_to',label:'Related To (WIB / employer name)'},
+    {key:'link',label:'Link (URL)'},
+    {key:'file_name',label:'File Name'},
+    {key:'uploaded_by',label:'Uploaded By'},
+    {key:'uploaded_date',label:'Uploaded Date'},
   ],
   companies:[
     {key:'company_name',label:'Company Name',required:true},
