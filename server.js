@@ -2517,6 +2517,23 @@ app.post('/api/import/:type', async (req, res) => {
           results.errors.push(`"${label}": ${e.message}`)
         }
       }
+        // ═════════════ DOCUMENT LIBRARY ════════════════════════════════════
+    // Stored in activity_log with action='DOCUMENT'. CSV import is for
+    // link-based documents (files are uploaded one at a time in the UI).
+    } else if (type === 'documents') {
+      for (const row of rows) {
+        const metadata = _buildDocMetadata(row)
+        if (!metadata.title) { results.errors.push('Skipped — no title'); continue }
+        if (!metadata.uploaded_by) metadata.uploaded_by = importUser.full_name || importUser.email || null
+        const label = `${metadata.doc_group === 'signed' ? 'Signed' : 'Blank'}: ${metadata.title}`
+        try {
+          const { error: insErr } = await safeInsertLog({
+            user_id: importUser.id, action: 'DOCUMENT', record_type: 'document', record_id: null, details: label, metadata,
+          })
+          if (insErr) results.errors.push(`"${label}": ${insErr.message}`)
+          else results.created++
+        } catch (e) { results.errors.push(`"${label}": ${e.message}`) }
+      }
     } else {
       return res.status(400).json({ error: `Import not supported for type: ${type}` })
     }
@@ -4410,6 +4427,11 @@ const IMPORT_SCHEMAS = {
     required: [],   // territory OR board_name is enforced per-row in the handler
     optional: ['territory','state','board_name','wib_id','program_name','form_url','revision_date','submission_method','submission_detail','status','last_verified_date','notes'],
   },
+  // documents — imports into activity_log (action='DOCUMENT'); link-based rows
+  documents: {
+    required: [],   // title is enforced per-row in the handler
+    optional: ['title','doc_group','category','description','related_to','link','file_name','uploaded_by','uploaded_date'],
+  },
 }
 
 // POST /api/import/file/:type — multipart file upload (CSV or Excel)
@@ -5756,6 +5778,182 @@ app.delete('/api/iwt-sources/:id', auth, requireAdmin, async (req, res) => {
   try { await safeInsertLog({ user_id: req.user.id, action: 'DELETE_IWT_SOURCE', record_type: 'iwt_app_source', record_id: req.params.id, details: 'Deleted IWT application source' }) } catch (_) {}
   res.json({ success: true })
 })
+
+// ════════════════════════════════════════════════════════════════
+// DOCUMENT LIBRARY  (admin-only)
+//   activity_log rows with action='DOCUMENT'. A document is either an
+//   uploaded file (base64 data URL in metadata.file_data, <=5MB) or an
+//   external link. Two groups: 'blank' (templates/forms) and 'signed'
+//   (executed agreements). List/stats strip the file blob; GET /:id/file
+//   returns it for download.
+// ════════════════════════════════════════════════════════════════
+const DOC_MAX_B64 = 7 * 1024 * 1024  // ~5MB file once base64-encoded
+
+function _buildDocMetadata(body = {}) {
+  const grp = (body.doc_group || body.group || body.Group || '').toString().trim().toLowerCase()
+  return {
+    title:         (body.title || body.Title || body.name || '').toString().trim() || null,
+    doc_group:     (grp === 'signed' ? 'signed' : 'blank'),
+    category:      (body.category || body.Category || 'Other').toString().trim() || 'Other',
+    description:   (body.description || body.Description || '').toString().trim() || null,
+    related_to:    (body.related_to || body['Related To'] || '').toString().trim() || null,
+    link:          (body.link || body.Link || body.url || body.URL || '').toString().trim() || null,
+    file_name:     (body.file_name || body['File Name'] || '').toString().trim() || null,
+    file_type:     (body.file_type || '').toString().trim() || null,
+    file_size:     (body.file_size != null && body.file_size !== '' ? Number(body.file_size) : null),
+    file_data:     (typeof body.file_data === 'string' && body.file_data.startsWith('data:')) ? body.file_data : null,
+    uploaded_by:   (body.uploaded_by || body['Uploaded By'] || '').toString().trim() || null,
+    uploaded_date: (body.uploaded_date || body['Uploaded Date'] || '').toString().trim() || new Date().toISOString().split('T')[0],
+  }
+}
+
+function _readDocMeta(row) {
+  if (!row) return {}
+  let m = row.metadata
+  if (m == null && row.details) { try { m = JSON.parse(row.details) } catch (_) { m = {} } }
+  if (typeof m === 'string')    { try { m = JSON.parse(m) }          catch (_) { m = {} } }
+  return m || {}
+}
+
+// strip the heavy base64 blob for list/stats; keep a has_file flag
+function _docLight(id, created_at, added_by, m) {
+  const out = { id, created_at, added_by, has_file: !!(m && m.file_data) }
+  for (const k in (m || {})) { if (k !== 'file_data') out[k] = m[k] }
+  out.doc_group = (out.doc_group === 'signed') ? 'signed' : 'blank'
+  return out
+}
+
+app.get('/api/documents', auth, requireAdmin, async (req, res) => {
+  const { group, category, search, limit = 2000 } = req.query
+  try {
+    const { data, error } = await supabase
+      .from('activity_log')
+      .select('*, user:user_profiles!user_id(full_name,email)')
+      .eq('action', 'DOCUMENT')
+      .order('created_at', { ascending: false })
+      .limit(Math.min(+limit, 5000))
+    if (error) return res.status(400).json({ error: error.message })
+    let rows = (data || []).map(r => _docLight(r.id, r.created_at, r.user?.full_name || r.user?.email || null, _readDocMeta(r)))
+    if (group)    rows = rows.filter(r => (r.doc_group || 'blank') === String(group).toLowerCase())
+    if (category) rows = rows.filter(r => (r.category || '').toLowerCase() === String(category).toLowerCase())
+    if (search) {
+      const s = String(search).toLowerCase()
+      rows = rows.filter(r =>
+        (r.title || '').toLowerCase().includes(s) ||
+        (r.description || '').toLowerCase().includes(s) ||
+        (r.category || '').toLowerCase().includes(s) ||
+        (r.related_to || '').toLowerCase().includes(s) ||
+        (r.file_name || '').toLowerCase().includes(s))
+    }
+    res.json({ data: rows, count: rows.length })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/documents/stats', auth, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('activity_log')
+      .select(global._safeActivityCols ? (global._safeActivityCols + (global._hasMetadata ? ',metadata' : '')) : 'id,action,created_at,metadata,details')
+      .eq('action', 'DOCUMENT')
+      .limit(5000)
+    if (error) return res.status(400).json({ error: error.message })
+    const docs = (data || []).map(_readDocMeta)
+    let blank = 0, signed = 0, withFile = 0, withLink = 0
+    docs.forEach(d => {
+      if ((d.doc_group || 'blank') === 'signed') signed++; else blank++
+      if (d.file_data || d.file_name) withFile++
+      if (d.link) withLink++
+    })
+    res.json({ total: docs.length, blank, signed, with_file: withFile, with_link: withLink })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/documents/:id/file', auth, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('activity_log').select('*').eq('id', req.params.id).eq('action', 'DOCUMENT').single()
+    if (error || !data) return res.status(404).json({ error: 'Document not found' })
+    const m = _readDocMeta(data)
+    if (!m.file_data) return res.status(404).json({ error: 'This document has no uploaded file (it may be a link).' })
+    res.json({ file_name: m.file_name || 'document', file_type: m.file_type || 'application/octet-stream', file_data: m.file_data })
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.get('/api/documents/export/csv', auth, requireAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('activity_log').select('*, user:user_profiles!user_id(full_name,email)')
+      .eq('action', 'DOCUMENT').order('created_at', { ascending: false }).limit(5000)
+    if (error) return res.status(400).json({ error: error.message })
+    const esc = v => { const s = (v == null ? '' : String(v)); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s }
+    const cols = ['Title', 'Group', 'Category', 'Description', 'Related To', 'Link', 'File Name', 'Uploaded By', 'Uploaded Date']
+    const lines = [cols.join(',')]
+    ;(data || []).forEach(r => {
+      const m = _readDocMeta(r)
+      lines.push([
+        m.title, (m.doc_group === 'signed' ? 'Signed' : 'Blank'), m.category, m.description,
+        m.related_to, m.link, m.file_name,
+        m.uploaded_by || r.user?.full_name || r.user?.email || '', m.uploaded_date,
+      ].map(esc).join(','))
+    })
+    res.setHeader('Content-Type', 'text/csv')
+    res.setHeader('Content-Disposition', `attachment; filename="valor-documents-${new Date().toISOString().split('T')[0]}.csv"`)
+    res.send(lines.join('\n'))
+  } catch (e) { res.status(500).json({ error: e.message }) }
+})
+
+app.post('/api/documents', auth, requireAdmin, async (req, res) => {
+  const metadata = _buildDocMetadata(req.body || {})
+  if (!metadata.title) return res.status(400).json({ error: 'Document title is required' })
+  if (!metadata.file_data && !metadata.link) return res.status(400).json({ error: 'Attach a file or paste a link' })
+  if (metadata.file_data && metadata.file_data.length > DOC_MAX_B64) {
+    return res.status(413).json({ error: 'File is too large (max ~5MB). For larger files, paste a link (e.g. Google Drive) instead.' })
+  }
+  if (!metadata.uploaded_by) metadata.uploaded_by = req.user.full_name || req.user.email || null
+  const label = `${metadata.doc_group === 'signed' ? 'Signed' : 'Blank'}: ${metadata.title}`
+  try {
+    const { data, error } = await safeInsertLog({
+      user_id: req.user.id, action: 'DOCUMENT', record_type: 'document', record_id: null, details: label, metadata,
+    })
+    if (error) return res.status(400).json({ error: error.message })
+    const { file_data, ...light } = metadata
+    res.json({ id: data?.id || null, has_file: !!file_data, ...light, created_at: (data && data.created_at) || new Date().toISOString() })
+  } catch (e) { res.status(400).json({ error: e.message }) }
+})
+
+app.put('/api/documents/:id', auth, requireAdmin, async (req, res) => {
+  const { data: ex } = await supabase
+    .from('activity_log').select('*').eq('id', req.params.id).eq('action', 'DOCUMENT').single()
+  if (!ex) return res.status(404).json({ error: 'Document not found' })
+  const existing = _readDocMeta(ex)
+  const body = { ...req.body }
+  const hasNewFile = typeof body.file_data === 'string' && body.file_data.startsWith('data:')
+  if (!hasNewFile) { delete body.file_data; delete body.file_name; delete body.file_type; delete body.file_size }
+  // merge: existing.file_data (a data: URL) survives when no new file is sent
+  const incoming = _buildDocMetadata({ ...existing, ...body })
+  if (incoming.file_data && incoming.file_data.length > DOC_MAX_B64) {
+    return res.status(413).json({ error: 'File is too large (max ~5MB). Use a link instead.' })
+  }
+  const merged = { ...existing, ...incoming, updated_at: new Date().toISOString() }
+  const label = `${merged.doc_group === 'signed' ? 'Signed' : 'Blank'}: ${merged.title || ex.details}`
+  const update = global._hasMetadata
+    ? { metadata: merged, ...(global._detailsColumnMissing ? {} : { details: label }) }
+    : (global._detailsColumnMissing ? {} : { details: JSON.stringify(merged) })
+  const { data, error } = await supabase
+    .from('activity_log').update(update).eq('id', req.params.id).eq('action', 'DOCUMENT').select().single()
+  if (error) return res.status(400).json({ error: error.message })
+  const m = _readDocMeta(data); const { file_data, ...light } = m
+  res.json({ id: data.id, created_at: data.created_at, has_file: !!file_data, ...light })
+})
+
+app.delete('/api/documents/:id', auth, requireAdmin, async (req, res) => {
+  const { error } = await supabase
+    .from('activity_log').delete().eq('id', req.params.id).eq('action', 'DOCUMENT')
+  if (error) return res.status(400).json({ error: error.message })
+  try { await safeInsertLog({ user_id: req.user.id, action: 'DELETE_DOCUMENT', record_type: 'document', record_id: req.params.id, details: 'Deleted document' }) } catch (_) {}
+  res.json({ success: true })
+})
+
 
 
 
