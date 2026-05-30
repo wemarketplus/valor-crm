@@ -2158,6 +2158,7 @@ let _iwtStats = {}
 async function pageIwtLibrary(){
   setTopbar('IWT Application Source Library','',`
     <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-ghost" onclick="importCSV('iwt_sources')">📥 Import</button>
       <button class="btn btn-ghost" onclick="exportIwtCsv()">📤 Export CSV</button>
       <button class="btn btn-primary" onclick="openIwtModal()">+ Add Source</button>
     </div>`)
@@ -10586,6 +10587,19 @@ function addAircallNote(recordId='',recordType=''){
    IMPORT CSV — Full Field Mapping
 ═══════════════════════════════════════════════════ */
 const IMPORT_FIELD_DEFS={
+  iwt_sources:[
+    {key:'territory',label:'Territory'},
+    {key:'state',label:'State (2-letter)'},
+    {key:'board_name',label:'Board Name / Administering Body'},
+    {key:'program_name',label:'Program Name'},
+    {key:'form_url',label:'Form URL (link to blank application)'},
+    {key:'revision_date',label:'Revision Date'},
+    {key:'submission_method',label:'Submission Method (Email / Portal / Mail)'},
+    {key:'submission_detail',label:'Submission Detail (email / URL / contact)'},
+    {key:'status',label:'Status (active / needs_verification / outdated)'},
+    {key:'last_verified_date',label:'Last Verified'},
+    {key:'notes',label:'Notes'},
+  ],
   companies:[
     {key:'company_name',label:'Company Name',required:true},
     {key:'status',label:'Status (prospect/contacted/qualified/active_client/churned/dnc)'},
@@ -10735,6 +10749,7 @@ function importCSV(type){
   window._importFieldMap={}
   const fieldDefs=IMPORT_FIELD_DEFS[type]||[]
   const typeNotes={
+    iwt_sources:'Each row = one territory\u2019s IWT application source. Columns: Territory, State, Board Name, Program Name, Form URL, Revision Date, Submission Method, Submission Detail, Status, Notes. Either Territory or Board Name is required.',
     companies:'Auto-detects column names. Supports all fields including address, call priority, contact type, tags, AI data, and relationship data.',
     wibs:'Required: WIB Name. Imports email, phone, status, call priority, short name, contacts, and all other fields.',
     locations:'Required: Location Name + State. Supports parent company linking by name.',
