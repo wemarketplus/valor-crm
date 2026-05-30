@@ -1209,7 +1209,7 @@ tr:hover .row-actions{opacity:1}
 // Build marker — check this in the browser console (F12) to confirm which
 // version is deployed. If you don't see this exact string, the new file is
 // not live yet (hard-refresh with Ctrl+Shift+R or check the Render deploy).
-window.VALOR_BUILD = 'task-email-fixes-v12'
+window.VALOR_BUILD = 'territory-companies+backbtn+30min-timer+ai-states-v6'
 console.log('Valor CRM build:', window.VALOR_BUILD)
 let token = localStorage.getItem('valor_token') || null
 let currentUser = null
@@ -1498,12 +1498,9 @@ function closeAllIE(){
 
 /* ─── STATUS HELPERS ─── */
 function wibStatusPill(s){
-  // Maps include both the real DB enum values (no_reachout_complete,
-  // pending_employer, stop_applications) and legacy frontend values that may
-  // still appear in cached data, so pills render correctly either way.
-  const m={funding_available:'p-green',follow_up_needed:'p-amber',funding_not_available:'p-red',no_reachout_complete:'p-gray',no_reachout_completed:'p-gray',pending_employer:'p-blue',stop_applications:'p-red',network_member:'p-teal',contacted:'p-blue',not_contacted:'p-gray'}
-  const l={funding_available:'Funding Available',follow_up_needed:'Follow Up Needed',funding_not_available:'Funding Not Available',no_reachout_complete:'No Reachout Complete',no_reachout_completed:'No Reachout Complete',pending_employer:'Pending Employer',stop_applications:'Stop Applications',network_member:'Network Member',contacted:'Contacted',not_contacted:'Not Contacted'}
-  const d={funding_available:'d-green',follow_up_needed:'d-amber',funding_not_available:'d-red',no_reachout_complete:'d-gray',no_reachout_completed:'d-gray',pending_employer:'d-blue',stop_applications:'d-red',network_member:'d-teal',contacted:'d-blue',not_contacted:'d-gray'}
+  const m={funding_available:'p-green',follow_up_needed:'p-amber',funding_not_available:'p-red',no_reachout_completed:'p-gray',network_member:'p-teal',contacted:'p-blue',not_contacted:'p-gray'}
+  const l={funding_available:'Funding Available - Have',follow_up_needed:'Follow Up Needed',funding_not_available:'Funding Not Available',no_reachout_completed:'No Reachout Completed',network_member:'Network Member',contacted:'Contacted',not_contacted:'Not Contacted'}
+  const d={funding_available:'d-green',follow_up_needed:'d-amber',funding_not_available:'d-red',no_reachout_completed:'d-gray',network_member:'d-teal',contacted:'d-blue',not_contacted:'d-gray'}
   return`<span class="pill ${m[s]||'p-gray'}"><span class="sdot ${d[s]||'d-gray'}"></span>${l[s]||s||'—'}</span>`
 }
 function companyStatusPill(s){
@@ -1814,6 +1811,7 @@ function renderApp(){
         ${sbi('funding','💰','Funding Opportuniti...')}
         ${sbi('applications','📋','Applications')}
         ${sbi('territories','🗺','WIB Territories')}
+        ${sbi('iwtlibrary','📑','IWT Library')}
         ${isAdmin?`
         <div class="sb-divider"></div>
         <div class="sb-section">Admin</div>
@@ -2134,6 +2132,7 @@ async function loadPage(page){
     else if(page==='grants')await pageGrants()
     else if(page==='payments')await pagePayments()
     else if(page==='training')await pageTraining()
+    else if(page==='iwtlibrary')await pageIwtLibrary()
     else if(page==='notifications')pageNotifications()
     else if(page==='sequences')pageSequences()
     else if(page==='workflows')pageWorkflows()
@@ -2148,6 +2147,206 @@ async function loadPage(page){
 /* ═══════════════════════════════════════════════════
    DASHBOARD
 ═══════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════
+   IWT APPLICATION SOURCE LIBRARY
+   Per territory: board(s), official blank IWT/CT application link,
+   form revision date, and how it's submitted. Backed by /api/iwt-sources.
+═══════════════════════════════════════════════════ */
+let _iwtAll = []
+let _iwtStats = {}
+
+async function pageIwtLibrary(){
+  setTopbar('IWT Application Source Library','',`
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="btn btn-ghost" onclick="exportIwtCsv()">📤 Export CSV</button>
+      <button class="btn btn-primary" onclick="openIwtModal()">+ Add Source</button>
+    </div>`)
+  document.getElementById('page-area').innerHTML='<div class="loading">⏳ Loading IWT application sources...</div>'
+  try{
+    await reloadIwt()
+  }catch(e){
+    document.getElementById('page-area').innerHTML=`<div class="alert alert-error" style="margin:20px">Failed: ${escHtml(e.message)}</div>`
+  }
+}
+
+async function reloadIwt(){
+  const [list,stats]=await Promise.all([
+    api('/api/iwt-sources?limit=2000'),
+    api('/api/iwt-sources/stats').catch(()=>({}))
+  ])
+  _iwtAll=list.data||[]
+  _iwtStats=stats||{}
+  renderIwtShell()
+  renderIwtTable()
+}
+
+function _iwtPill(st){
+  st=st||'active'
+  if(st==='active') return '<span class="pill pill-green">active</span>'
+  if(st==='needs_verification') return '<span class="pill" style="background:#fff3da;color:#b6862a">needs verification</span>'
+  return '<span class="pill pill-gray">'+escHtml(st.replace(/_/g,' '))+'</span>'
+}
+
+function renderIwtShell(){
+  const pa=document.getElementById('page-area')
+  const s=_iwtStats
+  const cards=[
+    {label:'Total Sources',val:(s.total!=null?s.total:_iwtAll.length),icon:'📑'},
+    {label:'Active',val:(s.active!=null?s.active:''),icon:'✅',color:'var(--green-t)'},
+    {label:'Need Verification',val:(s.needs_verification!=null?s.needs_verification:''),icon:'⚠️'},
+    {label:'Territories',val:(s.territories_covered!=null?s.territories_covered:''),icon:'🗺'},
+    {label:'With Form Link',val:(s.with_form_link!=null?s.with_form_link:''),icon:'🔗'}
+  ]
+  pa.innerHTML=`
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px">
+    ${cards.map(c=>`<div style="background:var(--bg2);border:0.5px solid var(--border1);border-radius:10px;padding:12px 14px">
+      <div style="font-size:18px;margin-bottom:6px">${c.icon}</div>
+      <div style="font-size:22px;font-weight:600;color:${c.color||'var(--text1)'}">${c.val}</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:2px">${c.label}</div>
+    </div>`).join('')}
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+    <input id="iwt-f-search" class="form-input" style="flex:2;min-width:200px;font-size:13px" placeholder="Search board, territory, program, notes...">
+    <input id="iwt-f-territory" class="form-input" style="flex:1;min-width:140px;font-size:13px" placeholder="Filter by territory">
+    <input id="iwt-f-state" class="form-input" maxlength="2" style="width:90px;font-size:13px" placeholder="State">
+    <select id="iwt-f-status" class="form-input" style="width:180px;font-size:13px">
+      <option value="">All statuses</option>
+      <option value="active">Active</option>
+      <option value="needs_verification">Needs verification</option>
+      <option value="outdated">Outdated</option>
+    </select>
+  </div>
+  <div id="iwt-table-wrap"></div>`
+  ;['iwt-f-search','iwt-f-territory','iwt-f-state'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.addEventListener('input',renderIwtTable)
+  })
+  const ss=document.getElementById('iwt-f-status'); if(ss) ss.addEventListener('change',renderIwtTable)
+}
+
+function renderIwtTable(){
+  const wrap=document.getElementById('iwt-table-wrap'); if(!wrap) return
+  const q=(document.getElementById('iwt-f-search')||{}).value||''
+  const ft=((document.getElementById('iwt-f-territory')||{}).value||'').toLowerCase().trim()
+  const fs=((document.getElementById('iwt-f-state')||{}).value||'').toUpperCase().trim()
+  const fst=(document.getElementById('iwt-f-status')||{}).value||''
+  const qq=q.toLowerCase().trim()
+  const rows=_iwtAll.filter(r=>{
+    if(fst && (r.status||'active')!==fst) return false
+    if(fs && (r.state||'').toUpperCase()!==fs) return false
+    if(ft && (r.territory||'').toLowerCase().indexOf(ft)===-1) return false
+    if(qq){
+      const hay=((r.board_name||'')+' '+(r.territory||'')+' '+(r.program_name||'')+' '+(r.notes||'')).toLowerCase()
+      if(hay.indexOf(qq)===-1) return false
+    }
+    return true
+  })
+  if(rows.length===0){
+    wrap.innerHTML=`<div class="empty-state">
+      <div class="empty-icon">📑</div>
+      <div class="empty-text">${_iwtAll.length?'No sources match your filters':'No IWT application sources yet'}</div>
+      <div class="empty-sub">For each territory, capture the board(s), the official blank IWT/CT application link, the form's revision date, and how it's submitted.</div>
+      ${_iwtAll.length?'':'<button class="btn btn-primary" onclick="openIwtModal()" style="margin-top:12px">+ Add Source</button>'}
+    </div>`
+    return
+  }
+  wrap.innerHTML=`
+  <div style="background:var(--bg1);border:0.5px solid var(--border1);border-radius:10px;overflow:hidden">
+    <table class="data-table">
+      <thead><tr>
+        <th>Territory / Board</th><th>State</th><th>Program</th>
+        <th>Blank Application Form</th><th>Revision</th><th>How It's Submitted</th>
+        <th>Status</th><th style="width:120px;text-align:right">Actions</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r=>{
+          const sub=(r.submission_method||'')+(r.submission_detail?' — '+r.submission_detail:'')
+          return `<tr>
+            <td><div style="font-weight:500;font-size:13px">${escHtml(r.territory||'—')}</div>
+              ${r.board_name?`<div class="cell-dim" style="font-size:11px">${escHtml(r.board_name)}</div>`:''}</td>
+            <td class="cell-dim">${escHtml(r.state||'—')}</td>
+            <td class="cell-dim" style="font-size:12px">${escHtml(r.program_name||'—')}</td>
+            <td>${r.form_url?`<a href="${escHtml(r.form_url)}" target="_blank" class="fv-link" style="font-size:11px" onclick="event.stopPropagation()">🔗 Open form</a>`:'<span class="cell-dim">—</span>'}</td>
+            <td class="cell-dim" style="font-size:12px">${escHtml(r.revision_date||'—')}</td>
+            <td class="cell-dim" style="font-size:11.5px;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${escHtml(sub)}">${escHtml(sub||'—')}</td>
+            <td>${_iwtPill(r.status)}</td>
+            <td style="text-align:right;white-space:nowrap">
+              <button class="btn btn-xs" onclick="openIwtModal('${r.id}')">Edit</button>
+              <button class="btn btn-xs" onclick="deleteIwt('${r.id}')">Delete</button>
+            </td>
+          </tr>`
+        }).join('')}
+      </tbody>
+    </table>
+  </div>`
+}
+
+function openIwtModal(id){
+  const r = id ? _iwtAll.find(x=>x.id===id) : null
+  const v=(k)=>r?escHtml(r[k]||''):''
+  const sel=(k,val)=>(r&&r[k]===val)?' selected':''
+  const hd=(t)=>`<div style="font-size:11px;font-weight:600;color:var(--gd2);text-transform:uppercase;letter-spacing:.5px;margin-top:4px">${t}</div>`
+  const body=`
+  <div style="display:flex;flex-direction:column;gap:12px">
+    ${hd('Territory & Board')}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label class="form-label">Territory</label><input id="iwt-territory" class="form-input" style="font-size:13px" placeholder="e.g. North Central Texas" value="${v('territory')}"></div>
+      <div><label class="form-label">State</label><input id="iwt-state" class="form-input" maxlength="2" style="font-size:13px" placeholder="TX" value="${v('state')}"></div>
+    </div>
+    <div><label class="form-label">Board(s) that own the form</label><input id="iwt-board" class="form-input" style="font-size:13px" placeholder="e.g. Workforce Solutions Greater Dallas" value="${v('board_name')}"></div>
+    <div><label class="form-label">Program name</label><input id="iwt-program" class="form-input" style="font-size:13px" placeholder="e.g. TWC Skills Development Fund / Customized Training" value="${v('program_name')}"></div>
+    ${hd('The Application')}
+    <div><label class="form-label">Official link to current blank IWT/CT application</label><input id="iwt-form-url" class="form-input" style="font-size:13px" placeholder="https://..." value="${v('form_url')}"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label class="form-label">Form revision date</label><input id="iwt-revision" class="form-input" style="font-size:13px" placeholder="e.g. Rev. 03/2025" value="${v('revision_date')}"></div>
+      <div><label class="form-label">Status</label><select id="iwt-status" class="form-input" style="font-size:13px">
+        <option value="active"${sel('status','active')}>Active</option>
+        <option value="needs_verification"${sel('status','needs_verification')}>Needs verification</option>
+        <option value="outdated"${sel('status','outdated')}>Outdated</option>
+      </select></div>
+    </div>
+    ${hd("How It's Submitted")}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label class="form-label">Submission method</label><input id="iwt-method" class="form-input" style="font-size:13px" placeholder="Email / Portal / Mail" value="${v('submission_method')}"></div>
+      <div><label class="form-label">Submission detail</label><input id="iwt-detail" class="form-input" style="font-size:13px" placeholder="grants@board.org or portal URL" value="${v('submission_detail')}"></div>
+    </div>
+    <div><label class="form-label">Notes</label><textarea id="iwt-notes" class="form-input" rows="2" style="font-size:13px;resize:vertical" placeholder="Eligibility quirks, deadlines, contact, etc.">${v('notes')}</textarea></div>
+  </div>`
+  showModal(id?'Edit IWT Application Source':'+ Add IWT Application Source', body, ()=>saveIwt(id), '', id?'Save Changes':'Add Source')
+}
+
+async function saveIwt(id){
+  const g=(x)=>{const el=document.getElementById(x);return el&&el.value?el.value.trim():''}
+  const payload={
+    territory:g('iwt-territory'), state:g('iwt-state').toUpperCase(),
+    board_name:g('iwt-board'), program_name:g('iwt-program'),
+    form_url:g('iwt-form-url'), revision_date:g('iwt-revision'),
+    submission_method:g('iwt-method'), submission_detail:g('iwt-detail'),
+    status:(document.getElementById('iwt-status')||{}).value||'active',
+    notes:g('iwt-notes')
+  }
+  if(!payload.territory && !payload.board_name){ showToast('Enter a territory or a board name','error'); return false }
+  try{
+    if(id) await api('/api/iwt-sources/'+id,'PUT',payload)
+    else   await api('/api/iwt-sources','POST',payload)
+    showToast(id?'Source updated':'Source added','success')
+    await reloadIwt()
+  }catch(e){ showToast(e.message||'Save failed','error'); return false }
+}
+
+async function deleteIwt(id){
+  if(!confirm('Delete this IWT application source? This cannot be undone.')) return
+  try{
+    await api('/api/iwt-sources/'+id,'DELETE')
+    showToast('Source deleted','success')
+    await reloadIwt()
+  }catch(e){ showToast(e.message||'Delete failed (requires Admin access)','error') }
+}
+
+async function exportIwtCsv(){
+  try{ await apiDownload('/api/iwt-sources/export/csv') }
+  catch(e){ showToast(e.message||'Export failed','error') }
+}
+
 async function pageDashboard(){
   const [rev,apps,wibs]=await Promise.all([
     api('/api/revenue/dashboard').catch(()=>({})),
@@ -2452,7 +2651,7 @@ function renderWibTable(wibs){
   if(q)d=d.filter(w=>(w.wib_name+' '+(w.state||'')+' '+(w.wib_email||'')+' '+(w.short_name||'')).toLowerCase().includes(q.toLowerCase()))
   if(st)d=d.filter(w=>w.status===st)
   if(stateF)d=d.filter(w=>w.state===stateF)
-  if(typeF)d=d.filter(w=>(w.wib_type||'').toLowerCase()===typeF.toLowerCase())
+  if(typeF)d=d.filter(w=>w.wib_type===typeF)
 
   document.getElementById('page-area').innerHTML=`
   <div class="att-wrap">
@@ -2568,10 +2767,9 @@ function showWibFilterModal(){
     <div class="form-row form-full"><div class="form-group"><div class="form-label">WIB Type</div>
       <select id="wf-type">
         <option value="">All types</option>
-        <option value="local"${(window._wibFilters.type==='local'||window._wibFilters.type==='Local')?' selected':''}>Local</option>
-        <option value="regional"${(window._wibFilters.type==='regional'||window._wibFilters.type==='Regional')?' selected':''}>Regional</option>
-        <option value="state"${(window._wibFilters.type==='state'||window._wibFilters.type==='State')?' selected':''}>State</option>
-        <option value="tribal"${(window._wibFilters.type==='tribal'||window._wibFilters.type==='Tribal')?' selected':''}>Tribal</option>
+        <option value="Local"${window._wibFilters.type==='Local'?' selected':''}>Local</option>
+        <option value="Regional"${window._wibFilters.type==='Regional'?' selected':''}>Regional</option>
+        <option value="State"${window._wibFilters.type==='State'?' selected':''}>State</option>
       </select>
     </div></div>`,
   ()=>{
@@ -2690,13 +2888,14 @@ function renderWibProfile(){
           <div class="profile-section-title">Funding Details</div>
           <div class="field-row"><span class="field-key">Status</span><span class="field-val">
             <select class="form-input" style="padding:4px 8px;font-size:11.5px;height:auto;min-width:200px" onchange="updateWibStatus('${w.id}', this.value)">
-              <option value="no_reachout_complete"${(w.status==='no_reachout_complete'||w.status==='no_reachout_completed'||w.status==='not_contacted')?' selected':''}>No Reachout Complete</option>
+              <option value="not_contacted"${w.status==='not_contacted'?' selected':''}>Not Contacted</option>
+              <option value="no_reachout_completed"${w.status==='no_reachout_completed'?' selected':''}>No Reachout Completed</option>
+              <option value="contacted"${w.status==='contacted'?' selected':''}>Contacted</option>
               <option value="follow_up_needed"${w.status==='follow_up_needed'?' selected':''}>Follow Up Needed</option>
-              <option value="pending_employer"${w.status==='pending_employer'?' selected':''}>Pending Employer</option>
               <option value="funding_available"${w.status==='funding_available'?' selected':''}>Funding Available</option>
               <option value="funding_not_available"${w.status==='funding_not_available'?' selected':''}>Funding Not Available</option>
-              <option value="stop_applications"${w.status==='stop_applications'?' selected':''}>Stop Applications</option>
-              ${!['no_reachout_complete','follow_up_needed','pending_employer','funding_available','funding_not_available','stop_applications','no_reachout_completed','not_contacted','contacted','network_member'].includes(w.status) && w.status ? `<option value="${escAttr(w.status)}" selected>${escHtml(w.status.replace(/_/g,' '))}</option>` : ''}
+              <option value="network_member"${w.status==='network_member'?' selected':''}>Network Member</option>
+              ${!['not_contacted','no_reachout_completed','contacted','follow_up_needed','funding_available','funding_not_available','network_member'].includes(w.status) && w.status ? `<option value="${escAttr(w.status)}" selected>${escHtml(w.status.replace(/_/g,' '))}</option>` : ''}
             </select>
             <span style="margin-left:8px">${wibStatusPill(w.status)}</span>
           </span></div>
@@ -2832,7 +3031,7 @@ function renderWibProfile(){
     <div class="att-wrap">
       <div class="att-toolbar">
         <div class="att-toolbar-l"><div class="card-title">👥 Contacts › Name</div></div>
-        <button class="btn btn-sm btn-primary" onclick="openWibModal(currentWib);setTimeout(()=>{var el=document.getElementById('wib-contacts-rows');if(el)el.scrollIntoView({behavior:'smooth',block:'center'})},200)">+ Add Contact</button>
+        <button class="btn btn-sm btn-primary" onclick="showToast('Add contact via Edit WIB modal','info')">+ Add Contact</button>
       </div>
       <div id="wib-contacts-list"><div class="loading">⏳ Loading...</div></div>
     </div>`
@@ -3185,16 +3384,6 @@ async function deleteNote(id){
 // user navigates back to the list view, the new status is reflected.
 async function updateWibStatus(id, newStatus){
   if(!newStatus) return
-  // Safety: remap any legacy values to the actual DB enum values verified
-  // via pg_enum. The enum is: no_reachout_complete, follow_up_needed,
-  // pending_employer, funding_available, funding_not_available, stop_applications.
-  const _legacyMap = {
-    'not_contacted':'no_reachout_complete',
-    'no_reachout_completed':'no_reachout_complete',  // note: no trailing 'd' in DB
-    'contacted':'pending_employer',
-    'network_member':'funding_available',
-  }
-  if(_legacyMap[newStatus]) newStatus = _legacyMap[newStatus]
   try{
     const updated = await api('/api/wibs/'+id,'PUT',{ status:newStatus })
     if(currentWib && currentWib.id===id){
@@ -3376,50 +3565,8 @@ async function runDeduplication() {
   })
 }
 
-// ─── WIB Contact-row helpers (used by openWibModal) ──────────────────────────
-function _wibContactRowHtml(c, i){
-  c = c || {}
-  return `<div class="wib-contact-row" data-idx="${i}" style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:6px;margin-bottom:6px;align-items:center">
-    <input class="wib-c-name"  placeholder="Name"  value="${escAttr(c.name||'')}" style="font-size:12px;padding:6px 8px;border:.5px solid var(--border1);border-radius:6px">
-    <input class="wib-c-title" placeholder="Title" value="${escAttr(c.title||'')}" style="font-size:12px;padding:6px 8px;border:.5px solid var(--border1);border-radius:6px">
-    <input class="wib-c-email" placeholder="Email" value="${escAttr(c.email||'')}" type="email" style="font-size:12px;padding:6px 8px;border:.5px solid var(--border1);border-radius:6px">
-    <input class="wib-c-phone" placeholder="Phone" value="${escAttr(c.phone||'')}" type="tel" style="font-size:12px;padding:6px 8px;border:.5px solid var(--border1);border-radius:6px">
-    <button type="button" onclick="this.closest('.wib-contact-row').remove()" style="background:var(--red-bg);color:var(--red-t);border:.5px solid var(--red);border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:14px" title="Remove">✕</button>
-  </div>`
-}
-function wibAddContactRow(){
-  const wrap = document.getElementById('wib-contacts-rows')
-  if(!wrap) return
-  const empty = document.getElementById('wib-contacts-empty')
-  if(empty) empty.remove()
-  const existing = wrap.querySelectorAll('.wib-contact-row').length
-  wrap.insertAdjacentHTML('beforeend', _wibContactRowHtml({}, existing))
-  // Focus the new row's Name input
-  const rows = wrap.querySelectorAll('.wib-contact-row')
-  const last = rows[rows.length-1]
-  last?.querySelector('.wib-c-name')?.focus()
-}
-function _collectWibContactRows(){
-  const rows = document.querySelectorAll('#wib-contacts-rows .wib-contact-row')
-  const out = []
-  rows.forEach(r=>{
-    const name  = r.querySelector('.wib-c-name')?.value?.trim()  || ''
-    const title = r.querySelector('.wib-c-title')?.value?.trim() || ''
-    const email = r.querySelector('.wib-c-email')?.value?.trim() || ''
-    const phone = r.querySelector('.wib-c-phone')?.value?.trim() || ''
-    // Only keep rows that have at least one populated field
-    if(name||title||email||phone) out.push({name,title,email,phone})
-  })
-  return out
-}
-
 function openWibModal(wib=null){
-  // The wib_status DB enum accepts exactly these 6 values:
-  //   no_reachout_complete, follow_up_needed, pending_employer,
-  //   funding_available, funding_not_available, stop_applications
-  // (Verified via pg_enum on 2026-05-29.) Any other value causes the save
-  // to fail with "invalid input value for enum wib_status".
-  const statusOpts=['no_reachout_complete','follow_up_needed','pending_employer','funding_available','funding_not_available','stop_applications'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
+  const statusOpts=['not_contacted','contacted','funding_available','follow_up_needed','funding_not_available','network_member'].map(s=>`<option value="${s}"${wib?.status===s?' selected':''}>${s.replace(/_/g,' ')}</option>`).join('')
   const stateList='AL,AK,AZ,AR,CA,CO,CT,DE,FL,GA,HI,ID,IL,IN,IA,KS,KY,LA,ME,MD,MA,MI,MN,MS,MO,MT,NE,NV,NH,NJ,NM,NY,NC,ND,OH,OK,OR,PA,RI,SC,SD,TN,TX,UT,VT,VA,WA,WV,WI,WY,DC'.split(',')
   const stateOpts=stateList.map(s=>`<option value="${s}"${wib?.state===s?' selected':''}>${s}</option>`).join('')
   showModal(wib?`Edit: ${escHtml(wib.wib_name)}`:'New Workforce Board',`
@@ -3431,58 +3578,19 @@ function openWibModal(wib=null){
     <div class="form-group"><label class="form-label">Phone</label><input id="wib-phone" type="tel" value="${wib?.wib_phone||''}"></div></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Website URL</label><input id="wib-url" value="${wib?.source_url||''}" placeholder="https://"></div>
     <div class="form-group"><label class="form-label">WIB Type</label><select id="wib-type">
-      <option value="local"${(wib?.wib_type==='local'||wib?.wib_type==='Local')?' selected':''}>Local</option>
-      <option value="regional"${(wib?.wib_type==='regional'||wib?.wib_type==='Regional')?' selected':''}>Regional</option>
-      <option value="state"${(wib?.wib_type==='state'||wib?.wib_type==='State')?' selected':''}>State</option>
-      <option value="tribal"${(wib?.wib_type==='tribal'||wib?.wib_type==='Tribal')?' selected':''}>Tribal</option>
+      <option value="Local"${wib?.wib_type==='Local'?' selected':''}>Local</option>
+      <option value="Regional"${wib?.wib_type==='Regional'?' selected':''}>Regional</option>
+      <option value="State"${wib?.wib_type==='State'?' selected':''}>State</option>
     </select></div></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Max Award/EIN ($)</label><input id="wib-max" type="number" value="${wib?.max_award_per_ein||''}"></div>
     <div class="form-group"><label class="form-label">Employer Match (%)</label><input id="wib-match" type="number" value="${wib?.employer_match_pct||''}"></div></div>
     <div class="form-row"><div class="form-group"><label class="form-label">Call Priority Score</label><input id="wib-priority" type="number" value="${wib?.call_priority||''}"><div class="form-hint">Higher = more urgent</div></div>
     <div class="form-group"><label class="form-label">Owner</label><input id="wib-owner" value="${wib?.owner||''}"></div></div>
     <div class="form-row form-full"><div class="form-group"><label class="form-label">Application Process Notes</label><textarea id="wib-notes" rows="3">${escHtml(wib?.notes||'')}</textarea></div></div>
-    <label class="chk-row"><input type="checkbox" id="wib-iwt"${wib?.iwt_program_active?' checked':''}> IWT Program Active</label>
-    <div class="form-row form-full" style="margin-top:14px">
-      <div class="form-group" style="border-top:.5px solid var(--border1);padding-top:12px">
-        <label class="form-label" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <span>👥 Additional Contacts <span style="font-weight:400;color:var(--text3);font-size:11px">(separate from the main business phone/email above)</span></span>
-          <button type="button" class="btn btn-xs btn-primary" onclick="wibAddContactRow()">+ Add Contact</button>
-        </label>
-        <div id="wib-contacts-rows">${(()=>{
-          const cs = (wib&&Array.isArray(wib.contacts))?wib.contacts:[]
-          if(!cs.length) return '<div id="wib-contacts-empty" style="font-size:11.5px;color:var(--text3);padding:8px 0">No additional contacts yet. Click "+ Add Contact" to add one.</div>'
-          return cs.map((c,i)=>_wibContactRowHtml(c,i)).join('')
-        })()}</div>
-      </div>
-    </div>`,
+    <label class="chk-row"><input type="checkbox" id="wib-iwt"${wib?.iwt_program_active?' checked':''}> IWT Program Active</label>`,
   async()=>{
-    let newStatus = document.getElementById('wib-status')?.value || 'no_reachout_complete'
-    // Safety: remap legacy frontend values to the actual DB enum values.
-    // Verified via pg_enum: no_reachout_complete (no trailing d), follow_up_needed,
-    // pending_employer, funding_available, funding_not_available, stop_applications.
-    const _legacyMap = {
-      'not_contacted':'no_reachout_complete',
-      'no_reachout_completed':'no_reachout_complete',
-      'contacted':'pending_employer',
-      'network_member':'funding_available',
-    }
-    if(_legacyMap[newStatus]) newStatus = _legacyMap[newStatus]
+    const newStatus = document.getElementById('wib-status')?.value || 'not_contacted'
     const oldStatus = wib?.status || null
-    // BULLETPROOF: enforce DB enum whitelists on the final status AND type values,
-    // no matter what came from the dropdowns, the wib record, or any other source.
-    // Both enums were verified via pg_enum.
-    const _VALID_WIB_STATUS = ['no_reachout_complete','follow_up_needed','pending_employer','funding_available','funding_not_available','stop_applications']
-    if(!_VALID_WIB_STATUS.includes(newStatus)){
-      console.warn('[wib-save] Invalid status "'+newStatus+'" — forcing to no_reachout_complete')
-      newStatus = 'no_reachout_complete'
-    }
-    // wib_type enum: state, regional, local, tribal (all lowercase in DB)
-    const _VALID_WIB_TYPE = ['state','regional','local','tribal']
-    let newType = (document.getElementById('wib-type')?.value || 'local').toLowerCase()
-    if(!_VALID_WIB_TYPE.includes(newType)){
-      console.warn('[wib-save] Invalid type "'+newType+'" — forcing to local')
-      newType = 'local'
-    }
     const payload={
       wib_name:document.getElementById('wib-name').value.trim(),
       short_name:document.getElementById('wib-short')?.value||null,
@@ -3491,14 +3599,13 @@ function openWibModal(wib=null){
       wib_email:document.getElementById('wib-email')?.value||null,
       wib_phone:document.getElementById('wib-phone')?.value||null,
       source_url:document.getElementById('wib-url')?.value||null,
-      wib_type:newType,
+      wib_type:document.getElementById('wib-type')?.value||'Local',
       max_award_per_ein:document.getElementById('wib-max')?.value||null,
       employer_match_pct:document.getElementById('wib-match')?.value||null,
       call_priority:document.getElementById('wib-priority')?.value||null,
       owner:document.getElementById('wib-owner')?.value||null,
       notes:document.getElementById('wib-notes')?.value||null,
-      iwt_program_active:document.getElementById('wib-iwt')?.checked||false,
-      contacts:_collectWibContactRows()
+      iwt_program_active:document.getElementById('wib-iwt')?.checked||false
     }
     if(!payload.wib_name){showToast('WIB name is required','error');return false}
     try{
@@ -3520,15 +3627,7 @@ function openWibModal(wib=null){
           console.warn('[wib-status] auto-note failed:', err?.message))
       }
 
-      if(currentPage==='wib-profile'&&wib){
-        currentWib={...currentWib,...payload}
-        renderWibProfile()
-        // Also reload the current tab's data, since renderWibProfile only
-        // rebuilds the tab's HTML skeleton (with "Loading..."); loadWibTabData
-        // is what actually populates it. Without this, the user is left
-        // staring at a "Loading..." spinner forever on Contacts/Notes/etc.
-        loadWibTabData(wibTab)
-      }
+      if(currentPage==='wib-profile'&&wib){currentWib={...currentWib,...payload};renderWibProfile()}
       else loadPage('wibs')
     }catch(e){showToast(e.message,'error');return false}
   },'modal-lg')
@@ -10129,81 +10228,6 @@ function openTaskEdit(id){
   })
 }
 
-// ─── TASK ACTION HELPERS ─────────────────────────────────────────────────────
-// These three functions back the onclick handlers on task checkboxes and the
-// Done / Del row-action buttons (pre-existing in HTML, never implemented).
-// They use the same task PUT/DELETE routes that openTaskEdit already uses.
-
-// Mark a task done/undone and refresh whatever view is open. Used by the WIB
-// and Company "Tasks" tab checkbox circles and the task list checkboxes.
-async function toggleTaskDB(id, currentlyDone){
-  try{
-    const newDone = !currentlyDone
-    // Send `done` at the top level AND inside metadata so the server-side
-    // PUT handler accepts it whether it merges by top-level field or by
-    // metadata object.
-    await api('/api/tasks/'+id, 'PUT', { done: newDone, metadata: { done: newDone } })
-    showToast(newDone ? 'Task completed' : 'Task reopened', 'success')
-    // Refresh whichever view is showing
-    if(currentPage === 'tasks') loadPage('tasks')
-    else if(currentPage === 'wib-profile' && currentWib) loadWibTabData(wibTab)
-    else if(currentPage === 'company-profile' && currentCompany) loadCompanyTabData(companyTab)
-    else if(currentPage === 'dashboard') loadPage('dashboard')
-  }catch(e){ showToast(e.message,'error') }
-}
-
-// Tasks-page list view uses a real checkbox via onchange; this wraps the same
-// PUT but takes the desired state directly (since the checkbox already toggled
-// itself in the DOM).
-async function toggleTaskDone(id, isDone){
-  try{
-    await api('/api/tasks/'+id, 'PUT', { done: !!isDone, metadata: { done: !!isDone } })
-    showToast(isDone ? 'Task completed' : 'Task reopened', 'success')
-    if(currentPage === 'tasks'){
-      // Update the cached task in window._tasks and re-render rather than
-      // re-fetching the full list, so the row keeps its place.
-      const t = (window._tasks||[]).find(x => x.id === id)
-      if(t){
-        if(t.metadata && typeof t.metadata === 'object') t.metadata.done = !!isDone
-        else { try{ const p=JSON.parse(t.details||'{}'); p.done=!!isDone; t.details=JSON.stringify(p) }catch(_){} }
-        renderTasksPage(window._tasks)
-      }
-    }
-  }catch(e){ showToast(e.message,'error'); loadPage('tasks') }
-}
-
-// Delete a task. Hard guard so accidental clicks don't wipe a task.
-async function deleteTask(id){
-  if(!confirm('Delete this task? This cannot be undone.')) return
-  try{
-    await api('/api/tasks/'+id, 'DELETE')
-    showToast('Task deleted','success')
-    if(currentPage === 'tasks') loadPage('tasks')
-    else if(currentPage === 'wib-profile' && currentWib) loadWibTabData(wibTab)
-    else if(currentPage === 'company-profile' && currentCompany) loadCompanyTabData(companyTab)
-  }catch(e){ showToast(e.message,'error') }
-}
-
-// ─── EMAILS PAGE TAB SWITCHER ────────────────────────────────────────────────
-// The Drafts / Outbox / Templates tabs are placeholder UI on the Emails page
-// (the email feature is not connected to a real provider yet). This just
-// updates the visual active state when a tab is clicked so the UI feels alive.
-function switchEmailTab(tabKey, btn){
-  // Update active class on sibling tab buttons.
-  const row = btn && btn.parentElement
-  if(row){
-    row.querySelectorAll('.rtab').forEach(b => b.classList.remove('active'))
-    btn.classList.add('active')
-  }
-  // Drafts and Templates currently use the same placeholder body, so just
-  // show an info toast describing what each tab will hold once email is wired.
-  if(tabKey === 'drafts'){
-    showToast('Drafts — connect Gmail or Outlook in Settings → Integrations to enable real drafts','info')
-  } else if(tabKey === 'templates'){
-    showToast('Templates — pre-built outreach templates will appear here','info')
-  }
-}
-
 /* ═══════════════════════════════════════════════════
    NOTES PAGE
 ═══════════════════════════════════════════════════ */
@@ -12865,13 +12889,9 @@ function vcInit() {
   if (_vc.sseSource) return
 
   _vcConnectSSE()
-  // Load users FIRST so the sender-name lookup is populated before messages render.
-  // Otherwise the first render of historical messages can fall back to "Team Member"
-  // or whatever the server attached (which may be a stale name).
-  _vcLoadUsers().then(() => {
-    _vcLoadGlobal()
-    _vcLoadUnreadCounts()
-  })
+  _vcLoadGlobal()
+  _vcLoadUsers()
+  _vcLoadUnreadCounts()
 
   // Heartbeat every 25 s
   _vc.heartbeatInt = setInterval(() => {
@@ -13138,24 +13158,14 @@ function _vcAppendGlobalMsg(msg) {
 }
 
 function _vcMsgHtml(m, isMine) {
-  // Resolve sender display name. The server-side response may sometimes omit
-  // sender_name or contain stale data. Prefer the live user-list lookup by
-  // sender_id when available so each user always shows up as themselves.
-  let senderName = ''
-  if (isMine) {
-    senderName = currentUser?.full_name || currentUser?.email || 'You'
-  } else {
-    const u = (_vc.users || []).find(x => x.id === m.sender_id)
-    senderName = (u && (u.full_name || u.email)) || m.sender_name || 'Team Member'
-  }
-  const color = _vcColor(m.sender_id || senderName)
-  const initials = (senderName || '?').slice(0, 2).toUpperCase()
+  const color = _vcColor(m.sender_id || m.sender_name)
+  const initials = m.sender_initials || (m.sender_name || '?').slice(0, 2).toUpperCase()
   const time = _vcTime(m.created_at)
   return `
   <div class="vc-msg${isMine ? ' mine' : ''}" data-msg-id="${m.id}">
     <div class="vc-av" style="background:${color}">${initials}</div>
     <div class="vc-bubble-wrap">
-      ${!isMine ? `<div class="vc-sender">${escHtml(senderName)}</div>` : ''}
+      ${!isMine ? `<div class="vc-sender">${escHtml(m.sender_name || '')}</div>` : ''}
       <div class="vc-bubble">${escHtml(m.content)}</div>
       <div class="vc-msg-time">${time}</div>
     </div>
@@ -13176,15 +13186,8 @@ async function vcSendGlobal() {
     // Append the sent message immediately so the sender sees it without waiting
     // on the SSE echo. _vcAppendGlobalMsg dedups by message id, so when the SSE
     // echo arrives it will be ignored rather than duplicated.
-    // Explicitly set sender info from currentUser so the displayed name is correct
-    // even if the server response omits sender_name.
     if (msg && msg.id) {
-      const myName = currentUser?.full_name || currentUser?.email || 'You'
-      _vcAppendGlobalMsg({
-        ...msg,
-        sender_id: msg.sender_id || currentUser?.id,
-        sender_name: msg.sender_name || myName,
-      })
+      _vcAppendGlobalMsg({ ...msg, sender_id: msg.sender_id || currentUser?.id })
       _vcScrollBottom('vc-global-msgs')
     }
   } catch (e) {
@@ -13324,14 +13327,8 @@ async function vcSendDM() {
   vcAutoResize(inp)
   try {
     const msg = await api(`/api/dm/${_vc.dmUserId}`, 'POST', { content })
-    // SSE will deliver back; but for sender show immediately.
-    // Explicitly use currentUser's name to avoid blank/wrong sender label.
-    const myName = currentUser?.full_name || currentUser?.email || 'You'
-    _vcAppendDMMsg({
-      ...msg,
-      sender_id: currentUser.id,
-      sender_name: msg.sender_name || myName,
-    })
+    // SSE will deliver back; but for sender show immediately
+    _vcAppendDMMsg({ ...msg, sender_id: currentUser.id })
     _vcScrollBottom('vc-dm-msgs')
   } catch (e) {
     showToast('Failed to send: ' + e.message, 'error')
