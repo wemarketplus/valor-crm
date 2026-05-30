@@ -5631,6 +5631,94 @@ app.put('/api/iwt-sources/:id', auth, requireContributor, async (req, res) => {
   res.json({ id: data.id, created_at: data.created_at, ..._readIwtMeta(data) })
 })
 
+// ─── AI Verify: web-searches to check if an IWT source is still current ───
+app.post('/api/iwt-sources/:id/verify', auth, requireContributor, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not configured. Add it in Render env vars.' })
+
+  const { data: ex } = await supabase
+    .from('activity_log')
+    .select(global._safeActivityCols || 'id,action,created_at')
+    .eq('id', req.params.id)
+    .eq('action', 'IWT_APP_SOURCE')
+    .single()
+  if (!ex) return res.status(404).json({ error: 'IWT source not found' })
+
+  const m = _readIwtMeta(ex)
+  const SYSTEM = 'You are a grant-research assistant verifying whether a U.S. state workforce / incumbent-worker training program is still current. Use web search to check the official source. Return ONLY valid JSON, no other text. Never fabricate; if you cannot confirm, say so.'
+  const userContent = `Verify this incumbent-worker training program against its official source.\n` +
+    `State/Territory: ${m.territory || ''}\nProgram: ${m.program_name || ''}\nAdministering body/board: ${m.board_name || ''}\n` +
+    `Current link on file: ${m.form_url || '(none)'}\nRevision/version on file: ${m.revision_date || '(none)'}\n\n` +
+    `Check: (1) does the program still exist and is it currently open/active? (2) is the link still valid (not dead/moved)? (3) has the application form, revision, or submission method changed?\n` +
+    `Return ONLY this JSON object: {"verdict":"current"|"changed"|"unconfirmed","reason":"one or two sentences","suggested_form_url":"a better/current official URL if the one on file is wrong or dead, else empty string","suggested_revision":"updated revision/version text if changed, else empty string"}`
+
+  let rawText = '', apiErr = null
+  const MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001']
+  for (let mi = 0; mi < MODELS.length; mi++) {
+    try {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: MODELS[mi], max_tokens: 1200, system: SYSTEM,
+          tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+          messages: [{ role: 'user', content: userContent }],
+        }),
+      })
+      const d = await r.json()
+      if (r.status === 529 && mi === 0) { continue }
+      if (!r.ok || d.error) {
+        apiErr = (d.error && d.error.message) || ('HTTP ' + r.status)
+        if (mi === 0 && /tool|web_search|not.*enabled|unsupported/i.test(apiErr)) {
+          const r2 = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+            body: JSON.stringify({ model: MODELS[mi], max_tokens: 1200, system: SYSTEM, messages: [{ role: 'user', content: userContent }] }),
+          })
+          const d2 = await r2.json()
+          if (r2.ok && !d2.error) { rawText = (d2.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n'); apiErr = null; break }
+        }
+        continue
+      }
+      rawText = (d.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n')
+      apiErr = null
+      break
+    } catch (fetchErr) { apiErr = fetchErr.message; continue }
+  }
+  if (apiErr && !rawText) return res.status(502).json({ error: 'AI verify failed: ' + apiErr })
+
+  // Parse the JSON verdict out of the model text
+  let verdict = 'unconfirmed', reason = '', suggested_form_url = '', suggested_revision = ''
+  try {
+    const js = rawText.slice(rawText.indexOf('{'), rawText.lastIndexOf('}') + 1)
+    const p = JSON.parse(js)
+    verdict = ['current', 'changed', 'unconfirmed'].includes(p.verdict) ? p.verdict : 'unconfirmed'
+    reason = (p.reason || '').toString().slice(0, 500)
+    suggested_form_url = (p.suggested_form_url || '').toString().slice(0, 500)
+    suggested_revision = (p.suggested_revision || '').toString().slice(0, 200)
+  } catch (_) {
+    reason = rawText.slice(0, 400) || 'Could not parse AI response.'
+  }
+
+  // Write back: stamp verification, flag status if not current
+  const today = new Date().toISOString().split('T')[0]
+  const ai_verify = { verdict, reason, suggested_form_url, suggested_revision, checked_at: today }
+  const merged = { ...m, ai_verify, last_verified_date: today, updated_at: new Date().toISOString() }
+  if (verdict !== 'current') merged.status = 'needs_verification'
+  const label = merged.territory
+    ? `${merged.territory}${merged.board_name ? ' — ' + merged.board_name : ''}`
+    : (merged.board_name || ex.details)
+  const update = global._hasMetadata
+    ? { metadata: merged, ...(global._detailsColumnMissing ? {} : { details: label }) }
+    : (global._detailsColumnMissing ? {} : { details: JSON.stringify(merged) })
+
+  const { data, error } = await supabase
+    .from('activity_log').update(update)
+    .eq('id', req.params.id).eq('action', 'IWT_APP_SOURCE').select().single()
+  if (error) return res.status(400).json({ error: error.message })
+  res.json({ id: data.id, verdict, reason, suggested_form_url, suggested_revision, ..._readIwtMeta(data) })
+})
+
 app.delete('/api/iwt-sources/:id', auth, requireAdmin, async (req, res) => {
   const { error } = await supabase
     .from('activity_log')
