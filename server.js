@@ -5704,7 +5704,7 @@ app.post('/api/iwt-sources/:id/verify', auth, requireContributor, async (req, re
   const today = new Date().toISOString().split('T')[0]
   const ai_verify = { verdict, reason, suggested_form_url, suggested_revision, checked_at: today }
   const merged = { ...m, ai_verify, last_verified_date: today, updated_at: new Date().toISOString() }
-  if (verdict !== 'current') merged.status = 'needs_verification'
+  merged.status = (verdict === 'current') ? 'active' : 'needs_verification'
   const label = merged.territory
     ? `${merged.territory}${merged.board_name ? ' — ' + merged.board_name : ''}`
     : (merged.board_name || ex.details)
