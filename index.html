@@ -8679,17 +8679,39 @@ async function pageTraining() {
   document.getElementById('page-area').innerHTML = '<div class="loading">⏳ Loading training providers...</div>'
   
   try {
-    const r = await api('/api/training-providers?limit=300')
+    const [r, viewPref] = await Promise.all([
+      api('/api/training-providers?limit=300'),
+      api('/api/me/wib-view').catch(()=>({territories:[]}))
+    ])
     _trainingData = (r.data || []).map(parseLogRow)
+    window._tpMyTerritories = viewPref.territories || []
+    if(window._tpViewMode==null) window._tpViewMode='all'
     renderTrainingPage()
   } catch(e) {
     document.getElementById('page-area').innerHTML = `<div class="alert alert-error" style="margin:20px">Failed: ${escHtml(e.message)}</div>`
   }
 }
 
+window._tpViewMode = 'all'
+window._tpMyTerritories = []
+// "My Trainers" = providers whose State (2-letter) falls inside one of the
+// current user's assigned territories. Reuses the same state normalizer and
+// /api/me/wib-view assignment the Companies/WIBs pages use, so it stays in sync.
+function getTrainingByView(mode){
+  const all = _trainingData || []
+  if(mode!=='my' || !(window._tpMyTerritories||[]).length) return all
+  const allowed = new Set()
+  for(const t of window._tpMyTerritories){ for(const st of (t.states||[])) allowed.add(_coNormState(st)) }
+  if(!allowed.size) return all
+  return all.filter(r => allowed.has(_coNormState((r.metadata||{}).state)))
+}
+function setTpView(mode){ window._tpViewMode = mode; renderTrainingPage() }
+
 function renderTrainingPage() {
   const pa = document.getElementById('page-area')
-  const rows = _trainingData
+  const _tpMode = window._tpViewMode || 'all'
+  const _tpHasAssigned = (window._tpMyTerritories||[]).length > 0
+  const rows = getTrainingByView(_tpMode)
   
   // Count by status
   const active   = rows.filter(r => (r.metadata?.status||'active') === 'active').length
@@ -8699,6 +8721,14 @@ function renderTrainingPage() {
   const selected = _trainingSelectedId ? rows.find(r => r.id === _trainingSelectedId) : null
 
   pa.innerHTML = `
+  <div class="wib-view-toggle" style="margin-bottom:14px">
+    <span class="vt-label">View</span>
+    <select id="tp-view-select" onchange="setTpView(this.value)">
+      <option value="all"${_tpMode==='all'?' selected':''}>All Trainers</option>
+      <option value="my"${_tpMode==='my'?' selected':''}${!_tpHasAssigned?' disabled':''}>My Trainers${!_tpHasAssigned?' (no territory assigned)':''}</option>
+    </select>
+    <span class="wib-view-indicator${_tpMode==='all'?' mode-all':''}">${_tpMode==='all'?'⊞ All Trainers':'🗺 '+(window._tpMyTerritories||[]).map(t=>t.name).join(', ')}</span>
+  </div>
   <!-- Stats -->
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
     ${[
